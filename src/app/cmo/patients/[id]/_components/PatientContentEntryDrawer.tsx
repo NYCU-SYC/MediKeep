@@ -6,7 +6,9 @@ import { api } from '@/lib/api'
 import { normalizeMemberName, uniqueMemberNames } from '@/lib/members'
 
 type ProblemStatus = 'underlying' | 'following' | 'resolved'
-type FillPanelKey = 'source' | 'problem' | 'condition' | 'medication' | 'followup' | 'record'
+type FillPanelKey = 'source' | 'problem' | 'condition' | 'medication' | 'followup' | 'record' | 'redzone'
+type RedZoneSection = 'allergy' | 'implant' | 'profile' | 'mri'
+type TriState = '' | 'true' | 'false'
 type FillTarget =
   | 'problem.display_name'
   | 'problem.display_layman'
@@ -25,6 +27,14 @@ type FillTarget =
   | 'record.value2'
   | 'record.unit'
   | 'record.note'
+  | 'redzone.allergy_substance'
+  | 'redzone.allergy_reaction'
+  | 'redzone.implant_type'
+  | 'redzone.implant_model'
+  | 'redzone.profile_egfr'
+  | 'redzone.profile_blood_type'
+  | 'redzone.profile_emergency_contact'
+  | 'redzone.mri_note'
 
 interface ProblemForm {
   display_name: string
@@ -71,6 +81,51 @@ interface RecordForm {
   unit: string
   recorded_at: string
   note: string
+}
+
+interface RedZoneAllergyForm {
+  category: string
+  substance: string
+  reaction: string
+  severity: string
+  status: string
+  source: string
+  onset_date: string
+  note: string
+}
+
+interface RedZoneImplantForm {
+  type: string
+  subtype: string
+  model: string
+  body_site: string
+  implant_date: string
+  hospital: string
+  note: string
+}
+
+interface RedZoneProfileForm {
+  blood_type: string
+  rh_factor: string
+  egfr_value: string
+  egfr_date: string
+  ckd_stage: string
+  is_dialysis: TriState
+  dialysis_modality: string
+  dialysis_schedule: string
+  emergency_contact_name: string
+  emergency_contact_relation: string
+  emergency_contact_phone: string
+}
+
+interface RedZoneMriForm {
+  has_pacemaker: TriState
+  pacemaker_detail: string
+  has_metal_implant: TriState
+  metal_implant_detail: string
+  has_fixed_denture: TriState
+  has_other: TriState
+  other_detail: string
 }
 
 interface Medication {
@@ -121,6 +176,15 @@ type FillPatch = {
   medication?: Partial<MedicationForm>
   reminder?: Partial<ReminderForm>
   record?: Partial<RecordForm>
+  redzone?: RedZoneDraftPatch
+}
+
+export type RedZoneDraftPatch = {
+  section?: RedZoneSection
+  allergy?: Partial<RedZoneAllergyForm>
+  implant?: Partial<RedZoneImplantForm>
+  profile?: Partial<RedZoneProfileForm>
+  mri?: Partial<RedZoneMriForm>
 }
 
 type FillEventDetail = {
@@ -151,6 +215,11 @@ interface EntryState {
   medicationForm: MedicationForm
   reminderForm: ReminderForm
   recordForm: RecordForm
+  redZoneSection: RedZoneSection
+  redZoneAllergyForm: RedZoneAllergyForm
+  redZoneImplantForm: RedZoneImplantForm
+  redZoneProfileForm: RedZoneProfileForm
+  redZoneMriForm: RedZoneMriForm
 }
 
 const TARGET_OPTIONS: Array<{ value: FillTarget; label: string }> = [
@@ -171,6 +240,14 @@ const TARGET_OPTIONS: Array<{ value: FillTarget; label: string }> = [
   { value: 'record.value2', label: '量測/檢驗數值 2' },
   { value: 'record.unit', label: '量測/檢驗單位' },
   { value: 'record.note', label: '量測/檢驗來源備註' },
+  { value: 'redzone.allergy_substance', label: '保命紅區 · 過敏物質' },
+  { value: 'redzone.allergy_reaction', label: '保命紅區 · 過敏反應' },
+  { value: 'redzone.implant_type', label: '保命紅區 · 植入物類型' },
+  { value: 'redzone.implant_model', label: '保命紅區 · 植入物型號' },
+  { value: 'redzone.profile_egfr', label: '保命紅區 · eGFR' },
+  { value: 'redzone.profile_blood_type', label: '保命紅區 · 血型' },
+  { value: 'redzone.profile_emergency_contact', label: '保命紅區 · 緊急聯絡' },
+  { value: 'redzone.mri_note', label: '保命紅區 · MRI 風險說明' },
 ]
 
 const FILL_PANEL_OPTIONS: Array<{ key: FillPanelKey; label: string; subtitle: string }> = [
@@ -180,6 +257,7 @@ const FILL_PANEL_OPTIONS: Array<{ key: FillPanelKey; label: string; subtitle: st
   { key: 'medication', label: '藥物', subtitle: '藥名、劑量、active/stopped' },
   { key: 'followup', label: '回診', subtitle: '回診與追蹤事項' },
   { key: 'record', label: '紀錄', subtitle: '量測與檢驗值' },
+  { key: 'redzone', label: '保命紅區', subtitle: '過敏、植入物、腎功能、MRI' },
 ]
 
 const PROBLEM_TEMPLATES: Array<Pick<ProblemForm, 'display_name' | 'display_layman' | 'icd10_code' | 'status' | 'tier'> & { label: string }> = [
@@ -254,6 +332,62 @@ function defaultRecordForm(): RecordForm {
   return { record_type: 'blood_pressure', value1: '', value2: '', unit: 'mmHg', recorded_at: nowInputDateTime(), note: '' }
 }
 
+function defaultRedZoneAllergyForm(): RedZoneAllergyForm {
+  return { category: 'drug', substance: '', reaction: '', severity: 'moderate', status: 'confirmed', source: 'nhi_cmo_entry', onset_date: '', note: '' }
+}
+
+function defaultRedZoneImplantForm(): RedZoneImplantForm {
+  return { type: '', subtype: '', model: '', body_site: '', implant_date: '', hospital: '', note: '' }
+}
+
+function defaultRedZoneProfileForm(): RedZoneProfileForm {
+  return {
+    blood_type: '',
+    rh_factor: '',
+    egfr_value: '',
+    egfr_date: '',
+    ckd_stage: '',
+    is_dialysis: '',
+    dialysis_modality: '',
+    dialysis_schedule: '',
+    emergency_contact_name: '',
+    emergency_contact_relation: '',
+    emergency_contact_phone: '',
+  }
+}
+
+function defaultRedZoneMriForm(): RedZoneMriForm {
+  return {
+    has_pacemaker: '',
+    pacemaker_detail: '',
+    has_metal_implant: '',
+    metal_implant_detail: '',
+    has_fixed_denture: '',
+    has_other: '',
+    other_detail: '',
+  }
+}
+
+function cleanPayload(values: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== '' && value !== null && value !== undefined))
+}
+
+function numberText(value: string) {
+  const match = value.match(/-?\d+(?:\.\d+)?/)
+  return match?.[0] ?? value
+}
+
+function triStateToBoolean(value: TriState) {
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return undefined
+}
+
+function mergeNote(current: string, addition: string) {
+  if (!addition.trim()) return current
+  return current.trim() ? `${current}\n${addition.trim()}` : addition.trim()
+}
+
 export function sendToPatientContentPanel(detail: FillEventDetail) {
   if (typeof window === 'undefined') return
   window.dispatchEvent(new CustomEvent<FillEventDetail>('healthkeep:cmo-fill', { detail: { open: true, ...detail } }))
@@ -270,11 +404,13 @@ function panelForTarget(target: FillTarget): FillPanelKey {
   if (target.startsWith('condition.')) return 'condition'
   if (target.startsWith('medication.')) return 'medication'
   if (target.startsWith('reminder.')) return 'followup'
+  if (target.startsWith('redzone.')) return 'redzone'
   return 'record'
 }
 
 function panelForPatch(patch?: FillPatch): FillPanelKey | null {
   if (!patch) return null
+  if (patch.redzone) return 'redzone'
   if (patch.problem) return 'problem'
   if (patch.condition) return 'condition'
   if (patch.medication) return 'medication'
@@ -297,6 +433,10 @@ function summaryForPatch(patch?: FillPatch) {
   if (patch.condition) return compactText(patch.condition.display_name || patch.condition.icd10_code)
   if (patch.medication) return compactText([patch.medication.drug_name, patch.medication.dose, patch.medication.frequency].filter(Boolean).join(' · '))
   if (patch.reminder) return compactText([patch.reminder.title, patch.reminder.scheduled_date].filter(Boolean).join(' · '))
+  if (patch.redzone?.allergy) return compactText(['紅區過敏', patch.redzone.allergy.substance, patch.redzone.allergy.reaction].filter(Boolean).join(' · '))
+  if (patch.redzone?.implant) return compactText(['紅區植入物', patch.redzone.implant.type, patch.redzone.implant.model].filter(Boolean).join(' · '))
+  if (patch.redzone?.profile) return compactText(['紅區基本/腎功能', patch.redzone.profile.egfr_value, patch.redzone.profile.blood_type, patch.redzone.profile.emergency_contact_name].filter(Boolean).join(' · '))
+  if (patch.redzone?.mri) return compactText(['紅區 MRI', patch.redzone.mri.pacemaker_detail, patch.redzone.mri.metal_implant_detail, patch.redzone.mri.other_detail].filter(Boolean).join(' · '))
   if (patch.record) return compactText([patch.record.record_type, patch.record.value1, patch.record.unit, patch.record.note].filter(Boolean).join(' · '))
   return ''
 }
@@ -336,6 +476,11 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
   const [medicationForm, setMedicationForm] = useState<MedicationForm>(defaultMedicationForm)
   const [reminderForm, setReminderForm] = useState<ReminderForm>(defaultReminderForm)
   const [recordForm, setRecordForm] = useState<RecordForm>(defaultRecordForm)
+  const [redZoneSection, setRedZoneSection] = useState<RedZoneSection>('allergy')
+  const [redZoneAllergyForm, setRedZoneAllergyForm] = useState<RedZoneAllergyForm>(defaultRedZoneAllergyForm)
+  const [redZoneImplantForm, setRedZoneImplantForm] = useState<RedZoneImplantForm>(defaultRedZoneImplantForm)
+  const [redZoneProfileForm, setRedZoneProfileForm] = useState<RedZoneProfileForm>(defaultRedZoneProfileForm)
+  const [redZoneMriForm, setRedZoneMriForm] = useState<RedZoneMriForm>(defaultRedZoneMriForm)
   const [selectedMember, setSelectedMember] = useState('本人')
 
   const memberOptions = useMemo(() => {
@@ -366,7 +511,12 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
     medicationForm,
     reminderForm,
     recordForm,
-  }), [activePanel, activeTarget, conditionForm, lastSource, medicationForm, problemForm, recordForm, reminderForm])
+    redZoneSection,
+    redZoneAllergyForm,
+    redZoneImplantForm,
+    redZoneProfileForm,
+    redZoneMriForm,
+  }), [activePanel, activeTarget, conditionForm, lastSource, medicationForm, problemForm, recordForm, redZoneAllergyForm, redZoneImplantForm, redZoneMriForm, redZoneProfileForm, redZoneSection, reminderForm])
   const currentEntryStateRef = useRef(currentEntryState)
   const panelReady = useMemo<Record<FillPanelKey, boolean>>(() => ({
     source: Boolean(lastSource),
@@ -375,7 +525,23 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
     medication: Boolean(medicationForm.drug_name.trim()),
     followup: Boolean(reminderForm.title.trim()),
     record: Boolean(recordForm.value1.trim()),
-  }), [conditionForm.display_name, lastSource, medicationForm.drug_name, problemForm.display_layman, problemForm.display_name, recordForm.value1, reminderForm.title])
+    redzone: Boolean(
+      redZoneAllergyForm.substance.trim()
+      || redZoneImplantForm.type.trim()
+      || redZoneProfileForm.egfr_value.trim()
+      || redZoneProfileForm.blood_type.trim()
+      || redZoneProfileForm.is_dialysis
+      || redZoneProfileForm.dialysis_schedule.trim()
+      || redZoneProfileForm.emergency_contact_name.trim()
+      || redZoneMriForm.pacemaker_detail.trim()
+      || redZoneMriForm.metal_implant_detail.trim()
+      || redZoneMriForm.other_detail.trim()
+      || redZoneMriForm.has_pacemaker
+      || redZoneMriForm.has_metal_implant
+      || redZoneMriForm.has_fixed_denture
+      || redZoneMriForm.has_other
+    ),
+  }), [conditionForm.display_name, lastSource, medicationForm.drug_name, problemForm.display_layman, problemForm.display_name, recordForm.value1, redZoneAllergyForm.substance, redZoneImplantForm.type, redZoneMriForm.has_fixed_denture, redZoneMriForm.has_metal_implant, redZoneMriForm.has_other, redZoneMriForm.has_pacemaker, redZoneMriForm.metal_implant_detail, redZoneMriForm.other_detail, redZoneMriForm.pacemaker_detail, redZoneProfileForm.blood_type, redZoneProfileForm.dialysis_schedule, redZoneProfileForm.egfr_value, redZoneProfileForm.emergency_contact_name, redZoneProfileForm.is_dialysis, reminderForm.title])
 
   const notify = useCallback((message: string) => {
     setFlash(message)
@@ -407,6 +573,26 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
     currentEntryStateRef.current = currentEntryState
   }, [currentEntryState])
 
+  const applyRedZonePatch = useCallback((patch: RedZoneDraftPatch) => {
+    if (patch.allergy) {
+      setRedZoneAllergyForm((prev) => ({ ...prev, ...patch.allergy }))
+      setRedZoneSection('allergy')
+    }
+    if (patch.implant) {
+      setRedZoneImplantForm((prev) => ({ ...prev, ...patch.implant }))
+      setRedZoneSection('implant')
+    }
+    if (patch.profile) {
+      setRedZoneProfileForm((prev) => ({ ...prev, ...patch.profile }))
+      setRedZoneSection('profile')
+    }
+    if (patch.mri) {
+      setRedZoneMriForm((prev) => ({ ...prev, ...patch.mri }))
+      setRedZoneSection('mri')
+    }
+    if (patch.section) setRedZoneSection(patch.section)
+  }, [])
+
   const applyText = useCallback((target: FillTarget, text: string) => {
     const clean = text.trim()
     if (!clean) return
@@ -427,6 +613,31 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
     else if (target === 'record.value2') setRecordForm((prev) => ({ ...prev, value2: clean }))
     else if (target === 'record.unit') setRecordForm((prev) => ({ ...prev, unit: clean }))
     else if (target === 'record.note') setRecordForm((prev) => ({ ...prev, note: prev.note ? `${prev.note}\n${clean}` : clean }))
+    else if (target === 'redzone.allergy_substance') {
+      setRedZoneAllergyForm((prev) => ({ ...prev, substance: clean }))
+      setRedZoneSection('allergy')
+    } else if (target === 'redzone.allergy_reaction') {
+      setRedZoneAllergyForm((prev) => ({ ...prev, reaction: clean }))
+      setRedZoneSection('allergy')
+    } else if (target === 'redzone.implant_type') {
+      setRedZoneImplantForm((prev) => ({ ...prev, type: clean }))
+      setRedZoneSection('implant')
+    } else if (target === 'redzone.implant_model') {
+      setRedZoneImplantForm((prev) => ({ ...prev, model: clean }))
+      setRedZoneSection('implant')
+    } else if (target === 'redzone.profile_egfr') {
+      setRedZoneProfileForm((prev) => ({ ...prev, egfr_value: numberText(clean) }))
+      setRedZoneSection('profile')
+    } else if (target === 'redzone.profile_blood_type') {
+      setRedZoneProfileForm((prev) => ({ ...prev, blood_type: clean.toUpperCase().replace(/[^ABO+-]/g, '') }))
+      setRedZoneSection('profile')
+    } else if (target === 'redzone.profile_emergency_contact') {
+      setRedZoneProfileForm((prev) => ({ ...prev, emergency_contact_name: clean }))
+      setRedZoneSection('profile')
+    } else if (target === 'redzone.mri_note') {
+      setRedZoneMriForm((prev) => ({ ...prev, has_other: 'true', other_detail: mergeNote(prev.other_detail, clean) }))
+      setRedZoneSection('mri')
+    }
   }, [])
 
   const applyPatch = useCallback((patch?: FillPatch) => {
@@ -436,7 +647,8 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
     if (patch.medication) setMedicationForm((prev) => ({ ...prev, ...patch.medication }))
     if (patch.reminder) setReminderForm((prev) => ({ ...prev, ...patch.reminder }))
     if (patch.record) setRecordForm((prev) => ({ ...prev, ...patch.record }))
-  }, [])
+    if (patch.redzone) applyRedZonePatch(patch.redzone)
+  }, [applyRedZonePatch])
 
   const restoreEntryState = useCallback((state: EntryState) => {
     setActivePanel(state.activePanel)
@@ -447,6 +659,11 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
     setMedicationForm(state.medicationForm)
     setReminderForm(state.reminderForm)
     setRecordForm(state.recordForm)
+    setRedZoneSection(state.redZoneSection)
+    setRedZoneAllergyForm(state.redZoneAllergyForm)
+    setRedZoneImplantForm(state.redZoneImplantForm)
+    setRedZoneProfileForm(state.redZoneProfileForm)
+    setRedZoneMriForm(state.redZoneMriForm)
   }, [])
 
   const rememberUndo = useCallback(() => {
@@ -703,6 +920,106 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
     }
   }
 
+  const createRedZoneAllergy = async () => {
+    if (!redZoneAllergyForm.substance.trim()) {
+      notify('請先填入保命紅區過敏物質')
+      return
+    }
+    setBusy('redzone-allergy')
+    try {
+      await api.post('/api/cmo/red-zone', cleanPayload({
+        ...redZoneAllergyForm,
+        patient_id: patientId,
+        member_name: selectedMember,
+        tier: ['severe', 'anaphylaxis'].includes(redZoneAllergyForm.severity) ? 1 : 2,
+        source: redZoneAllergyForm.source || 'nhi_cmo_entry',
+        note: redZoneAllergyForm.note || (lastSource ? `CMO quick entry from ${lastSource}` : ''),
+      }))
+      setRedZoneAllergyForm(defaultRedZoneAllergyForm())
+      notify('已新增保命紅區過敏；User 保命紅區會同步更新')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const createRedZoneImplant = async () => {
+    if (!redZoneImplantForm.type.trim()) {
+      notify('請先填入植入物類型')
+      return
+    }
+    setBusy('redzone-implant')
+    try {
+      await api.post(`/api/cmo/patients/${patientId}/implants`, cleanPayload({
+        ...redZoneImplantForm,
+        source: 'nhi_cmo_entry',
+        note: redZoneImplantForm.note || (lastSource ? `CMO quick entry from ${lastSource}` : ''),
+      }))
+      setRedZoneImplantForm(defaultRedZoneImplantForm())
+      notify('已新增保命紅區植入物；User 保命紅區會同步更新')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const saveRedZoneProfile = async () => {
+    const egfr = redZoneProfileForm.egfr_value.trim()
+    const egfrNumber = egfr ? Number(egfr) : undefined
+    if (egfr && Number.isNaN(egfrNumber)) {
+      notify('eGFR 需為數字')
+      return
+    }
+    const isDialysis = triStateToBoolean(redZoneProfileForm.is_dialysis)
+    const payload = cleanPayload({
+      blood_type: redZoneProfileForm.blood_type.trim() || undefined,
+      rh_factor: redZoneProfileForm.rh_factor.trim() || undefined,
+      egfr_value: egfrNumber,
+      egfr_date: redZoneProfileForm.egfr_date || undefined,
+      ckd_stage: redZoneProfileForm.ckd_stage.trim() || undefined,
+      is_dialysis: isDialysis,
+      dialysis_modality: redZoneProfileForm.dialysis_modality.trim() || undefined,
+      dialysis_schedule: redZoneProfileForm.dialysis_schedule.trim() || undefined,
+      emergency_contact_name: redZoneProfileForm.emergency_contact_name.trim() || undefined,
+      emergency_contact_relation: redZoneProfileForm.emergency_contact_relation.trim() || undefined,
+      emergency_contact_phone: redZoneProfileForm.emergency_contact_phone.trim() || undefined,
+    })
+    if (Object.keys(payload).length === 0) {
+      notify('請先帶入腎功能、血型或緊急聯絡資料')
+      return
+    }
+    setBusy('redzone-profile')
+    try {
+      await api.put(`/api/cmo/patients/${patientId}/profile`, payload)
+      setRedZoneProfileForm(defaultRedZoneProfileForm())
+      notify('已儲存紅區基本/腎功能資料；User 保命紅區會同步更新')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const saveRedZoneMri = async () => {
+    const payload = cleanPayload({
+      has_pacemaker: triStateToBoolean(redZoneMriForm.has_pacemaker),
+      pacemaker_detail: redZoneMriForm.pacemaker_detail.trim() || undefined,
+      has_metal_implant: triStateToBoolean(redZoneMriForm.has_metal_implant),
+      metal_implant_detail: redZoneMriForm.metal_implant_detail.trim() || undefined,
+      has_fixed_denture: triStateToBoolean(redZoneMriForm.has_fixed_denture),
+      has_other: triStateToBoolean(redZoneMriForm.has_other),
+      other_detail: redZoneMriForm.other_detail.trim() || undefined,
+    })
+    if (Object.keys(payload).length === 0) {
+      notify('請先帶入 MRI 風險或安全問診資料')
+      return
+    }
+    setBusy('redzone-mri')
+    try {
+      await api.put(`/api/cmo/patients/${patientId}/mri-safety`, payload)
+      setRedZoneMriForm(defaultRedZoneMriForm())
+      notify('已儲存 MRI 安全資料；User 保命紅區會同步更新')
+    } finally {
+      setBusy('')
+    }
+  }
+
   const toggleMedicationActive = async (medication: Medication) => {
     setBusy(`med-${medication.id}`)
     try {
@@ -767,7 +1084,7 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
                   ))}
                 </div>
               </div>
-              <div className="cmo-subtitle">資料只會先進入 CMO 編輯區；Problem、Condition、Medication、Reminder、Record 都會寫入目前成員，Problem、Condition、Medication 需 publish 後病人端才看得到。</div>
+              <div className="cmo-subtitle">資料只會先進入 CMO 編輯區；Problem、Condition、Medication、Reminder、Record 都會寫入目前成員。紅區新增/儲存會寫入 audit 並同步到 User 保命紅區；完整 verify/revert 可到紅區頁處理。</div>
             </div>
 
             {lastProblemBridge && (
@@ -991,6 +1308,145 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
                 </div>
                 <Field label="來源/備註"><input className="cmo-input" value={recordForm.note} onChange={(event) => setRecordForm({ ...recordForm, note: event.target.value })} placeholder="例：NHI lab row / PDF p2" /></Field>
                 <button type="button" className="cmo-button primary" disabled={busy === 'record'} onClick={createRecord}>新增健康紀錄</button>
+              </section>
+            )}
+
+            {activePanel === 'redzone' && (
+              <section className="cmo-card cmo-section">
+                <PanelIntro title="保命紅區 · Quick edit" subtitle="NHI 審閱中可直接整理過敏、植入物、腎功能與 MRI 安全資料；儲存後會寫入紅區 audit 並同步到使用者端保命紅區。" />
+                <div className="cmo-chipbar" style={{ marginBottom: 12 }}>
+                  {([
+                    ['allergy', '過敏/禁忌'],
+                    ['implant', '植入物'],
+                    ['profile', '腎功能/聯絡'],
+                    ['mri', 'MRI 安全'],
+                  ] as Array<[RedZoneSection, string]>).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`cmo-chip ${redZoneSection === key ? 'active' : ''}`}
+                      onClick={() => setRedZoneSection(key)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {redZoneSection === 'allergy' && (
+                  <>
+                    <div className="cmo-field-grid">
+                      <Field label="類型">
+                        <select className="cmo-select" value={redZoneAllergyForm.category} onChange={(event) => setRedZoneAllergyForm({ ...redZoneAllergyForm, category: event.target.value })}>
+                          <option value="drug">藥物</option>
+                          <option value="contrast_agent">顯影劑</option>
+                          <option value="food">食物</option>
+                          <option value="environment">環境</option>
+                          <option value="other">其他</option>
+                        </select>
+                      </Field>
+                      <Field label="物質"><input className="cmo-input" value={redZoneAllergyForm.substance} onChange={(event) => setRedZoneAllergyForm({ ...redZoneAllergyForm, substance: event.target.value })} placeholder="Penicillin / Iodine" /></Field>
+                      <Field label="嚴重度">
+                        <select className="cmo-select" value={redZoneAllergyForm.severity} onChange={(event) => setRedZoneAllergyForm({ ...redZoneAllergyForm, severity: event.target.value })}>
+                          <option value="mild">輕微</option>
+                          <option value="moderate">中等</option>
+                          <option value="severe">嚴重</option>
+                          <option value="anaphylaxis">過敏性休克</option>
+                        </select>
+                      </Field>
+                      <Field label="狀態">
+                        <select className="cmo-select" value={redZoneAllergyForm.status} onChange={(event) => setRedZoneAllergyForm({ ...redZoneAllergyForm, status: event.target.value })}>
+                          <option value="confirmed">確認</option>
+                          <option value="suspected">疑似</option>
+                          <option value="not_sure">不確定</option>
+                          <option value="ruled_out">已排除</option>
+                        </select>
+                      </Field>
+                      <Field label="反應"><input className="cmo-input" value={redZoneAllergyForm.reaction} onChange={(event) => setRedZoneAllergyForm({ ...redZoneAllergyForm, reaction: event.target.value })} placeholder="皮疹、呼吸困難、休克" /></Field>
+                      <Field label="發生日期"><input className="cmo-input" type="date" value={redZoneAllergyForm.onset_date} onChange={(event) => setRedZoneAllergyForm({ ...redZoneAllergyForm, onset_date: event.target.value })} /></Field>
+                    </div>
+                    <NoteBox value={redZoneAllergyForm.note} onChange={(value) => setRedZoneAllergyForm({ ...redZoneAllergyForm, note: value })} />
+                    <button type="button" className="cmo-button primary" disabled={busy === 'redzone-allergy' || !redZoneAllergyForm.substance.trim()} onClick={createRedZoneAllergy}>新增保命紅區過敏</button>
+                  </>
+                )}
+
+                {redZoneSection === 'implant' && (
+                  <>
+                    <div className="cmo-field-grid">
+                      <Field label="類型"><input className="cmo-input" value={redZoneImplantForm.type} onChange={(event) => setRedZoneImplantForm({ ...redZoneImplantForm, type: event.target.value })} placeholder="支架 / Pacemaker / Port-A" /></Field>
+                      <Field label="型號"><input className="cmo-input" value={redZoneImplantForm.model} onChange={(event) => setRedZoneImplantForm({ ...redZoneImplantForm, model: event.target.value })} /></Field>
+                      <Field label="子類型"><input className="cmo-input" value={redZoneImplantForm.subtype} onChange={(event) => setRedZoneImplantForm({ ...redZoneImplantForm, subtype: event.target.value })} /></Field>
+                      <Field label="部位"><input className="cmo-input" value={redZoneImplantForm.body_site} onChange={(event) => setRedZoneImplantForm({ ...redZoneImplantForm, body_site: event.target.value })} /></Field>
+                      <Field label="日期"><input className="cmo-input" type="date" value={redZoneImplantForm.implant_date} onChange={(event) => setRedZoneImplantForm({ ...redZoneImplantForm, implant_date: event.target.value })} /></Field>
+                      <Field label="醫院"><input className="cmo-input" value={redZoneImplantForm.hospital} onChange={(event) => setRedZoneImplantForm({ ...redZoneImplantForm, hospital: event.target.value })} /></Field>
+                    </div>
+                    <NoteBox value={redZoneImplantForm.note} onChange={(value) => setRedZoneImplantForm({ ...redZoneImplantForm, note: value })} />
+                    <button type="button" className="cmo-button primary" disabled={busy === 'redzone-implant' || !redZoneImplantForm.type.trim()} onClick={createRedZoneImplant}>新增保命紅區植入物</button>
+                  </>
+                )}
+
+                {redZoneSection === 'profile' && (
+                  <>
+                    <div className="cmo-field-grid">
+                      <Field label="eGFR"><input className="cmo-input" inputMode="decimal" value={redZoneProfileForm.egfr_value} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, egfr_value: numberText(event.target.value) })} placeholder="58" /></Field>
+                      <Field label="eGFR 日期"><input className="cmo-input" type="date" value={redZoneProfileForm.egfr_date} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, egfr_date: event.target.value })} /></Field>
+                      <Field label="CKD Stage"><input className="cmo-input" value={redZoneProfileForm.ckd_stage} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, ckd_stage: event.target.value })} /></Field>
+                      <Field label="透析">
+                        <select className="cmo-select" value={redZoneProfileForm.is_dialysis} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, is_dialysis: event.target.value as TriState })}>
+                          <option value="">未知/不改</option>
+                          <option value="true">是</option>
+                          <option value="false">否</option>
+                        </select>
+                      </Field>
+                      <Field label="血型"><input className="cmo-input" value={redZoneProfileForm.blood_type} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, blood_type: event.target.value.toUpperCase() })} placeholder="A / B / AB / O" /></Field>
+                      <Field label="Rh"><input className="cmo-input" value={redZoneProfileForm.rh_factor} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, rh_factor: event.target.value })} placeholder="+ / -" /></Field>
+                      <Field label="緊急聯絡人"><input className="cmo-input" value={redZoneProfileForm.emergency_contact_name} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, emergency_contact_name: event.target.value })} /></Field>
+                      <Field label="關係"><input className="cmo-input" value={redZoneProfileForm.emergency_contact_relation} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, emergency_contact_relation: event.target.value })} /></Field>
+                      <Field label="電話"><input className="cmo-input" value={redZoneProfileForm.emergency_contact_phone} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, emergency_contact_phone: event.target.value })} /></Field>
+                    </div>
+                    <div className="cmo-field-grid">
+                      <Field label="透析方式"><input className="cmo-input" value={redZoneProfileForm.dialysis_modality} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, dialysis_modality: event.target.value })} /></Field>
+                      <Field label="透析時間"><input className="cmo-input" value={redZoneProfileForm.dialysis_schedule} onChange={(event) => setRedZoneProfileForm({ ...redZoneProfileForm, dialysis_schedule: event.target.value })} /></Field>
+                    </div>
+                    <button type="button" className="cmo-button primary" disabled={busy === 'redzone-profile'} onClick={saveRedZoneProfile}>儲存紅區基本/腎功能</button>
+                  </>
+                )}
+
+                {redZoneSection === 'mri' && (
+                  <>
+                    <div className="cmo-field-grid">
+                      {([
+                        ['has_pacemaker', '心律調節器'],
+                        ['has_metal_implant', '金屬植入物'],
+                        ['has_fixed_denture', '固定假牙'],
+                        ['has_other', '其他 MRI 風險'],
+                      ] as Array<[keyof RedZoneMriForm, string]>).map(([key, label]) => (
+                        <Field key={key} label={label}>
+                          <select className="cmo-select" value={String(redZoneMriForm[key])} onChange={(event) => setRedZoneMriForm({ ...redZoneMriForm, [key]: event.target.value as TriState })}>
+                            <option value="">未知/不改</option>
+                            <option value="true">是</option>
+                            <option value="false">否</option>
+                          </select>
+                        </Field>
+                      ))}
+                      <Field label="節律器細節"><input className="cmo-input" value={redZoneMriForm.pacemaker_detail} onChange={(event) => setRedZoneMriForm({ ...redZoneMriForm, pacemaker_detail: event.target.value })} /></Field>
+                      <Field label="金屬植入物細節"><input className="cmo-input" value={redZoneMriForm.metal_implant_detail} onChange={(event) => setRedZoneMriForm({ ...redZoneMriForm, metal_implant_detail: event.target.value })} /></Field>
+                    </div>
+                    <NoteBox value={redZoneMriForm.other_detail} onChange={(value) => setRedZoneMriForm({ ...redZoneMriForm, has_other: value.trim() ? 'true' : redZoneMriForm.has_other, other_detail: value })} />
+                    <button type="button" className="cmo-button primary" disabled={busy === 'redzone-mri'} onClick={saveRedZoneMri}>儲存 MRI 安全資料</button>
+                  </>
+                )}
+
+                <div className="cmo-fill-step-grid" style={{ marginTop: 12 }}>
+                  <div className="cmo-list-item">
+                    <div className="cmo-kpi-label">Patient visible</div>
+                    <strong>紅區會同步到 User 保命紅區</strong>
+                    <div className="cmo-subtitle">新增或儲存後仍保留 CMO audit；必要時到完整紅區頁做 verify/revert。</div>
+                  </div>
+                  <div className="cmo-list-item">
+                    <div className="cmo-kpi-label">Full red-zone</div>
+                    <Link className="cmo-button" href={`/cmo/patients/${patientId}/redzone`}>開完整紅區頁</Link>
+                  </div>
+                </div>
               </section>
             )}
           </aside>

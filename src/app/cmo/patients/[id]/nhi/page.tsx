@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import PatientContentEntryLauncher, { sendToPatientContentPanel } from '../_components/PatientContentEntryDrawer'
+import type { RedZoneDraftPatch } from '../_components/PatientContentEntryDrawer'
 
 type SectionKey =
   | 'outpatient' | 'inpatient' | 'med' | 'surgery'
@@ -147,9 +148,180 @@ function recordTypeForLab(item: string) {
   return 'glucose'
 }
 
+function includesAny(text: string, terms: string[]) {
+  const lower = text.toLowerCase()
+  return terms.some((term) => lower.includes(term.toLowerCase()))
+}
+
+function extractNumberText(value: string) {
+  return value.match(/-?\d+(?:\.\d+)?/)?.[0] ?? value
+}
+
+function severityFromText(value: string) {
+  const text = value.toLowerCase()
+  if (includesAny(text, ['anaphylaxis', 'shock', '休克', '呼吸困難'])) return 'anaphylaxis'
+  if (includesAny(text, ['severe', '嚴重', '重度'])) return 'severe'
+  if (includesAny(text, ['mild', '輕微', '輕度'])) return 'mild'
+  return 'moderate'
+}
+
+function mergeRedZonePatch(base: RedZoneDraftPatch | null, next: RedZoneDraftPatch | null): RedZoneDraftPatch | null {
+  if (!next) return base
+  if (!base) return next
+  const allergy = { ...(base.allergy ?? {}), ...(next.allergy ?? {}) }
+  const implant = { ...(base.implant ?? {}), ...(next.implant ?? {}) }
+  const profile = { ...(base.profile ?? {}), ...(next.profile ?? {}) }
+  const mri = { ...(base.mri ?? {}), ...(next.mri ?? {}) }
+  return {
+    section: next.section ?? base.section,
+    ...(Object.keys(allergy).length > 0 ? { allergy } : {}),
+    ...(Object.keys(implant).length > 0 ? { implant } : {}),
+    ...(Object.keys(profile).length > 0 ? { profile } : {}),
+    ...(Object.keys(mri).length > 0 ? { mri } : {}),
+  }
+}
+
+function finalizeRedZonePatch(patch: RedZoneDraftPatch | null): RedZoneDraftPatch | null {
+  if (!patch) return null
+  const section = patch.allergy?.substance
+    ? 'allergy'
+    : patch.implant?.type
+      ? 'implant'
+      : patch.profile?.egfr_value || patch.profile?.blood_type || patch.profile?.emergency_contact_name
+        ? 'profile'
+        : patch.mri
+          ? 'mri'
+          : patch.section
+  return { ...patch, section }
+}
+
+function redZonePatchForNhiField(key: string, value: unknown): RedZoneDraftPatch | null {
+  const text = toText(value).trim()
+  if (!text) return null
+  const lowerKey = key.toLowerCase()
+  const haystack = `${lowerKey} ${text.toLowerCase()}`
+
+  if (includesAny(haystack, ['allergy', 'allergen', 'contraindication', 'substance', '過敏', '禁忌', '顯影劑', 'contrast', 'iodine', '碘'])) {
+    const isReaction = includesAny(lowerKey, ['reaction', 'symptom', '反應', '症狀'])
+    const isSeverity = includesAny(lowerKey, ['severity', '嚴重'])
+    const isContrast = includesAny(haystack, ['contrast', 'iodine', '顯影劑', '碘'])
+    return {
+      section: 'allergy',
+      allergy: {
+        category: isContrast ? 'contrast_agent' : 'drug',
+        substance: isReaction || isSeverity ? '' : text,
+        reaction: isReaction ? text : '',
+        severity: isSeverity ? severityFromText(text) : severityFromText(haystack),
+        source: 'nhi_cmo_entry',
+        note: `NHI ${key}`,
+      },
+    }
+  }
+
+  if (includesAny(haystack, ['egfr', 'estimated glomerular', '腎絲球'])) {
+    return { section: 'profile', profile: { egfr_value: extractNumberText(text) } }
+  }
+
+  if (includesAny(haystack, ['dialysis', 'hemodialysis', 'peritoneal', '透析', '洗腎'])) {
+    return { section: 'profile', profile: { is_dialysis: 'true', dialysis_schedule: text } }
+  }
+
+  if (includesAny(haystack, ['blood_type', 'blood type', 'abo', '血型'])) {
+    return { section: 'profile', profile: { blood_type: text.toUpperCase().replace(/[^ABO]/g, ''), rh_factor: text.includes('-') ? '-' : text.includes('+') ? '+' : '' } }
+  }
+
+  if (includesAny(haystack, ['emergency_contact', 'contact_phone', '緊急聯絡', '聯絡人'])) {
+    return { section: 'profile', profile: { emergency_contact_name: text } }
+  }
+
+  if (includesAny(haystack, ['pacemaker', '心律調節', '節律器'])) {
+    return {
+      section: 'implant',
+      implant: { type: '心律調節器', model: text, note: `NHI ${key}` },
+      mri: { has_pacemaker: 'true', pacemaker_detail: text },
+    }
+  }
+
+  if (includesAny(haystack, ['implant', 'stent', 'port-a', 'porta', 'device', 'metal', 'prosthesis', '支架', '植入', '金屬', '人工關節', '人工瓣膜', '人工水晶體'])) {
+    return {
+      section: 'implant',
+      implant: { type: text, note: `NHI ${key}` },
+      mri: { has_metal_implant: 'true', metal_implant_detail: text },
+    }
+  }
+
+  if (includesAny(haystack, ['mri', '磁振', '核磁', '金屬禁忌'])) {
+    return { section: 'mri', mri: { has_other: 'true', other_detail: text } }
+  }
+
+  return null
+}
+
+function redZonePatchForDraft(draft: Draft): RedZoneDraftPatch | null {
+  const fields = draft.payload?.extracted_fields ?? {}
+  let patch: RedZoneDraftPatch | null = null
+  Object.entries(fields).forEach(([key, value]) => {
+    patch = mergeRedZonePatch(patch, redZonePatchForNhiField(key, value))
+  })
+
+  const raw = Object.values(fields).map(toText).join(' ')
+  if (draft.draft_type === 'allergy') {
+    patch = mergeRedZonePatch(patch, {
+      section: 'allergy',
+      allergy: {
+        substance: firstText(fields, ['substance', 'allergen', 'drug_name', 'raw_description']) || raw,
+        reaction: firstText(fields, ['reaction', 'reaction_description', 'symptom']),
+        severity: severityFromText(firstText(fields, ['severity', 'reaction', 'raw_description']) || raw),
+        category: includesAny(raw, ['contrast', '顯影劑', 'iodine', '碘']) ? 'contrast_agent' : 'drug',
+        source: 'nhi_cmo_entry',
+        note: `NHI allergy draft #${draft.id}`,
+      },
+    })
+  }
+
+  if (sectionOf(draft) === 'lab' && includesAny(raw, ['egfr', '腎絲球'])) {
+    patch = mergeRedZonePatch(patch, {
+      section: 'profile',
+      profile: {
+        egfr_value: extractNumberText(firstText(fields, ['value_numeric', 'value', 'raw_description', 'analyte_name']) || raw),
+        egfr_date: firstText(fields, ['visit_date', 'result_date']).slice(0, 10),
+      },
+    })
+  }
+
+  if (includesAny(raw, ['pacemaker', '心律調節', '節律器', 'stent', '支架', 'port-a', '植入', '金屬'])) {
+    patch = mergeRedZonePatch(patch, {
+      section: 'implant',
+      implant: { type: firstText(fields, ['procedure', 'raw_description', 'diagnosis', 'imaging_summary']) || raw, note: `NHI high-risk device draft #${draft.id}` },
+      mri: { has_metal_implant: 'true', metal_implant_detail: raw },
+    })
+  }
+
+  return finalizeRedZonePatch(patch)
+}
+
+function sendNhiDraftToRedZone(draft: Draft) {
+  const redzone = redZonePatchForDraft(draft)
+  if (!redzone) return
+  sendToPatientContentPanel({
+    source: `NHI 保命紅區 #${draft.id}`,
+    open: false,
+    patch: { redzone },
+  })
+}
+
 function sendNhiFieldToPanel(key: string, value: unknown) {
   const text = toText(value)
   if (!text) return
+  const redzone = redZonePatchForNhiField(key, value)
+  if (redzone) {
+    sendToPatientContentPanel({
+      source: `NHI 保命紅區 ${key}`,
+      open: false,
+      patch: { redzone: finalizeRedZonePatch(redzone) ?? redzone },
+    })
+    return
+  }
   sendToPatientContentPanel({
     source: `NHI ${key}`,
     target: targetForNhiField(key),
@@ -176,16 +348,21 @@ function sendNhiMedicationToPanel(medication: { code: string; name: string; qty:
 }
 
 function sendNhiLabToPanel(row: { item: string; value: string; unit: string; ref: string }) {
+  const recordType = recordTypeForLab(row.item)
+  const redzone = recordType === 'egfr'
+    ? { section: 'profile', profile: { egfr_value: extractNumberText(row.value) } } satisfies RedZoneDraftPatch
+    : null
   sendToPatientContentPanel({
-    source: 'NHI 檢驗項目',
+    source: redzone ? 'NHI eGFR 檢驗（保命紅區）' : 'NHI 檢驗項目',
     open: false,
     patch: {
       record: {
-        record_type: recordTypeForLab(row.item),
+        record_type: recordType,
         value1: row.value,
         unit: row.unit,
         note: `${row.item}${row.ref ? ` · ref ${row.ref}` : ''}`,
       },
+      ...(redzone ? { redzone } : {}),
     },
   })
 }
@@ -193,6 +370,11 @@ function sendNhiLabToPanel(row: { item: string; value: string; unit: string; ref
 function sendNhiDraftSummaryToPanel(draft: Draft) {
   const fields = draft.payload?.extracted_fields ?? {}
   const section = sectionOf(draft)
+  const redzone = redZonePatchForDraft(draft)
+  if (redzone) {
+    sendNhiDraftToRedZone(draft)
+    return
+  }
   const diagnosis = firstText(fields, ['diagnosis', 'diagnosis_text', 'vaccine', 'imaging_summary', 'impression_text', 'substance', 'analyte_name', 'raw_description', 'modality'])
   const icd10 = firstText(fields, ['icd10', 'icd10_candidates'])
   const visitDate = firstText(fields, ['visit_date', 'onset_date'])
@@ -511,7 +693,7 @@ export default function NhiSectionsPage() {
                       <th>{activeSection === 'vaccine' ? '疫苗' : activeSection === 'lab' ? '檢查項目' : '診斷 / 內容'}</th>
                       <th>ICD</th>
                       <th>狀態</th>
-                      <th style={{ width: 150, textAlign: 'right' }}>動作</th>
+                      <th style={{ width: 190, textAlign: 'right' }}>動作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -526,6 +708,7 @@ export default function NhiSectionsPage() {
                       const contentLabel = firstText(f, ['diagnosis', 'diagnosis_text', 'vaccine', 'imaging_summary', 'impression_text', 'substance', 'analyte_name', 'raw_description', 'modality', 'raw_code']) || d.draft_type
                       const icd = firstText(f, ['icd10', 'icd10_candidates'])
                       const secondary = firstText(f, ['key_medications', 'value_numeric', 'unit', 'severity', 'reaction', 'days_supply'])
+                      const redzoneCandidate = redZonePatchForDraft(d)
                       return [
                         <tr key={`r-${d.id}`}
                           className={`${isSel ? 'selected' : ''} ${isExp ? 'expanded' : ''}`}
@@ -569,6 +752,20 @@ export default function NhiSectionsPage() {
                               >
                                 帶到右側
                               </button>
+                              {redzoneCandidate && (
+                                <button
+                                  type="button"
+                                  className="cmo-button danger"
+                                  style={{ minHeight: 28, padding: '4px 8px', fontSize: 12 }}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    sendNhiDraftToRedZone(d)
+                                  }}
+                                  title="帶到右側保命紅區分頁"
+                                >
+                                  帶到紅區
+                                </button>
+                              )}
                               {d.status === 'pending' ? (
                                 <>
                                 <button type="button" className="ok" disabled={busy} title="接受" onClick={() => runSingle('accept', d.id)}>✓</button>
