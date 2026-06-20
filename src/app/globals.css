@@ -1,26 +1,367 @@
-@import "tailwindcss";
-
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --primary: #007bff;
+  --primary-hover: #0056b3;
+  --secondary: #6c757d;
+  --success: #28a745;
+  --info: #17a2b8;
+  --warning: #ffc107;
+  --danger: #dc3545;
+  --light: #f8f9fa;
+  --dark: #343a40;
+  --white: #ffffff;
+  --gray-100: #f8f9fa;
+  --gray-200: #e9ecef;
+  --gray-300: #dee2e6;
+  --gray-400: #ced4da;
+  --gray-500: #adb5bd;
+  --gray-600: #6c757d;
+  --gray-700: #495057;
+  --gray-800: #343a40;
+  --gray-900: #212529;
+  --font-geist-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  --sidebar-width: 260px;
+
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.07);
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans);
+  background-color: #f4f7f9;
+  color: var(--gray-900);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 0.28);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gray-400); }
+
+/* ── Sidebar nav items (CSS-driven hover/active) ─────────────────────────── */
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  padding: 9px 14px;
+  border-radius: 8px;
+  margin-bottom: 1px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-700);
+  text-decoration: none;
+}
+.sidebar-nav-item:hover {
+  background: #f0f4f8;
+  color: var(--gray-900);
+}
+.sidebar-nav-item.sidebar-active {
+  background: #e8f0fe;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* ── Mobile FAB (center add button) ─────────────────────────────────────── */
+.mobile-fab {
+  width: 52px;
+  height: 52px;
+  border-radius: 26px;
+  background: linear-gradient(145deg, #1a8cff 0%, #0056b3 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 123, 255, 0.45), 0 2px 6px rgba(0, 0, 0, 0.12);
+  transform: translateY(-10px);
+  flex-shrink: 0;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.mobile-fab:active {
+  transform: translateY(-7px) scale(0.95);
+  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.4);
+}
+
+/* ── Record type selector — always 4 columns ─────────────────────────────── */
+.grid-type-selector {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+/* ── Layout shell ─────────────────────────────────────────────────────────── */
+.app-sidebar {
+  display: flex;
+  flex-direction: column;
+}
+.app-main {
+  margin-left: var(--sidebar-width);
+  flex: 1;                 /* KEY: fill all space to the right of the fixed sidebar */
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.member-action-bar {
+  padding: 20px 48px 0;
+}
+
+.member-action-content {
+  max-width: 1360px;
+  margin: 0 auto;
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.member-action-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.member-action-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.member-action-chips::-webkit-scrollbar { display: none; }
+
+.member-action-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.page-wrap {
+  padding: 40px 48px;
+  flex: 1;
+}
+
+/* ── Grid helpers ─────────────────────────────────────────────────────────── */
+.grid-vitals {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+/* Bottom 2-col section (quick actions | more features) */
+.grid-bottom-sections {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 36px;
+  margin-bottom: 40px;
+}
+
+.grid-4col {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.grid-2col {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.dashboard-flex {
+  display: flex;
+  gap: 24px;
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px;
+}
+.dashboard-main { flex: 1; min-width: 0; }
+.dashboard-aside {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dashboard-primary-actions {
+  align-items: stretch;
+}
+
+.dashboard-cta-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  line-height: 1.35;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.05);
+}
+
+.dashboard-cta-button.primary {
+  box-shadow: 0 2px 10px rgba(0, 123, 255, 0.24);
+}
+
+.dashboard-overview-card {
+  min-width: 0;
+}
+
+.dashboard-overview-card button,
+.dashboard-todo-grid button {
+  min-height: 36px;
+}
+
+.dashboard-todo-grid,
+.dashboard-summary-grid,
+.dashboard-doc-status-grid,
+.dashboard-quick-record-grid,
+.dashboard-feature-grid {
+  min-width: 0;
+}
+
+/* ── Mobile chrome (hidden on desktop) ───────────────────────────────────── */
+.mobile-nav    { display: none; }
+.mobile-header { display: none; }
+
+.member-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.member-chips::-webkit-scrollbar { display: none; }
+
+/* ── Breakpoint ≤ 1280px (medium desktops) ───────────────────────────────── */
+@media (max-width: 1280px) {
+  .page-wrap { padding: 32px 36px; }
+  .member-action-bar { padding: 18px 36px 0; }
+}
+
+/* ── Breakpoint ≤ 768px ─────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .app-sidebar { display: none !important; }
+
+  .app-main {
+    margin-left: 0 !important;
+    padding-top: 60px;   /* 56px header + 4px gap */
+    padding-bottom: 72px; /* 60px nav + 12px for FAB overhang */
+  }
+
+  .page-wrap { padding: 16px !important; }
+  .member-action-bar { padding: 12px 16px 0 !important; }
+  .member-action-content {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px;
+  }
+  .member-action-main {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .member-action-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .dashboard-flex { flex-direction: column !important; padding: 16px !important; }
+  .dashboard-aside { width: 100% !important; }
+
+  .grid-vitals { grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
+  .grid-4col   { grid-template-columns: repeat(2, 1fr) !important; }
+  .grid-2col   { grid-template-columns: 1fr !important; }
+  .grid-bottom-sections { grid-template-columns: 1fr !important; gap: 24px !important; }
+  .dashboard-primary-actions { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-cta-button { width: 100%; padding: 11px 12px !important; }
+  .dashboard-summary-grid { grid-template-columns: 1fr !important; }
+  .dashboard-todo-grid { grid-template-columns: 1fr !important; }
+  .dashboard-feature-grid { grid-template-columns: 1fr !important; }
+
+  /* Record type selector stays at 4 cols on mobile */
+  .grid-type-selector {
+    grid-template-columns: repeat(4, 1fr) !important;
+    gap: 6px !important;
+  }
+
+  .mobile-nav    { display: flex !important; }
+  .mobile-header { display: flex !important; }
+
+  .desktop-only { display: none !important; }
+}
+
+/* ── Breakpoint ≤ 480px (small phones) ──────────────────────────────────── */
+@media (max-width: 480px) {
+  .grid-vitals { grid-template-columns: repeat(2, 1fr) !important; }
+  /* keep 2-col on smallest screens */
+
+  .dashboard-primary-actions { grid-template-columns: 1fr !important; }
+  .dashboard-doc-status-grid { grid-template-columns: 1fr !important; }
+  .dashboard-quick-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+
+  .grid-type-selector {
+    grid-template-columns: repeat(4, 1fr) !important;
+    gap: 4px !important;
+  }
+}
+
+/* ── Animations (used by mobile drawer) ─────────────────────────────────── */
+@keyframes slideUpIn {
+  from { transform: translateY(40px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Horizontal scroll row (tabs, chips) ─────────────────────────────────── */
+.scroll-x-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 4px;
+}
+.scroll-x-row::-webkit-scrollbar { display: none; }

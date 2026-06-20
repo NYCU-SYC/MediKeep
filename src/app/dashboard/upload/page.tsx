@@ -1,0 +1,731 @@
+'use client';
+
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useActiveMember } from '../member-context';
+import { useToast } from '../toast-context';
+import { normalizeMemberName } from '@/lib/members';
+
+type Tab = 'manual' | 'file';
+type RecordType = 'blood_pressure' | 'heart_rate' | 'glucose' | 'body_composition' | 'steps' | 'sleep' | 'other';
+
+const RECORD_TYPES: {
+  value: RecordType; label: string; icon: string;
+  fields: { key: 'value1' | 'value2'; label: string; unit: string; placeholder: string }[];
+}[] = [
+  { value: 'blood_pressure',   label: '血壓',   icon: '❤️', fields: [{ key: 'value1', label: '收縮壓', unit: 'mmHg', placeholder: '120' }, { key: 'value2', label: '舒張壓', unit: 'mmHg', placeholder: '80' }] },
+  { value: 'heart_rate',       label: '心跳',   icon: '💓', fields: [{ key: 'value1', label: '心跳率', unit: 'bpm',  placeholder: '72'   }] },
+  { value: 'glucose',          label: '血糖',   icon: '🩸', fields: [{ key: 'value1', label: '血糖值', unit: 'mg/dL', placeholder: '95'  }] },
+  { value: 'body_composition', label: '身體組成', icon: '🏃', fields: [{ key: 'value1', label: '體重',  unit: 'kg',   placeholder: '70.0' }] },
+  { value: 'steps',            label: '步數',   icon: '👟', fields: [{ key: 'value1', label: '步數',  unit: '步',   placeholder: '8000' }] },
+  { value: 'sleep',            label: '睡眠',   icon: '😴', fields: [{ key: 'value1', label: '睡眠時間', unit: '小時', placeholder: '7.5' }] },
+  { value: 'other',            label: '其他',   icon: '📝', fields: [{ key: 'value1', label: '數值',  unit: '',     placeholder: '0'    }] },
+];
+
+const DOC_TYPES = [
+  { value: 'lab_report',   label: '🧪 檢驗報告' },
+  { value: 'prescription', label: '💊 處方箋' },
+  { value: 'discharge',    label: '🏥 出院摘要' },
+  { value: 'image',        label: '🩻 影像報告' },
+  { value: 'nhia_card',    label: '🪪 健保快易通' },
+  { value: 'other',        label: '📄 其他文件' },
+];
+
+const UPLOAD_FLOW_STEPS = [
+  { title: '1. 已收到', body: '檔案進入文件庫，狀態會先顯示為已上傳。' },
+  { title: '2. OCR / AI 擷取', body: '系統嘗試讀取文字與醫療欄位，結果仍是草稿。' },
+  { title: '3. 醫療團隊 QA', body: 'CMO / CEO 確認、修改或要求你補件。' },
+  { title: '4. 發布到 User 端', body: '確認後才會連到白話摘要與健康檔案。' },
+];
+
+// ─── Pending record (for multi-entry accumulation) ────────────────────────────
+type PendingRecord = {
+  tmpId: string;
+  member: string;
+  record_type: string;
+  label: string;
+  icon: string;
+  value1: string;
+  value2: string;
+  unit: string;
+  note: string;
+  recorded_at: string;
+};
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const btnPrimary: React.CSSProperties = {
+  background: 'var(--primary)', color: '#fff', border: 'none',
+  padding: '12px 24px', borderRadius: '10px', fontSize: '15px', fontWeight: '700',
+  cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px',
+};
+
+const inputStyle: React.CSSProperties = {
+  width: '100%', padding: '10px 14px', borderRadius: '8px',
+  border: '1px solid var(--gray-300)', fontSize: '15px', outline: 'none', fontFamily: 'inherit',
+};
+
+const labelStyle: React.CSSProperties = {
+  fontSize: '13px', fontWeight: '600', color: '#555', marginBottom: '6px', display: 'block',
+};
+
+function getTaipeiNow(): string {
+  return new Date().toLocaleString('sv-SE', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).replace(' ', 'T');
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+export default function UploadPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { activeMember, setActiveMember, members } = useActiveMember();
+  const { showToast } = useToast();
+
+  const initialType = ((): RecordType => {
+    const t = searchParams.get('type');
+    if (t && RECORD_TYPES.some(rt => rt.value === t)) return t as RecordType;
+    return 'blood_pressure';
+  })();
+
+  const initialTab = ((): Tab => {
+    return searchParams.get('tab') === 'file' ? 'file' : 'manual';
+  })();
+
+  const [tab, setTab] = useState<Tab>(initialTab);
+
+  // ── Manual entry state ──────────────────────────────────────────────────────
+  const requestedMemberParam = searchParams.get('member');
+  const requestedMember = requestedMemberParam === null ? '' : normalizeMemberName(requestedMemberParam);
+  const initialSelectedMember = requestedMember || activeMember || (members.length === 1 ? members[0]?.name || '' : '');
+  const [member, setMember] = useState(initialSelectedMember);
+  const [recordType, setRecordType] = useState<RecordType>(initialType);
+  const [value1, setValue1] = useState('');
+  const [value2, setValue2] = useState('');
+  const [note, setNote] = useState('');
+  const [recordedAt, setRecordedAt] = useState(getTaipeiNow);
+
+  // Pending (accumulated) records
+  const [pendingRecords, setPendingRecords] = useState<PendingRecord[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [addError, setAddError] = useState('');
+
+  // Companion / extended fields
+  const [pulse, setPulse] = useState('');        // optional heart rate alongside blood pressure
+  const [bodyFat, setBodyFat] = useState('');    // body fat % for body_composition
+  const [heightCm, setHeightCm] = useState(''); // height for BMI auto-calc (persisted in localStorage)
+
+  // ── File upload state ───────────────────────────────────────────────────────
+  const [fileMember, setFileMember] = useState(initialSelectedMember);
+  const [docType, setDocType] = useState('lab_report');
+  const [fileNote, setFileNote] = useState('');
+  const [docDate, setDocDate] = useState(new Date().toISOString().slice(0, 10));
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (requestedMemberParam === null) return;
+    setActiveMember(requestedMember);
+    setMember(requestedMember);
+    setFileMember(requestedMember);
+  }, [requestedMember, requestedMemberParam, setActiveMember]);
+
+  useEffect(() => {
+    if (requestedMemberParam !== null) return;
+    const target = activeMember || (members.length === 1 ? members[0]?.name || '' : '');
+    setMember(target);
+    setFileMember(target);
+  }, [activeMember, members, requestedMemberParam]);
+
+  const selectTargetMember = useCallback((nextMember: string) => {
+    const normalized = normalizeMemberName(nextMember);
+    setMember(normalized);
+    setFileMember(normalized);
+    setActiveMember(normalized);
+
+    const params = new URLSearchParams(searchParams.toString());
+    if (normalized) {
+      params.set('member', normalized);
+    } else {
+      params.delete('member');
+    }
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams, setActiveMember]);
+
+  // Restore saved height from localStorage whenever the target member changes
+  useEffect(() => {
+    if (!member) return;
+    try {
+      const stored = localStorage.getItem('healthkeep_heights_v1');
+      if (stored) {
+        const heights: Record<string, string> = JSON.parse(stored);
+        setHeightCm(heights[member] || '');
+      }
+    } catch { /* ignore */ }
+  }, [member]);
+
+  const handleHeightChange = (h: string) => {
+    setHeightCm(h);
+    if (!member) return;
+    try {
+      const stored = localStorage.getItem('healthkeep_heights_v1') || '{}';
+      const heights: Record<string, string> = JSON.parse(stored);
+      heights[member] = h;
+      localStorage.setItem('healthkeep_heights_v1', JSON.stringify(heights));
+    } catch { /* ignore */ }
+  };
+
+  const currentType = RECORD_TYPES.find(t => t.value === recordType)!;
+
+  // ── Add to pending list ─────────────────────────────────────────────────────
+  const addToPending = () => {
+    setAddError('');
+    if (!member) { setAddError('請先選擇要記錄的家庭成員'); return; }
+
+    if (recordType === 'body_composition') {
+      if (!value1.trim()) { setAddError('請先填入體重'); return; }
+      const ts = new Date(recordedAt).toISOString();
+      const now = Date.now();
+      const newRecords: PendingRecord[] = [
+        { tmpId: `tmp_${now}_w`, member, record_type: 'weight', label: '體重', icon: '⚖️',
+          value1, value2: '', unit: 'kg', note: '', recorded_at: ts },
+      ];
+      const hVal = parseFloat(heightCm);
+      const wVal = parseFloat(value1);
+      if (heightCm.trim() && hVal > 0 && wVal > 0) {
+        newRecords.push({
+          tmpId: `tmp_${now + 1}_bmi`, member, record_type: 'bmi', label: 'BMI', icon: '📊',
+          value1: (wVal / Math.pow(hVal / 100, 2)).toFixed(1), value2: '', unit: '', note: '', recorded_at: ts,
+        });
+      }
+      if (bodyFat.trim()) {
+        newRecords.push({
+          tmpId: `tmp_${now + 2}_bf`, member, record_type: 'body_fat', label: '體脂率', icon: '🔬',
+          value1: bodyFat, value2: '', unit: '%', note: '', recorded_at: ts,
+        });
+      }
+      setPendingRecords(prev => [...prev, ...newRecords]);
+      setValue1(''); setBodyFat('');
+      return;
+    }
+
+    if (!value1.trim()) { setAddError('請先填入數值'); return; }
+    const ts = new Date(recordedAt).toISOString();
+    const newRecords: PendingRecord[] = [{
+      tmpId: `tmp_${Date.now()}`, member, record_type: recordType,
+      label: currentType.label, icon: currentType.icon,
+      value1, value2, unit: currentType.fields[0]?.unit ?? '', note,
+      recorded_at: ts,
+    }];
+    if (recordType === 'blood_pressure' && pulse.trim()) {
+      newRecords.push({
+        tmpId: `tmp_${Date.now()}_hr`, member, record_type: 'heart_rate',
+        label: '心跳', icon: '💓', value1: pulse, value2: '', unit: 'bpm', note: '',
+        recorded_at: ts,
+      });
+      setPulse('');
+    }
+    setPendingRecords(prev => [...prev, ...newRecords]);
+    setValue1(''); setValue2(''); setNote('');
+  };
+
+  const removeFromPending = (tmpId: string) => {
+    setPendingRecords(prev => prev.filter(r => r.tmpId !== tmpId));
+  };
+
+  // ── Submit all pending records ──────────────────────────────────────────────
+  const submitAll = async () => {
+    if (pendingRecords.length === 0) return;
+    setSubmitting(true);
+    try {
+      await Promise.all(pendingRecords.map(r =>
+        fetch('/api/records', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            member_name: r.member,
+            record_type: r.record_type,
+            value1: r.value1 || null,
+            value2: r.value2 || null,
+            unit: r.unit || null,
+            note: r.note || null,
+            recorded_at: r.recorded_at,
+          }),
+        })
+      ));
+      showToast(`已儲存 ${pendingRecords.length} 筆自我量測紀錄`, 'success');
+      setPendingRecords([]);
+      router.push('/dashboard/history');
+    } catch {
+      showToast('儲存失敗，請重試', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── Quick save current entry (if user just wants one record) ────────────────
+  const handleQuickSave = async () => {
+    if (!value1.trim()) return;
+    if (!member) { showToast('請先選擇要記錄的家庭成員', 'error'); return; }
+    setSubmitting(true);
+    const ts = new Date(recordedAt).toISOString();
+    const post = (body: object) => fetch('/api/records', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    try {
+      if (recordType === 'body_composition') {
+        const calls = [post({ member_name: member, record_type: 'weight', value1, unit: 'kg', note: note || null, recorded_at: ts })];
+        const hVal = parseFloat(heightCm), wVal = parseFloat(value1);
+        if (heightCm.trim() && hVal > 0 && wVal > 0) {
+          calls.push(post({ member_name: member, record_type: 'bmi',
+            value1: (wVal / Math.pow(hVal / 100, 2)).toFixed(1), unit: '', recorded_at: ts }));
+        }
+        if (bodyFat.trim()) {
+          calls.push(post({ member_name: member, record_type: 'body_fat', value1: bodyFat, unit: '%', recorded_at: ts }));
+        }
+        await Promise.all(calls);
+      } else {
+        const calls = [post({
+          member_name: member, record_type: recordType,
+          value1: value1 || null, value2: value2 || null,
+          unit: currentType.fields[0]?.unit || null, note: note || null, recorded_at: ts,
+        })];
+        if (recordType === 'blood_pressure' && pulse.trim()) {
+          calls.push(post({ member_name: member, record_type: 'heart_rate', value1: pulse, unit: 'bpm', recorded_at: ts }));
+        }
+        await Promise.all(calls);
+      }
+      showToast('自我量測紀錄已儲存，可在歷史紀錄查看；這不是醫療團隊確認結果', 'success');
+      router.push('/dashboard/history');
+    } catch {
+      showToast('儲存失敗，請重試', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── File upload ─────────────────────────────────────────────────────────────
+  const handleFileSelect = useCallback((file: File) => { setSelectedFile(file); }, []);
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFileSelect(file);
+  }, [handleFileSelect]);
+
+  const handleFileUpload = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!selectedFile) return;
+    if (!fileMember) { showToast('請先選擇文件所屬家庭成員', 'error'); return; }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('member_name', fileMember);
+      formData.append('doc_type', docType);
+      if (fileNote) formData.append('note', fileNote);
+      if (docDate) formData.append('doc_date', new Date(docDate).toISOString());
+      const resp = await fetch('/api/documents', { method: 'POST', credentials: 'include', body: formData });
+      if (!resp.ok) throw new Error('upload_failed');
+      showToast('文件已上傳，等待醫療團隊整理；尚未完成辨識或確認', 'success');
+      router.push('/dashboard/documents');
+    } catch {
+      showToast('文件上傳失敗，請確認格式與網路後重試', 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
+      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
+
+        {/* Back + Title */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+          <button onClick={() => router.back()} style={{
+            width: '44px', height: '44px', borderRadius: '10px', background: '#fff',
+            border: '1px solid var(--gray-200)', fontSize: '18px', cursor: 'pointer', color: '#555',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0, boxShadow: 'var(--shadow-sm)',
+          }}>←</button>
+          <div>
+            <h2 style={{ fontSize: '22px', fontWeight: '800', color: '#111', lineHeight: 1.1 }}>新增健康紀錄</h2>
+            <p style={{ fontSize: '13px', color: '#888', marginTop: '3px' }}>手動輸入數值或上傳醫療文件</p>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{
+          display: 'flex', background: '#f0f4f8', borderRadius: '12px',
+          padding: '4px', marginBottom: '20px',
+        }}>
+          {([{ key: 'manual' as Tab, label: '📊 手動輸入' }, { key: 'file' as Tab, label: '📄 上傳文件' }]).map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)} style={{
+              flex: 1, padding: '10px 16px', borderRadius: '10px', border: 'none',
+              background: tab === t.key ? '#fff' : 'transparent',
+              color: tab === t.key ? 'var(--primary)' : '#888',
+              fontWeight: tab === t.key ? '700' : '500', fontSize: '14px', cursor: 'pointer',
+              boxShadow: tab === t.key ? 'var(--shadow-sm)' : 'none',
+              transition: 'all 0.15s',
+            }}>{t.label}</button>
+          ))}
+        </div>
+
+        {/* ── Manual Entry ── */}
+        {tab === 'manual' && (
+          <div>
+            {/* Pending records list */}
+            {pendingRecords.length > 0 && (
+              <div style={{
+                background: '#fff', borderRadius: '16px', padding: '20px',
+                boxShadow: 'var(--shadow-sm)', marginBottom: '16px',
+              }}>
+                <div style={{ fontSize: '13px', fontWeight: '700', color: '#555', marginBottom: '12px' }}>
+                  暫存清單 · {pendingRecords.length} 筆
+                  <span style={{ fontSize: '12px', color: '#999', fontWeight: '400', marginLeft: '6px' }}>
+                    （點「儲存所有紀錄」後一次送出）
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {pendingRecords.map(r => (
+                    <div key={r.tmpId} style={{
+                      display: 'flex', alignItems: 'center', gap: '10px',
+                      background: '#f8f9fa', borderRadius: '10px', padding: '10px 14px',
+                    }}>
+                      <span style={{ fontSize: '18px' }}>{r.icon}</span>
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#111' }}>{r.label}</span>
+                        <span style={{ fontSize: '13px', color: 'var(--primary)', marginLeft: '8px', fontWeight: '600' }}>
+                          {r.value1}{r.value2 ? `/${r.value2}` : ''} {r.unit}
+                        </span>
+                        <span style={{ fontSize: '12px', color: '#999', marginLeft: '6px' }}>{r.member}</span>
+                        {r.note && <span style={{ fontSize: '11px', color: '#aaa', marginLeft: '6px' }}>· {r.note}</span>}
+                      </div>
+                      <button onClick={() => removeFromPending(r.tmpId)} style={{
+                        width: '24px', height: '24px', borderRadius: '50%', border: '1px solid #eee',
+                        background: '#fff', color: '#f44336', fontSize: '14px',
+                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Form */}
+            <div style={{ background: '#fff', borderRadius: '16px', padding: '28px', boxShadow: 'var(--shadow-sm)', marginBottom: '16px' }}>
+
+              {/* Member select */}
+              <div style={{ marginBottom: '24px' }}>
+                <label style={labelStyle}>家庭成員</label>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {members.map(m => (
+                    <button key={m.name} type="button" onClick={() => selectTargetMember(m.name)} style={{
+                      padding: '8px 20px', borderRadius: '8px', border: '1px solid',
+                      borderColor: member === m.name ? 'var(--primary)' : 'var(--gray-200)',
+                      background: member === m.name ? '#e7f1ff' : '#fff',
+                      color: member === m.name ? 'var(--primary)' : '#555',
+                      fontWeight: member === m.name ? '700' : '500', fontSize: '14px', cursor: 'pointer',
+                    }}>{m.name}</button>
+                  ))}
+                </div>
+                {!member && members.length > 1 && (
+                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#b45309', fontWeight: 700 }}>
+                    請先選擇這筆紀錄屬於哪位家庭成員。
+                  </div>
+                )}
+              </div>
+
+              {/* Record type */}
+              <div style={{ marginBottom: '24px' }}>
+                <label style={labelStyle}>紀錄類型</label>
+                <div className="grid-type-selector">
+                  {RECORD_TYPES.map(rt => (
+                    <button key={rt.value} type="button"
+                      onClick={() => {
+                        setRecordType(rt.value);
+                        setValue1(''); setValue2(''); setAddError('');
+                        setPulse(''); setBodyFat('');
+                      }}
+                      style={{
+                        padding: '10px 8px', borderRadius: '10px', border: '1px solid',
+                        borderColor: recordType === rt.value ? 'var(--primary)' : 'var(--gray-200)',
+                        background: recordType === rt.value ? '#e7f1ff' : '#fff',
+                        color: recordType === rt.value ? 'var(--primary)' : '#555',
+                        fontWeight: recordType === rt.value ? '700' : '500',
+                        fontSize: '13px', cursor: 'pointer',
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+                      }}>
+                      <span style={{ fontSize: '20px' }}>{rt.icon}</span>
+                      {rt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Value fields */}
+              {recordType === 'body_composition' ? (
+                /* ── Body composition: weight + height (localStorage) + body fat ── */
+                <div style={{ marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div>
+                    <label style={labelStyle}>體重 <span style={{ color: '#999', fontWeight: 'normal' }}>(kg)</span></label>
+                    <input type="number" step="0.1" placeholder="70.0" value={value1}
+                      onChange={e => { setValue1(e.target.value); setAddError(''); }} style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>
+                      身高 <span style={{ color: '#999', fontWeight: 'normal' }}>(cm) · 自動計算 BMI，下次記住</span>
+                    </label>
+                    <input type="number" step="1" placeholder="175" value={heightCm}
+                      onChange={e => handleHeightChange(e.target.value)} style={inputStyle} />
+                  </div>
+                  {heightCm && value1 && parseFloat(heightCm) > 0 && parseFloat(value1) > 0 && (
+                    <div style={{
+                      background: '#e7f1ff', borderRadius: '8px', padding: '10px 14px',
+                      fontSize: '13px', color: 'var(--primary)', fontWeight: '600',
+                    }}>
+                      💡 BMI = {(parseFloat(value1) / Math.pow(parseFloat(heightCm) / 100, 2)).toFixed(1)}
+                    </div>
+                  )}
+                  <div>
+                    <label style={labelStyle}>體脂率 <span style={{ color: '#999', fontWeight: 'normal' }}>(%) · 選填</span></label>
+                    <input type="number" step="0.1" placeholder="20.0" value={bodyFat}
+                      onChange={e => setBodyFat(e.target.value)} style={inputStyle} />
+                  </div>
+                </div>
+              ) : (
+                /* ── Standard fields ── */
+                <div className={currentType.fields.length > 1 ? 'grid-2col' : ''} style={{ marginBottom: '20px' }}>
+                  {currentType.fields.map(field => (
+                    <div key={field.key}>
+                      <label style={labelStyle}>
+                        {field.label}
+                        {field.unit && <span style={{ color: '#999', fontWeight: 'normal' }}> ({field.unit})</span>}
+                      </label>
+                      <input
+                        type="number" step="0.1"
+                        placeholder={field.placeholder}
+                        value={field.key === 'value1' ? value1 : value2}
+                        onChange={e => {
+                          setAddError('');
+                          if (field.key === 'value1') setValue1(e.target.value);
+                          else setValue2(e.target.value);
+                        }}
+                        style={inputStyle}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Optional heart rate companion for blood pressure */}
+              {recordType === 'blood_pressure' && (
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={labelStyle}>心跳 <span style={{ color: '#999', fontWeight: 'normal' }}>(bpm) · 選填</span></label>
+                  <input type="number" step="1" placeholder="72" value={pulse}
+                    onChange={e => setPulse(e.target.value)} style={inputStyle} />
+                </div>
+              )}
+
+              {addError && (
+                <div style={{ fontSize: '13px', color: '#f44336', marginBottom: '12px' }}>{addError}</div>
+              )}
+
+              {/* Date/time */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={labelStyle}>量測時間</label>
+                <input type="datetime-local" value={recordedAt}
+                  onChange={e => setRecordedAt(e.target.value)} style={inputStyle} />
+              </div>
+
+              {/* Note */}
+              <div>
+                <label style={labelStyle}>備註（選填）</label>
+                <textarea
+                  placeholder="例：飯前量測、運動後…"
+                  value={note} onChange={e => setNote(e.target.value)}
+                  rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '8px' }}>
+              <button type="button" onClick={addToPending} style={{
+                flex: 1, padding: '12px 20px', borderRadius: '10px',
+                border: '2px solid var(--primary)', background: '#fff',
+                color: 'var(--primary)', fontSize: '14px', fontWeight: '700', cursor: 'pointer',
+              }}>
+                + 加入清單
+              </button>
+              {pendingRecords.length > 0 && (
+                <button type="button" onClick={submitAll} disabled={submitting} style={{
+                  ...btnPrimary, flex: 2, justifyContent: 'center',
+                  opacity: submitting ? 0.7 : 1,
+                }}>
+                  {submitting ? '儲存中...' : `✅ 儲存所有紀錄（${pendingRecords.length} 筆）`}
+                </button>
+              )}
+            </div>
+
+            {/* Shortcut: quick save single entry */}
+            {pendingRecords.length === 0 && (
+              <button type="button" onClick={handleQuickSave} disabled={submitting || !value1.trim()} style={{
+                ...btnPrimary, width: '100%', justifyContent: 'center',
+                opacity: (submitting || !value1.trim()) ? 0.5 : 1,
+                fontSize: '15px', padding: '14px 24px',
+              }}>
+                {submitting ? '儲存中...' : '✅ 直接儲存這筆'}
+              </button>
+            )}
+
+            {pendingRecords.length === 0 && (
+              <p style={{ textAlign: 'center', fontSize: '12px', color: '#bbb', marginTop: '8px' }}>
+                想一次記錄多種數據？先點「加入清單」，再一起送出
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ── File Upload ── */}
+        {tab === 'file' && (
+          <form onSubmit={handleFileUpload}>
+            <div style={{ background: '#fff', borderRadius: '16px', padding: '28px', boxShadow: 'var(--shadow-sm)', marginBottom: '20px' }}>
+              <div style={{
+                background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412',
+                borderRadius: '12px', padding: '12px 14px', fontSize: '13px',
+                lineHeight: 1.6, marginBottom: '20px',
+              }}>
+                上傳只代表 HealthKeep 收到原始檔案。OCR、AI 擷取與醫療團隊確認是後續處理狀態；未確認前不會視為正式病歷摘要。
+                請確認照片四角完整、文字清楚且頁數齊全；模糊、重複或缺頁文件可能會被退件補傳。
+              </div>
+
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                gap: '10px', marginBottom: '24px',
+              }}>
+                {UPLOAD_FLOW_STEPS.map((step, index) => (
+                  <div key={step.title} style={{
+                    border: '1px solid #e2e8f0', borderRadius: '12px',
+                    background: index === 0 ? '#eff6ff' : '#f8fafc',
+                    padding: '12px', minHeight: '104px',
+                  }}>
+                    <div style={{ fontSize: '12px', fontWeight: 900, color: index === 0 ? '#1d4ed8' : '#334155' }}>
+                      {step.title}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#64748b', lineHeight: 1.55, marginTop: '6px' }}>
+                      {step.body}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Member select */}
+              <div style={{ marginBottom: '24px' }}>
+                <label style={labelStyle}>家庭成員</label>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {members.map(m => (
+                    <button key={m.name} type="button" onClick={() => selectTargetMember(m.name)} style={{
+                      padding: '8px 20px', borderRadius: '8px', border: '1px solid',
+                      borderColor: fileMember === m.name ? 'var(--primary)' : 'var(--gray-200)',
+                      background: fileMember === m.name ? '#e7f1ff' : '#fff',
+                      color: fileMember === m.name ? 'var(--primary)' : '#555',
+                      fontWeight: fileMember === m.name ? '700' : '500', fontSize: '14px', cursor: 'pointer',
+                    }}>{m.name}</button>
+                  ))}
+                </div>
+                {!fileMember && members.length > 1 && (
+                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#b45309', fontWeight: 700 }}>
+                    請先選擇這份文件屬於哪位家庭成員。
+                  </div>
+                )}
+              </div>
+
+              {/* Doc type */}
+              <div style={{ marginBottom: '24px' }}>
+                <label style={labelStyle}>文件類型</label>
+                <select value={docType} onChange={e => setDocType(e.target.value)}
+                  style={{ ...inputStyle, background: '#fff' }}>
+                  {DOC_TYPES.map(dt => <option key={dt.value} value={dt.value}>{dt.label}</option>)}
+                </select>
+              </div>
+
+              {/* Drop zone */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={labelStyle}>選擇文件</label>
+                <div
+                  onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={onDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{
+                    border: `2px dashed ${dragOver ? 'var(--primary)' : selectedFile ? '#4caf50' : 'var(--gray-300)'}`,
+                    borderRadius: '12px', padding: '40px 20px', textAlign: 'center',
+                    background: dragOver ? '#e7f1ff' : selectedFile ? '#f0fff4' : '#fafafa',
+                    cursor: 'pointer', transition: 'all 0.2s',
+                  }}
+                >
+                  {selectedFile ? (
+                    <>
+                      <div style={{ fontSize: '36px', marginBottom: '8px' }}>📄</div>
+                      <div style={{ fontWeight: '700', color: '#333', fontSize: '15px' }}>{selectedFile.name}</div>
+                      <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                        {(selectedFile.size / 1024).toFixed(1)} KB · 點擊更換
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#15803d', marginTop: '8px', fontWeight: 700 }}>
+                        下一步：送入文件庫並標示為「已上傳，等待整理」
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: '40px', marginBottom: '12px' }}>📁</div>
+                      <div style={{ fontWeight: '600', color: '#555', marginBottom: '4px' }}>拖曳文件到這裡</div>
+                      <div style={{ fontSize: '13px', color: '#999' }}>
+                        或點擊選擇 · 支援 PDF、HTML、JPG、PNG、DOC、DOCX；上傳後會先進入待整理
+                      </div>
+                    </>
+                  )}
+                </div>
+                <input ref={fileInputRef} type="file"
+                  accept=".pdf,.html,.htm,.jpg,.jpeg,.png,.doc,.docx"
+                  style={{ display: 'none' }}
+                  onChange={e => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]); }} />
+              </div>
+
+              {/* Doc date */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={labelStyle}>文件日期</label>
+                <input type="date" value={docDate}
+                  onChange={e => setDocDate(e.target.value)} style={inputStyle} />
+              </div>
+
+              {/* Note */}
+              <div>
+                <label style={labelStyle}>備註（選填）</label>
+                <textarea placeholder="例：XX醫院 2025/01 健檢報告…"
+                  value={fileNote} onChange={e => setFileNote(e.target.value)}
+                  rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
+              </div>
+            </div>
+
+            <button type="submit" disabled={!selectedFile || uploading} style={{
+              ...btnPrimary, width: '100%', justifyContent: 'center',
+              opacity: (!selectedFile || uploading) ? 0.5 : 1,
+              fontSize: '15px', padding: '14px 24px',
+            }}>
+              {uploading ? '上傳中，尚未辨識內容...' : '上傳並送入待整理'}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
