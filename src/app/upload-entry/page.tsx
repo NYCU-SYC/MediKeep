@@ -97,6 +97,10 @@ function isLocalDevHost(hostname: string) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
+function canonicalUploadEntryUrl() {
+  return new URL('/upload-entry', window.location.origin).toString();
+}
+
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 8000) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -183,7 +187,7 @@ export default function UploadEntryPage() {
         // 4. 若尚未登入 LINE，導向 LINE 登入
         if (!liff.isLoggedIn()) {
           setStatusText('正在開啟 LINE 登入...');
-          liff.login({ redirectUri: window.location.href });
+          liff.login({ redirectUri: canonicalUploadEntryUrl() });
           return;
         }
 
