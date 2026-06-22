@@ -85,7 +85,45 @@ function confidenceLabel(pct: number): { text: string; color: string } {
 function fieldsToObj(p: DraftPayload | null | undefined): Record<string, string> {
   const obj: Record<string, string> = {}
   Object.entries(p?.extracted_fields ?? {}).forEach(([k, v]) => { obj[k] = toText(v) })
+  const skip = new Set(['extracted_fields', 'field_confidence', 'confidence', 'icd10_candidates', 'nhi_kinds'])
+  Object.entries(p ?? {}).forEach(([k, v]) => {
+    if (skip.has(k) || obj[k]) return
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || Array.isArray(v)) obj[k] = toText(v)
+  })
   return obj
+}
+
+function pickField(fields: Record<string, string>, keys: string[]) {
+  for (const key of keys) {
+    const value = fields[key]?.trim()
+    if (value) return value
+  }
+  return ''
+}
+
+function draftDisplay(draft: Draft, fields: Record<string, string> = fieldsToObj(draft.payload)) {
+  const rawText = toText(draft.payload?.raw_text)
+  const title =
+    pickField(fields, ['diagnosis', 'diagnosis_text', 'condition', 'display_name', 'drug_name', 'medication', 'medication_name', 'name', 'item', 'lab_item', 'test_name', 'procedure', 'vaccine', 'imaging_summary', 'impression_text']) ||
+    draft.payload?.icd10_candidates?.[0] ||
+    rawText.slice(0, 90) ||
+    TYPE_LABELS[draft.draft_type] ||
+    draft.draft_type
+  return {
+    date: pickField(fields, ['visit_date', 'date', 'recorded_at', 'service_date', 'doc_date']) || formatDate(draft.created_at ?? undefined),
+    facility: pickField(fields, ['facility', 'hospital', 'institution', 'clinic', 'provider', 'organization', 'source']) || `Draft #${draft.id}`,
+    title,
+    summary: pickField(fields, ['imaging_summary', 'impression_text', 'result', 'value', 'note', 'raw_description']) || rawText.slice(0, 120),
+    icd: pickField(fields, ['icd10', 'icd10_code', 'icd_code', 'diagnosis_code']) || (draft.payload?.icd10_candidates ?? []).join('、'),
+  }
+}
+
+function reviewableDraft(draft: Draft, fields: Record<string, string> = fieldsToObj(draft.payload)) {
+  return Boolean(
+    pickField(fields, ['diagnosis', 'diagnosis_text', 'condition', 'drug_name', 'medication', 'item', 'lab_item', 'test_name', 'imaging_summary', 'impression_text', 'procedure', 'vaccine', 'facility', 'hospital', 'visit_date', 'date']) ||
+    toText(draft.payload?.raw_text).trim() ||
+    (draft.payload?.icd10_candidates ?? []).length > 0
+  )
 }
 
 function tierOf(d: Draft): PriorityHint { return d.priority_hint || 'tier3' }
@@ -235,9 +273,10 @@ export default function IntakePage() {
       else if (statFilter === 'needs_action') { if (!needsAction(d, problems)) return false }
       else if (tierOf(d) !== statFilter) return false
       if (!term) return true
-      const f = d.payload?.extracted_fields ?? {}
+      const f = fieldsToObj(d.payload)
+      const display = draftDisplay(d, f)
       const hay = [
-        f.facility, f.diagnosis, f.icd10, f.visit_date, d.draft_type,
+        display.facility, display.title, display.icd, display.date, d.draft_type,
         ...(d.payload?.icd10_candidates ?? []),
       ].map(toText).join(' ').toLowerCase()
       return hay.includes(term)
@@ -252,10 +291,10 @@ export default function IntakePage() {
         const t = tierOf(d)
         return `${t === 'tier1' ? '0' : t === 'tier2' ? '1' : '2'}_${TIER_META[t].label}`
       }
-      if (groupBy === 'facility') return String(d.payload?.extracted_fields?.facility ?? '— 未知機構 —')
+      if (groupBy === 'facility') return draftDisplay(d).facility || '— 未知機構 —'
       if (groupBy === 'icd') {
-        const codes = d.payload?.icd10_candidates ?? []
-        return codes[0] || '— 無 ICD —'
+        const display = draftDisplay(d)
+        return display.icd || '— 無 ICD —'
       }
       if (groupBy === 'type') return TYPE_LABELS[d.draft_type] || d.draft_type
       return 'all'
@@ -326,6 +365,14 @@ export default function IntakePage() {
 
   const runSingle = async (action: DraftAction, draftId: number) => {
     if (busy) return
+    if (action === 'accept') {
+      const draft = drafts.find((item) => item.id === draftId)
+      if (draft && !reviewableDraft(draft)) {
+        flashFor('缺少可審閱來源內容，請展開後補註、退回或稍後處理')
+        setExpanded(draftId)
+        return
+      }
+    }
     setBusy(true)
     try {
       if (action === 'accept') await accept(draftId)
@@ -345,6 +392,14 @@ export default function IntakePage() {
   const runBulk = async (action: 'accept' | 'reject') => {
     const ids = Array.from(selected)
     if (ids.length === 0 || busy) return
+    if (action === 'accept') {
+      const unsafe = drafts.filter((draft) => ids.includes(draft.id) && !reviewableDraft(draft))
+      if (unsafe.length > 0) {
+        setSelected(new Set(unsafe.map((draft) => draft.id)))
+        flashFor(`${unsafe.length} 筆缺少可審閱內容，已保留選取並禁止批次接受`)
+        return
+      }
+    }
     setBusy(true)
     try {
       const url = action === 'accept' ? '/api/cmo/drafts/bulk-accept' : '/api/cmo/drafts/bulk-reject'
@@ -505,7 +560,9 @@ export default function IntakePage() {
                 </td>
               </tr>,
               ...g.items.flatMap((d) => {
-                const f = d.payload?.extracted_fields ?? {}
+                const f = fieldsToObj(d.payload)
+                const display = draftDisplay(d, f)
+                const canAccept = reviewableDraft(d, f)
                 const conf = confidenceLabel(overallConfidence(d.payload))
                 const tier = tierOf(d)
                 const isSel = selected.has(d.id)
@@ -526,14 +583,15 @@ export default function IntakePage() {
                       <input type="checkbox" checked={isSel} onChange={() => toggleOne(d.id)} />
                     </td>
                     <td style={{ whiteSpace: 'nowrap', color: '#475569', fontVariantNumeric: 'tabular-nums' }}>
-                      {formatDate(toText(f.visit_date))}
+                      {display.date}
                     </td>
-                    <td><strong style={{ fontWeight: 700 }}>{toText(f.facility) || '—'}</strong></td>
+                    <td><strong style={{ fontWeight: 700 }}>{display.facility}</strong></td>
                     <td>
-                      <div style={{ color: '#0f172a', fontWeight: 650 }}>{toText(f.diagnosis) || (toText(f.vaccine) ? `💉 ${toText(f.vaccine)}` : '—')}</div>
-                      {f.imaging_summary ? <div className="cmo-subtitle" style={{ marginTop: 2 }}>{toText(f.imaging_summary).slice(0, 80)}…</div> : null}
+                      <div style={{ color: '#0f172a', fontWeight: 650 }}>{display.title}</div>
+                      {!canAccept && <div className="cmo-subtitle" style={{ marginTop: 2, color: '#be123c' }}>Missing source fields. Expand and defer/reject; do not quick-accept.</div>}
+                      {display.summary && display.summary !== display.title ? <div className="cmo-subtitle" style={{ marginTop: 2 }}>{display.summary.slice(0, 80)}{display.summary.length > 80 ? '...' : ''}</div> : null}
                     </td>
-                    <td style={{ color: '#475569', fontFamily: 'ui-monospace,monospace', fontSize: 12 }}>{toText(f.icd10) || '—'}</td>
+                    <td style={{ color: '#475569', fontFamily: 'ui-monospace,monospace', fontSize: 12 }}>{display.icd || '—'}</td>
                     <td>
                       <span className={`cmo-tier-pill t${tier === 'tier1' ? '1' : tier === 'tier2' ? '2' : '3'}`}>{tier === 'tier1' ? 'T1' : tier === 'tier2' ? 'T2' : 'T3'}</span>{' '}
                       <span style={{ color: '#64748b', fontSize: 11 }}>{TYPE_LABELS[d.draft_type] || d.draft_type}</span>
@@ -541,7 +599,7 @@ export default function IntakePage() {
                     <td style={{ color: conf.color, fontWeight: 800, fontSize: 12 }}>{conf.text}</td>
                     <td style={{ textAlign: 'right' }}>
                       <div className="cmo-quickact">
-                        <button type="button" className="ok" disabled={busy} title="接受 (a)" onClick={() => runSingle('accept', d.id)}>✓</button>
+                        <button type="button" className="ok" disabled={busy || !canAccept} title={canAccept ? '接受 (a)' : 'Missing source fields; expand before action.'} onClick={() => runSingle('accept', d.id)}>✓</button>
                         <button type="button" className="no" disabled={busy} title="退回 (r)" onClick={() => runSingle('reject', d.id)}>✕</button>
                       </div>
                     </td>

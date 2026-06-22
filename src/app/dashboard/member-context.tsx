@@ -20,6 +20,11 @@ type MemberContextType = {
   setMembers: React.Dispatch<React.SetStateAction<FamilyMember[]>>;
   membersLoading: boolean;
   setMembersLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  // True when the members fetch failed (network / server error). Lets the UI
+  // distinguish "load failed, retry" from the genuine "no members yet" empty
+  // state instead of silently showing the onboarding empty state on error.
+  membersError: boolean;
+  setMembersError: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
 const MemberContext = createContext<MemberContextType>({
@@ -29,6 +34,8 @@ const MemberContext = createContext<MemberContextType>({
   setMembers: () => {},
   membersLoading: true,
   setMembersLoading: () => {},
+  membersError: false,
+  setMembersError: () => {},
 });
 
 export function MemberProvider({ children }: { children: React.ReactNode }) {
@@ -42,6 +49,7 @@ export function MemberProvider({ children }: { children: React.ReactNode }) {
   });
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(true);
+  const [membersError, setMembersError] = useState(false);
 
   const setActiveMember = useCallback((member: string) => {
     const normalized = normalizeMemberName(member);
@@ -58,7 +66,8 @@ export function MemberProvider({ children }: { children: React.ReactNode }) {
     activeMember: activeMemberState, setActiveMember,
     members, setMembers,
     membersLoading, setMembersLoading,
-  }), [activeMemberState, members, membersLoading, setActiveMember]);
+    membersError, setMembersError,
+  }), [activeMemberState, members, membersLoading, membersError, setActiveMember]);
 
   return (
     <MemberContext.Provider value={value}>

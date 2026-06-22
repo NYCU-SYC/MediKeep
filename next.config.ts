@@ -3,7 +3,7 @@ import type { NextConfig } from 'next'
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080'
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ['bust-unpledged-bubbling.ngrok-free.dev'],
+  allowedDevOrigins: ['*.ngrok-free.dev', '*.trycloudflare.com'],
   turbopack: {
     root: process.cwd(),
   },

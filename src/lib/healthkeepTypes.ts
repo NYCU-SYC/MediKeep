@@ -2,6 +2,12 @@
 // JSON fields use snake_case to match backend; only client-side derived
 // fields (riskLevel, healthScore etc. in clinical.ts) use camelCase.
 
+// Canonical status/badge families live in statusSystem.ts (single source of
+// truth per UI/UX spec §10). Re-export so existing imports keep working while
+// new code can pull the shared metadata/colors.
+export type { Priority, DataStatus, UserStatus, RecommendationStatus, FollowUpStatus } from './statusSystem'
+import type { RecommendationStatus } from './statusSystem'
+
 // ── Tier / status enums ──────────────────────────────────────────────────────
 
 export type ProblemStatus = 'underlying' | 'following' | 'resolved'
@@ -13,6 +19,60 @@ export type ChangeRequestAction = 'create' | 'update' | 'delete' | 'state_change
 export type ChangeRequestTargetType = 'problem' | 'condition' | 'allergy' | 'medication_regimen' | 'medication_event' | 'vaccine' | 'measurement' | 'appointment' | 'reminder' | 'family_medical_history' | 'patient_profile' | 'source_document' | 'other'
 export type ReminderType = 'follow_up' | 'health_check' | 'screening' | 'vaccine' | 'medication_refill' | 'measurement' | 'document_upload' | 'custom'
 export type ReminderSource = 'patient_created' | 'cmo_created' | 'system_rule' | 'imported'
+export type DocumentFlowStatus = 'uploaded' | 'queued' | 'extracting' | 'needs_review' | 'reviewed' | 'published' | 'confirmed' | 'rejected' | 'failed'
+// Canonical recommendation status (§10): draft | needs_review | ready_to_publish
+// | published | updated | withdrawn. Previously this was draft|published|retracted,
+// which contradicted the live CMO recommendation editor — now unified.
+export type UserRecommendationStatus = RecommendationStatus
+export type ReviewItemStatus = 'uploaded' | 'processing' | 'needs_review' | 'reviewed' | 'published_to_user' | 'follow_up_needed' | 'resolved'
+
+export interface SourceRef {
+  source_type: 'nhi' | 'document' | 'record' | 'problem' | 'condition' | 'medication' | 'manual' | 'system'
+  source_id: string
+  label?: string | null
+}
+
+export interface UserRecommendation {
+  id: string
+  patient_id: string
+  member_name?: string | null
+  status: UserRecommendationStatus
+  plain_language_content: string
+  next_action?: string | null
+  source_refs: SourceRef[]
+  published_at?: string | null
+  retracted_at?: string | null
+  updated_by?: string | null
+  updated_at: string
+}
+
+export interface CmoInternalNote {
+  id: string
+  patient_id: string
+  member_name?: string | null
+  content: string
+  source_refs: SourceRef[]
+  created_by: string
+  created_at: string
+  updated_at: string
+  audit_id?: string | null
+}
+
+export interface ReviewItem {
+  id: string
+  patient_id: string
+  patient_name: string
+  target_type: ChangeRequestTargetType | 'document' | 'nhi_draft' | 'follow_up' | 'reported_state'
+  target_id?: string | null
+  target_label: string
+  priority: 'high' | 'medium' | 'low'
+  source: string
+  status: ReviewItemStatus
+  last_updated?: string | null
+  next_action: string
+  patient_visible_effect?: string | null
+  review_url?: string | null
+}
 
 // ── Problem (API Contract §4.3) ─────────────────────────────────────────────
 

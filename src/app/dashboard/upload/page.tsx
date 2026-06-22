@@ -4,7 +4,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useActiveMember } from '../member-context';
 import { useToast } from '../toast-context';
-import { normalizeMemberName } from '@/lib/members';
+import { api } from '@/lib/api';
+import { memberHref, normalizeMemberName } from '@/lib/members';
 
 type Tab = 'manual' | 'file';
 type RecordType = 'blood_pressure' | 'heart_rate' | 'glucose' | 'body_composition' | 'steps' | 'sleep' | 'other';
@@ -32,11 +33,68 @@ const DOC_TYPES = [
 ];
 
 const UPLOAD_FLOW_STEPS = [
-  { title: '1. 已收到', body: '檔案進入文件庫，狀態會先顯示為已上傳。' },
-  { title: '2. OCR / AI 擷取', body: '系統嘗試讀取文字與醫療欄位，結果仍是草稿。' },
-  { title: '3. 醫療團隊 QA', body: 'CMO / CEO 確認、修改或要求你補件。' },
-  { title: '4. 發布到 User 端', body: '確認後才會連到白話摘要與健康檔案。' },
+  { title: '1. 已收到', body: '檔案進入文件庫，狀態會先顯示為「已收到」。' },
+  { title: '2. 整理中', body: '系統擷取（OCR）讀取文字與醫療欄位，結果仍是草稿。' },
+  { title: '3. 等待 CMO 審閱', body: 'CMO Panel 會出現待審閱提醒；醫療團隊確認、修改，或請你補件。' },
+  { title: '4. 已完成摘要', body: '確認後才會連到白話摘要與健康檔案。' },
 ];
+
+// 上傳後即時整理進度（對應改版 §6 狀態鏈）。映射文件 processing_status。
+type UploadedDoc = { id?: string; file_name?: string; processing_status?: string | null; status?: string | null };
+type RecentDoc = UploadedDoc & { doc_type?: string | null; doc_date?: string | null; created_at?: string | null; processing_status_label?: string | null };
+const DOC_FLOW = [
+  { title: '已收到', body: '檔案已進入文件庫' },
+  { title: '整理中', body: '系統擷取（OCR）與初步整理，仍是草稿' },
+  { title: '等待 CMO 審閱', body: '醫療團隊確認、修改或請你補件' },
+  { title: '已完成摘要', body: '完成後會連到白話摘要與健康檔案' },
+];
+// active = 目前進行中的步驟索引；i < active 視為已完成；active >= 長度代表全部完成。
+function docFlowState(status?: string | null): { active: number; error: boolean } {
+  switch (status) {
+    case 'confirmed': return { active: DOC_FLOW.length, error: false };
+    case 'published': return { active: DOC_FLOW.length, error: false };
+    case 'reviewed': return { active: 3, error: false };
+    case 'needs_review': return { active: 2, error: false };
+    case 'extracting': return { active: 1, error: false };
+    case 'failed':
+    case 'rejected': return { active: 1, error: true };
+    default: return { active: 1, error: false }; // uploaded / queued / unknown
+  }
+}
+function uploadStatusBadge(doc?: UploadedDoc | null): { t: string; c: string; text: string } {
+  const fs = docFlowState(doc?.processing_status || doc?.status);
+  if (fs.error) return { t: '需補件 / 重傳', c: 'hk-b-red', text: '醫療團隊需要補件或重傳。' };
+  if (fs.active >= DOC_FLOW.length) return { t: '已完成摘要', c: 'hk-b-green', text: 'CMO 已完成整理，可查看健康摘要。' };
+  if (fs.active >= 2) return { t: '等待 CMO 審閱', c: 'hk-b-amber', text: '已進入 CMO 待審閱佇列。' };
+  return { t: '整理中', c: 'hk-b-amber', text: '系統正在整理，尚未進入正式摘要。' };
+}
+function UploadStatusTimeline({ status }: { status?: string | null }) {
+  const { active, error } = docFlowState(status);
+  return (
+    <div style={{ marginTop: 4 }}>
+      {DOC_FLOW.map((s, i) => {
+        const done = i < active;
+        const isActive = i === active && active < DOC_FLOW.length;
+        const err = error && isActive;
+        const dotColor = err ? 'var(--hk-red)' : done ? 'var(--hk-green)' : isActive ? 'var(--hk-amber)' : '#cbd5e1';
+        return (
+          <div key={s.title} style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <span style={{ width: 14, height: 14, borderRadius: 7, flexShrink: 0, marginTop: 5, background: done || isActive || err ? dotColor : '#fff', border: `2px solid ${dotColor}`, boxShadow: isActive ? `0 0 0 4px ${err ? '#fef2f2' : '#fffbeb'}` : 'none' }} />
+              {i < DOC_FLOW.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 16, background: done ? 'var(--hk-green)' : '#e2e8f0' }} />}
+            </div>
+            <div style={{ paddingBottom: 10 }}>
+              <div style={{ fontSize: 14, fontWeight: done || isActive ? 800 : 600, color: done ? 'var(--hk-green)' : isActive ? (err ? 'var(--hk-red)' : 'var(--hk-amber)') : 'var(--hk-ink-3)' }}>
+                {done ? '✓ ' : ''}{s.title}{err ? '（需補件 / 重傳）' : isActive ? '…' : ''}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--hk-ink-2)', marginTop: 2 }}>{s.body}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // ─── Pending record (for multi-entry accumulation) ────────────────────────────
 type PendingRecord = {
@@ -91,7 +149,8 @@ export default function UploadPage() {
   })();
 
   const initialTab = ((): Tab => {
-    return searchParams.get('tab') === 'file' ? 'file' : 'manual';
+    if (searchParams.get('tab') === 'manual' || searchParams.has('type')) return 'manual';
+    return 'file';
   })();
 
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -125,6 +184,8 @@ export default function UploadPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadedDoc, setUploadedDoc] = useState<UploadedDoc | null>(null); // 上傳後顯示整理進度
+  const [recentDocs, setRecentDocs] = useState<RecentDoc[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -321,6 +382,19 @@ export default function UploadPage() {
     if (file) handleFileSelect(file);
   }, [handleFileSelect]);
 
+  const loadRecentDocs = useCallback(async () => {
+    try {
+      const params: Record<string, string> = { limit: '5' };
+      if (fileMember) params.member = fileMember;
+      const data = await api.get('/api/documents', params);
+      setRecentDocs(Array.isArray(data) ? (data as RecentDoc[]).slice(0, 5) : []);
+    } catch {
+      setRecentDocs([]);
+    }
+  }, [fileMember]);
+
+  useEffect(() => { void loadRecentDocs(); }, [loadRecentDocs]);
+
   const handleFileUpload = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selectedFile) return;
@@ -335,14 +409,34 @@ export default function UploadPage() {
       if (docDate) formData.append('doc_date', new Date(docDate).toISOString());
       const resp = await fetch('/api/documents', { method: 'POST', credentials: 'include', body: formData });
       if (!resp.ok) throw new Error('upload_failed');
-      showToast('文件已上傳，等待醫療團隊整理；尚未完成辨識或確認', 'success');
-      router.push('/dashboard/documents');
+      const doc = await resp.json().catch(() => null);
+      showToast('文件已收到，整理中；尚未完成辨識或確認', 'success');
+      // 不自動跳轉：留在頁面顯示整理進度（已收到 ≠ 已確認）。
+      setUploadedDoc(doc && typeof doc === 'object' ? (doc as UploadedDoc) : { file_name: selectedFile.name });
+      setSelectedFile(null);
+      void loadRecentDocs();
     } catch {
       showToast('文件上傳失敗，請確認格式與網路後重試', 'error');
     } finally {
       setUploading(false);
     }
   };
+
+  // 重新抓最新整理狀態（手動按鈕觸發，不自動輪詢以避免額外負載）
+  const refreshUploadedStatus = useCallback(async () => {
+    if (!uploadedDoc) return;
+    try {
+      const params = new URLSearchParams({ limit: '20' });
+      if (fileMember) params.set('member', fileMember);
+      const resp = await fetch(`/api/documents?${params.toString()}`, { credentials: 'include' });
+      if (!resp.ok) return;
+      const list = await resp.json();
+      if (!Array.isArray(list)) return;
+      const match = (uploadedDoc.id ? list.find((d: UploadedDoc) => d.id === uploadedDoc.id) : list[0]) as UploadedDoc | undefined;
+      if (match) setUploadedDoc(match);
+      setRecentDocs(list.slice(0, 5) as RecentDoc[]);
+    } catch { /* 靜默：保留現有狀態 */ }
+  }, [uploadedDoc, fileMember]);
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
@@ -357,8 +451,8 @@ export default function UploadPage() {
             flexShrink: 0, boxShadow: 'var(--shadow-sm)',
           }}>←</button>
           <div>
-            <h2 style={{ fontSize: '22px', fontWeight: '800', color: '#111', lineHeight: 1.1 }}>新增健康紀錄</h2>
-            <p style={{ fontSize: '13px', color: '#888', marginTop: '3px' }}>手動輸入數值或上傳醫療文件</p>
+            <h2 style={{ fontSize: '22px', fontWeight: '800', color: '#111', lineHeight: 1.1 }}>新增健康資料</h2>
+            <p style={{ fontSize: '13px', color: '#888', marginTop: '3px' }}>優先上傳報告或照片；日常量測可切到手動輸入</p>
           </div>
         </div>
 
@@ -367,7 +461,7 @@ export default function UploadPage() {
           display: 'flex', background: '#f0f4f8', borderRadius: '12px',
           padding: '4px', marginBottom: '20px',
         }}>
-          {([{ key: 'manual' as Tab, label: '📊 手動輸入' }, { key: 'file' as Tab, label: '📄 上傳文件' }]).map(t => (
+          {([{ key: 'file' as Tab, label: '📄 上傳報告 / 照片' }, { key: 'manual' as Tab, label: '📊 手動輸入' }]).map(t => (
             <button key={t.key} onClick={() => setTab(t.key)} style={{
               flex: 1, padding: '10px 16px', borderRadius: '10px', border: 'none',
               background: tab === t.key ? '#fff' : 'transparent',
@@ -378,6 +472,37 @@ export default function UploadPage() {
             }}>{t.label}</button>
           ))}
         </div>
+
+        {tab === 'file' && recentDocs.length > 0 && (
+          <div className="hk-card" style={{ marginBottom: 20, borderColor: '#dbeafe', background: '#fff' }}>
+            <div className="hk-ctitle">最近資料狀態
+              <button type="button" onClick={() => void loadRecentDocs()} className="hk-btn hk-btn-ghost hk-btn-sm">重新整理</button>
+            </div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {recentDocs.slice(0, 3).map((doc, index) => {
+                const badge = uploadStatusBadge(doc);
+                const dateLabel = doc.doc_date || (doc.created_at ? new Date(doc.created_at).toLocaleDateString('zh-TW') : '');
+                return (
+                  <div key={doc.id || `${doc.file_name}-${index}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '9px 0', borderBottom: index < Math.min(recentDocs.length, 3) - 1 ? '1px solid var(--hk-line)' : 'none' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--hk-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {doc.file_name || '上傳文件'}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--hk-ink-3)', marginTop: 2 }}>
+                        {dateLabel ? `資料日期 ${dateLabel} · ` : ''}{badge.text}
+                      </div>
+                    </div>
+                    <span className={`hk-badge ${badge.c}`}>{doc.processing_status_label || badge.t}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+              <button type="button" onClick={() => router.push(memberHref('/dashboard/documents', fileMember))} className="hk-btn hk-btn-ghost hk-btn-sm">查看文件庫</button>
+              <button type="button" onClick={() => router.push(memberHref('/dashboard/health-summary', fileMember))} className="hk-btn hk-btn-ghost hk-btn-sm">查看健康摘要</button>
+            </div>
+          </div>
+        )}
 
         {/* ── Manual Entry ── */}
         {tab === 'manual' && (
@@ -598,14 +723,39 @@ export default function UploadPage() {
         {/* ── File Upload ── */}
         {tab === 'file' && (
           <form onSubmit={handleFileUpload}>
+            {uploadedDoc && (() => {
+              const fs = docFlowState(uploadedDoc.processing_status || uploadedDoc.status);
+              const badge = uploadStatusBadge(uploadedDoc);
+              return (
+                <div className="hk-card" style={{ marginBottom: 20, borderColor: '#cffafe', background: 'linear-gradient(135deg,#ecfeff,#ffffff)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                    <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--hk-ink)' }}>✅ {uploadedDoc.file_name || '文件'} 已收到</div>
+                    <span className={`hk-badge ${badge.c}`}>{badge.t}</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--hk-ink-2)', marginBottom: 10 }}>
+                    {badge.text}「已收到」不等於「已確認」；整理完成後會通知你，並連到白話摘要。
+                  </div>
+                  <UploadStatusTimeline status={uploadedDoc.processing_status || uploadedDoc.status} />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                    <button type="button" onClick={refreshUploadedStatus} className="hk-btn hk-btn-ghost hk-btn-sm">重新整理進度</button>
+                    <button type="button" onClick={() => router.push(memberHref('/dashboard/documents', fileMember))} className="hk-btn hk-btn-ghost hk-btn-sm">前往文件庫</button>
+                    {fs.active >= DOC_FLOW.length && (
+                      <button type="button" onClick={() => router.push(memberHref('/dashboard/health-summary', fileMember))} className="hk-btn hk-btn-ghost hk-btn-sm">查看健康摘要</button>
+                    )}
+                    <button type="button" onClick={() => setUploadedDoc(null)} className="hk-btn hk-btn-primary hk-btn-sm">再上傳一份</button>
+                  </div>
+                </div>
+              );
+            })()}
             <div style={{ background: '#fff', borderRadius: '16px', padding: '28px', boxShadow: 'var(--shadow-sm)', marginBottom: '20px' }}>
               <div style={{
                 background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412',
                 borderRadius: '12px', padding: '12px 14px', fontSize: '13px',
                 lineHeight: 1.6, marginBottom: '20px',
               }}>
-                上傳只代表 HealthKeep 收到原始檔案。OCR、AI 擷取與醫療團隊確認是後續處理狀態；未確認前不會視為正式病歷摘要。
+                上傳只代表 HealthKeep 收到原始檔案。系統擷取（OCR）與醫療團隊確認是後續處理狀態；未確認前不會視為正式病歷摘要。
                 請確認照片四角完整、文字清楚且頁數齊全；模糊、重複或缺頁文件可能會被退件補傳。
+                若同一份文件已在文件庫顯示為「整理中」或「已整理」，請勿重複上傳。
               </div>
 
               <div style={{

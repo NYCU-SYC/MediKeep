@@ -180,7 +180,7 @@ export default function DocumentsPage() {
       if (resp.ok) {
         const newDoc: DocOut = await resp.json();
         setDocs(prev => [newDoc, ...prev]);
-        showToast('文件已收到，接下來會進入 OCR / AI 擷取與醫療團隊確認', 'success');
+        showToast('文件已收到，接下來會進入系統擷取（OCR）與醫療團隊確認', 'success');
       } else {
         showToast('文件上傳失敗，請確認格式與網路後重試', 'error');
       }
@@ -199,7 +199,7 @@ export default function DocumentsPage() {
   const statusSummary = useMemo(() => {
     const rows = [
       { key: 'received', label: '已收到', hint: '尚未等於已整理完成', statuses: ['uploaded', 'queued'] },
-      { key: 'processing', label: 'AI / CMO 整理中', hint: '擷取或人工 QA 中', statuses: ['extracting', 'needs_review'] },
+      { key: 'processing', label: '系統 / CMO 整理中', hint: '擷取或人工 QA 中', statuses: ['extracting', 'needs_review'] },
       { key: 'action', label: '需要你處理', hint: '補件、重傳或查看退件原因', statuses: ['failed', 'rejected'] },
       { key: 'confirmed', label: '可作為摘要依據', hint: '已確認可追溯原始文件', statuses: ['confirmed'] },
     ];
@@ -344,7 +344,7 @@ export default function DocumentsPage() {
           borderRadius: '12px', padding: '12px 16px', marginBottom: '20px',
           fontSize: '13px', lineHeight: 1.6,
         }}>
-          文件庫顯示的是原始檔案處理狀態。「已上傳」只代表 HealthKeep 收到檔案；「文件可作為整理依據」也只代表醫療團隊可用此文件整理資料，不代表診斷、治療建議或 AI 擷取已完成。
+          文件庫顯示的是原始檔案處理狀態。「已上傳」只代表 HealthKeep 收到檔案；「文件可作為整理依據」也只代表醫療團隊可用此文件整理資料，不代表診斷、治療建議或系統擷取已完成。
         </div>
 
         {loadError && (

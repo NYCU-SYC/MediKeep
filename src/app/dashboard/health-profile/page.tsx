@@ -7,7 +7,7 @@ import { useToast } from '../toast-context';
 import { useSync } from '@/lib/sync';
 import { useActiveMember } from '../member-context';
 import { memberDisplayName, memberHref, memberQueryParams, normalizeMemberName } from '@/lib/members';
-import { cleanPatientProblems } from '../problem-filter';
+import { cleanPatientProblems, isJunkProblemName } from '../problem-filter';
 import type { PatientChangeRequest } from '@/lib/healthkeepTypes';
 import type { EvidenceDocument } from '@/lib/evidence';
 import { evidenceMeta, evidenceTitle, evidenceUnavailableText } from '@/lib/evidence';
@@ -253,6 +253,17 @@ function statusLabel(status: string): string {
   return '治療中';
 }
 
+function problemTitleForPatient(p: MyProblem): string {
+  const label = (p.display_layman || p.display_name || '').trim();
+  if (isJunkProblemName(label)) return '待醫療團隊整理的健康項目';
+  const withoutCodes = label.replace(/\b[A-Z]\d{2}(?:\.\d+)?\b/gi, '').replace(/\s+/g, ' ').trim();
+  return withoutCodes || '待醫療團隊整理的健康項目';
+}
+
+function shouldShowRawProblemDetails(p: MyProblem): boolean {
+  return Boolean(p.icd10_code || (p.display_layman && p.display_name !== p.display_layman) || p.source_document_id || p.evidence_document);
+}
+
 function problemEvidenceText(p: MyProblem): string {
   const doc = p.evidence_document;
   if (doc?.available) {
@@ -368,7 +379,7 @@ function ProblemCard({
       {/* Title row */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' }}>
         <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a', margin: 0, lineHeight: 1.3 }}>
-          {p.display_layman || p.display_name}
+          {problemTitleForPatient(p)}
         </h3>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
           {tierInfo && (
@@ -399,15 +410,6 @@ function ProblemCard({
           )}
         </div>
       </div>
-
-      {/* Medical name (light) */}
-      {(p.icd10_code || p.display_layman) && (
-        <p style={{ fontSize: '11px', color: '#94a3b8', margin: '0 0 12px', fontFamily: 'monospace' }}>
-          {p.display_layman && p.display_name !== p.display_layman && <span>{p.display_name}</span>}
-          {p.display_layman && p.display_name !== p.display_layman && p.icd10_code && <span> · </span>}
-          {p.icd10_code && <span>{p.icd10_code}</span>}
-        </p>
-      )}
 
       {/* Info rows */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px', color: '#334155' }}>
@@ -497,16 +499,6 @@ function ProblemCard({
           >
             📋 複製白話摘要
           </button>
-          <button
-            onClick={onCopyDoctor}
-            style={{
-              padding: '6px 12px', fontSize: '12px', fontWeight: 600,
-              background: '#fff', color: '#0369a1', border: '1px solid #bae6fd',
-              borderRadius: '8px', cursor: 'pointer',
-            }}
-          >
-            📋 複製給醫師
-          </button>
           {!pendingRequest ? (
             <button
               onClick={() => setShowFeedback((open) => !open)}
@@ -531,41 +523,6 @@ function ProblemCard({
               查看回報狀態
             </button>
           )}
-          {/* Patient tracking preference — immediate, no approval needed */}
-          <select
-            value={p.patient_tracking_state ?? ''}
-            onChange={(event) => {
-              if (event.target.value) onTrackingState(event.target.value);
-            }}
-            title="更新你自己的追蹤偏好（立即生效，不需等醫療團隊）"
-            style={{
-              padding: '6px 10px', fontSize: '12px', fontWeight: 600,
-              background: '#ecfeff', color: '#0e7490', border: '1px solid #a5f3fc',
-              borderRadius: '8px', cursor: 'pointer',
-            }}
-          >
-            <option value="" disabled>更新追蹤狀態…</option>
-            {TRACKING_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </select>
-          <select
-            value=""
-            onChange={(event) => {
-              const value = event.target.value as MyProblem['status'];
-              if (value) onRequestState(value);
-              event.currentTarget.value = '';
-            }}
-            title="請醫療團隊更新正式醫療紀錄（需整理確認）"
-            style={{
-              padding: '6px 10px', fontSize: '12px', fontWeight: 600,
-              background: '#fff', color: '#0369a1', border: '1px solid #bae6fd',
-              borderRadius: '8px', cursor: 'pointer',
-            }}
-          >
-            <option value="">請醫療團隊改正式狀態</option>
-            <option value="underlying">長期治療中</option>
-            <option value="following">追蹤中</option>
-            <option value="resolved">已結束</option>
-          </select>
           {!showDatePicker ? (
             <button
               onClick={() => { setReminderDate(dateStrFromToday(30)); setShowDatePicker(true); }}
@@ -618,6 +575,69 @@ function ProblemCard({
         </div>
       )}
 
+      <details className="hk-problem-details" style={{ marginTop: 12 }}>
+        <summary>詳細資料與進階操作</summary>
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {shouldShowRawProblemDetails(p) && (
+            <div style={{ padding: '10px 12px', borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 12, color: '#475569', lineHeight: 1.6 }}>
+              {p.display_layman && p.display_name !== p.display_layman && <div>原始醫療名稱：{p.display_name}</div>}
+              {p.icd10_code && <div>ICD：{p.icd10_code}</div>}
+              <ProblemEvidenceLine doc={p.evidence_document ?? null} fallbackId={p.source_document_id ?? null} />
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              onClick={onCopyDoctor}
+              style={{
+                padding: '6px 12px', fontSize: '12px', fontWeight: 600,
+                background: '#fff', color: '#0369a1', border: '1px solid #bae6fd',
+                borderRadius: '8px', cursor: 'pointer',
+              }}
+            >
+              複製給醫師
+            </button>
+            {!isResolved && (
+              <>
+                <select
+                  value={p.patient_tracking_state ?? ''}
+                  onChange={(event) => {
+                    if (event.target.value) onTrackingState(event.target.value);
+                  }}
+                  title="更新你自己的追蹤偏好（立即生效，不需等醫療團隊）"
+                  style={{
+                    padding: '6px 10px', fontSize: '12px', fontWeight: 600,
+                    background: '#ecfeff', color: '#0e7490', border: '1px solid #a5f3fc',
+                    borderRadius: '8px', cursor: 'pointer',
+                  }}
+                >
+                  <option value="" disabled>更新我的追蹤狀態…</option>
+                  {TRACKING_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                </select>
+                <select
+                  value=""
+                  onChange={(event) => {
+                    const value = event.target.value as MyProblem['status'];
+                    if (value) onRequestState(value);
+                    event.currentTarget.value = '';
+                  }}
+                  title="請醫療團隊更新正式醫療紀錄（需整理確認）"
+                  style={{
+                    padding: '6px 10px', fontSize: '12px', fontWeight: 600,
+                    background: '#fff', color: '#0369a1', border: '1px solid #bae6fd',
+                    borderRadius: '8px', cursor: 'pointer',
+                  }}
+                >
+                  <option value="">請醫療團隊改正式狀態</option>
+                  <option value="underlying">長期治療中</option>
+                  <option value="following">追蹤中</option>
+                  <option value="resolved">已結束</option>
+                </select>
+              </>
+            )}
+          </div>
+        </div>
+      </details>
+
       {showFeedback && !pendingRequest && (
         <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: '1px solid #fed7aa', background: '#fff7ed' }}>
           <div style={{ fontSize: 12, fontWeight: 850, color: '#9a3412', marginBottom: 8 }}>送交醫療團隊確認</div>
@@ -663,7 +683,7 @@ function ProblemCard({
       )}
 
       {/* Source footer */}
-      {(p.verified_by_name || p.created_at || p.source_document_id || p.evidence_document) && (
+      {(p.verified_by_name || p.created_at) && (
         <div style={{
           marginTop: '12px', paddingTop: '10px',
           borderTop: '1px dashed #e2e8f0',
@@ -678,7 +698,6 @@ function ProblemCard({
               </>
             )}
           </div>
-          <ProblemEvidenceLine doc={p.evidence_document ?? null} fallbackId={p.source_document_id ?? null} />
         </div>
       )}
     </div>
@@ -1161,7 +1180,7 @@ export default function HealthProfilePage() {
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '900px', margin: '0 auto', width: '100%' }}>
+      <div className="hk-health-wrap">
 
         {/* Top-right link to history timeline */}
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>

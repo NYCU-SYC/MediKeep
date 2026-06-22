@@ -9,55 +9,47 @@ import { api, setPatientSessionToken } from '@/lib/api';
 import { SyncProvider } from '@/lib/sync';
 import { ALL_MEMBERS, memberHref, normalizeMemberName } from '@/lib/members';
 
-// ── Desktop sidebar — grouped nav sections ────────────────────────────────────
+// ── Desktop sidebar — 4 主 tab 置頂，其餘降為次級分組（不刪除任何頁面，全部仍可達） ──
+// 對應改版規劃 §3.1：13 項 → 4 主 tab（首頁/健康/提醒/我的）+ 漸進揭露。
 const menuSections = [
   {
-    label: '健康總覽',
+    label: '主要',
     items: [
-      { name: '首頁',     icon: '🏠', href: '/dashboard' },
-      { name: '新增紀錄', icon: '➕', href: '/dashboard/upload' },
-      { name: '趨勢分析', icon: '📈', href: '/dashboard/trends' },
-      { name: '歷史紀錄', icon: '📋', href: '/dashboard/history' },
+      { name: '首頁', icon: '🏠', href: '/dashboard' },
+      { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
+      { name: '提醒', icon: '🔔', href: '/dashboard/reminders' },
+      { name: '我的', icon: '👤', href: '/dashboard/settings' },
     ],
   },
   {
-    label: '健康管理',
+    label: '健康細節',
     items: [
-      { name: '醫師健康摘要', icon: '🩺', href: '/dashboard/health-profile' },
+      { name: '詳細健康檔案', icon: '🧬', href: '/dashboard/health-profile' },
       { name: '保命紅區',     icon: '🛟', href: '/dashboard/redzone' },
+      { name: '急診連結',     icon: '🆘', href: '/dashboard/emergency' },
+      { name: '慢性病',       icon: '🏥', href: '/dashboard/conditions' },
+      { name: '藥物',         icon: '💊', href: '/dashboard/medications' },
+      { name: '趨勢分析',     icon: '📈', href: '/dashboard/trends' },
       { name: '健保存摺匯入', icon: '📑', href: '/dashboard/nhi' },
-      { name: '慢性病管理',   icon: '🏥', href: '/dashboard/conditions' },
-      { name: '藥物追蹤',     icon: '💊', href: '/dashboard/medications' },
-      { name: '回診紀錄',     icon: '🔔', href: '/dashboard/reminders' },
     ],
   },
   {
-    label: '影像與文件',
+    label: '資料與紀錄',
     items: [
-      { name: '影像庫',     icon: '🩻', href: '/dashboard/imaging' },
-      { name: '文件庫',     icon: '📁', href: '/dashboard/documents' },
-    ],
-  },
-  {
-    label: '資料整理',
-    items: [
-      { name: '健康數值整理', icon: '📊', href: '/dashboard/ai' },
-    ],
-  },
-  {
-    label: '資料管理',
-    items: [
-      { name: '設定',   icon: '⚙️', href: '/dashboard/settings' },
+      { name: '新增紀錄', icon: '➕', href: '/dashboard/upload' },
+      { name: '影像庫',   icon: '🩻', href: '/dashboard/imaging' },
+      { name: '文件庫',   icon: '📁', href: '/dashboard/documents' },
+      { name: '歷史紀錄', icon: '📋', href: '/dashboard/history' },
     ],
   },
 ];
 
-// ── Mobile bottom nav: MVP spec requires exactly four primary tabs ───────────
+// ── Mobile bottom nav: 4 primary tabs（首頁/健康/提醒/我的）──
 const mobileNavLeft = [
   { name: '首頁', icon: '🏠', href: '/dashboard' },
-  { name: '趨勢', icon: '📈', href: '/dashboard/trends' },
+  { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
   { name: '提醒', icon: '🔔', href: '/dashboard/reminders' },
-  { name: '設定', icon: '⚙️', href: '/dashboard/settings' },
+  { name: '我的', icon: '👤', href: '/dashboard/settings' },
 ];
 
 // ── MobileNavItem ─────────────────────────────────────────────────────────────
@@ -101,7 +93,7 @@ function MemberActionBar({
   const selectedMember = activeMember || (members.length === 1 ? members[0].name : '');
   const mustChooseMember = members.length > 1 && !activeMember;
   const activeInfo = members.find((member) => member.name === activeMember);
-  const recordHref = memberHref('/dashboard/upload', selectedMember);
+  const recordHref = memberHref('/dashboard/upload', selectedMember, { tab: 'manual' });
   const fileHref = memberHref('/dashboard/upload', selectedMember, { tab: 'file' });
 
   const actionStyle: React.CSSProperties = {
@@ -254,6 +246,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   const {
     activeMember, setActiveMember,
     members, setMembers, setMembersLoading,
+    membersError, setMembersError,
   } = useActiveMember();
   const [authChecked, setAuthChecked] = useState(false);
   const [familyName, setFamilyName] = useState('我的家庭');
@@ -285,9 +278,15 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!authChecked) return;
     setMembersLoading(true);
-    fetch('/api/members', { credentials: 'include' })
-      .then(r => r.ok ? r.json() : [])
-      .then((data: FamilyMember[]) => {
+    setMembersError(false);
+    // Use the authenticated api wrapper (Bearer token + same-origin cookie),
+    // consistent with the /api/auth/me check above. The previous raw
+    // fetch(..., {credentials:'include'}) was cookie-only, so a valid token
+    // with an expired/absent cookie silently fell back to an empty list and
+    // rendered the misleading "no members yet" onboarding state.
+    api.get('/api/members')
+      .then((raw) => {
+        const data: FamilyMember[] = Array.isArray(raw) ? raw : [];
         const selfMember = data.find((m) => {
           const relation = (m.relation || '').toLowerCase();
           return ['self', '本人', '我', 'owner'].includes(relation) || (displayName && m.name === displayName);
@@ -305,9 +304,15 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
           setActiveMember(selfMember?.name ?? '');
         }
       })
-      .catch(() => setMembers([]))
+      .catch((err: unknown) => {
+        // 401 already triggers a redirect to login inside the api wrapper, so
+        // don't flag it as a load error. Any other failure is a real error and
+        // must NOT masquerade as the empty/onboarding state.
+        const status = (err as { status?: number } | null)?.status;
+        if (status !== 401) setMembersError(true);
+      })
       .finally(() => setMembersLoading(false));
-  }, [authChecked, canUseFamilyUi, displayName, activeMember, setActiveMember, setMembers, setMembersLoading]);
+  }, [authChecked, canUseFamilyUi, displayName, activeMember, setActiveMember, setMembers, setMembersLoading, setMembersError]);
 
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
@@ -391,7 +396,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             <div>
               <div style={{ fontSize: '12px', fontWeight: '700', color: '#333' }}>{canUseFamilyUi ? familyName : (displayName || members[0]?.name || '本人')}</div>
               <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>
-                {canUseFamilyUi ? (members.length > 0 ? `${members.length} 位成員` : '尚未新增成員') : '目前檢視：自己的健康資料'}
+                {canUseFamilyUi ? (members.length > 0 ? `${members.length} 位成員` : (membersError ? '載入失敗' : '尚未新增成員')) : '目前檢視：自己的健康資料'}
               </div>
             </div>
           </div>
@@ -399,29 +404,46 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
 
         {/* Nav sections */}
         <nav style={{ padding: '8px', flex: 1 }}>
-          {menuSections.map(section => (
-            <div key={section.label} style={{ marginBottom: '4px' }}>
-              <p style={{
-                fontSize: '10px', fontWeight: '700', color: '#c0c8d4',
-                textTransform: 'uppercase', letterSpacing: '0.8px',
-                padding: '10px 14px 4px',
-              }}>
-                {section.label}
-              </p>
-              {section.items.map(item => (
-                <Link
-                  key={item.name}
-                  href={navHref(item.href)}
-                  className={`sidebar-nav-item${pathname === item.href ? ' sidebar-active' : ''}`}
-                >
-                  <span style={{ marginRight: '10px', fontSize: '15px', width: '20px', textAlign: 'center', flexShrink: 0 }}>
-                    {item.icon}
-                  </span>
-                  <span>{item.name}</span>
-                </Link>
-              ))}
-            </div>
-          ))}
+          {menuSections.map((section, sectionIndex) => {
+            const isSecondary = sectionIndex > 0;
+            const hasActiveItem = section.items.some((item) => pathname === item.href);
+            const sectionItems = (
+              <>
+                {section.items.map(item => (
+                  <Link
+                    key={item.name}
+                    href={navHref(item.href)}
+                    className={`sidebar-nav-item${pathname === item.href ? ' sidebar-active' : ''}`}
+                  >
+                    <span style={{ marginRight: '10px', fontSize: '15px', width: '20px', textAlign: 'center', flexShrink: 0 }}>
+                      {item.icon}
+                    </span>
+                    <span>{item.name}</span>
+                  </Link>
+                ))}
+              </>
+            );
+            if (isSecondary) {
+              return (
+                <details key={section.label} className="sidebar-secondary" open={hasActiveItem}>
+                  <summary>{section.label}</summary>
+                  {sectionItems}
+                </details>
+              );
+            }
+            return (
+              <div key={section.label} style={{ marginBottom: '4px' }}>
+                <p style={{
+                  fontSize: '10px', fontWeight: '700', color: '#c0c8d4',
+                  textTransform: 'uppercase', letterSpacing: '0.8px',
+                  padding: '10px 14px 4px',
+                }}>
+                  {section.label}
+                </p>
+                {sectionItems}
+              </div>
+            );
+          })}
 
           {/* Family members section */}
           {canUseFamilyUi && <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--gray-100)' }}>
@@ -435,14 +457,22 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
 
             {members.length === 0 ? (
               <div style={{ padding: '4px 8px 8px' }}>
-                <p style={{ fontSize: '12px', color: '#bbb', marginBottom: '8px', paddingLeft: '6px' }}>
-                  尚未新增成員
-                </p>
-                <Link href="/dashboard/settings" className="sidebar-nav-item" style={{
-                  fontSize: '12px', color: 'var(--primary)', fontWeight: '600', padding: '6px 8px',
-                }}>
-                  + 新增第一位成員 →
-                </Link>
+                {membersError ? (
+                  <p style={{ fontSize: '12px', color: '#c2410c', marginBottom: '8px', paddingLeft: '6px' }}>
+                    成員資料載入失敗
+                  </p>
+                ) : (
+                  <>
+                    <p style={{ fontSize: '12px', color: '#bbb', marginBottom: '8px', paddingLeft: '6px' }}>
+                      尚未新增成員
+                    </p>
+                    <Link href="/dashboard/settings" className="sidebar-nav-item" style={{
+                      fontSize: '12px', color: 'var(--primary)', fontWeight: '600', padding: '6px 8px',
+                    }}>
+                      + 新增第一位成員 →
+                    </Link>
+                  </>
+                )}
               </div>
             ) : (
               <>
@@ -627,7 +657,9 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
       {/* ── Main Content ─────────────────────────────────────────────────────────── */}
       <main className="app-main">
         <SyncProvider scope="patient" enabled={authChecked}>
-          <MemberActionBar canUseFamilyUi={canUseFamilyUi} onSwitchMember={switchMember} />
+          {pathname !== '/dashboard' && (
+            <MemberActionBar canUseFamilyUi={canUseFamilyUi} onSwitchMember={switchMember} />
+          )}
           {children}
         </SyncProvider>
       </main>

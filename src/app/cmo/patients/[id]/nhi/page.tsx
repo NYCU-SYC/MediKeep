@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import PatientContentEntryLauncher, { sendToPatientContentPanel } from '../_components/PatientContentEntryDrawer'
 import type { RedZoneDraftPatch } from '../_components/PatientContentEntryDrawer'
 
@@ -433,6 +433,8 @@ function sendNhiDraftSummaryToPanel(draft: Draft) {
 export default function NhiSectionsPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const targetDraftId = Number(searchParams.get('draft') ?? 0) || null
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [patientName, setPatientName] = useState('')
   const [loading, setLoading] = useState(true)
@@ -460,6 +462,21 @@ export default function NhiSectionsPage() {
   }, [id])
 
   useEffect(() => { loadAll() }, [loadAll])
+
+  useEffect(() => {
+    if (!targetDraftId || drafts.length === 0) return
+    const target = drafts.find((draft) => draft.id === targetDraftId)
+    if (!target) return
+    const section = sectionOf(target)
+    if (section) setActiveSection(section)
+    setStatusFilter('all')
+    setMemberFilter(memberLabel(target))
+    setExpanded(target.id)
+    if (target.status === 'pending') setSelected(new Set([target.id]))
+    window.setTimeout(() => {
+      document.getElementById(`nhi-draft-${target.id}`)?.scrollIntoView({ block: 'center' })
+    }, 180)
+  }, [drafts, targetDraftId])
 
   const memberOptions = useMemo(() => {
     const seen = new Set<string>()
@@ -710,7 +727,7 @@ export default function NhiSectionsPage() {
                       const secondary = firstText(f, ['key_medications', 'value_numeric', 'unit', 'severity', 'reaction', 'days_supply'])
                       const redzoneCandidate = redZonePatchForDraft(d)
                       return [
-                        <tr key={`r-${d.id}`}
+                        <tr id={`nhi-draft-${d.id}`} key={`r-${d.id}`}
                           className={`${isSel ? 'selected' : ''} ${isExp ? 'expanded' : ''}`}
                           onClick={(e) => {
                             const t = e.target as HTMLElement

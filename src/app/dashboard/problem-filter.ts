@@ -22,7 +22,18 @@ export function isJunkProblemName(name: string | null | undefined): boolean {
 export function cleanPatientProblems<T extends { display_name?: string | null; display_layman?: string | null }>(
   list: T[],
 ): T[] {
-  return (list ?? []).filter(
-    (p) => !(isJunkProblemName(p.display_name) && isJunkProblemName(p.display_layman)),
-  );
+  const seen = new Set<string>();
+  return (list ?? []).filter((p) => {
+    if (isJunkProblemName(p.display_name) && isJunkProblemName(p.display_layman)) return false;
+    const base = (p.display_layman || p.display_name || '')
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/[A-Z]\d{2}(?:\.\d+)?/gi, '')
+      .replace(/[()（）［］\[\]·,，。:：;；_-]/g, '')
+      .toLowerCase();
+    const key = base || String(p.display_name || p.display_layman);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

@@ -2,12 +2,15 @@
 
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { api } from '@/lib/api'
+import { PRIORITY_META, FOLLOW_UP_STATUS_META } from '@/lib/statusSystem'
 import { normalizeMemberName, uniqueMemberNames } from '@/lib/members'
 import PatientContentEntryLauncher, { sendToPatientContentPanel } from './_components/PatientContentEntryDrawer'
+import { PriorityBadge, DataSourceBadge, ReviewStatusBadge, ClinicalPublishBadge, CriticalTile, type ReviewPriority } from './_components/badges'
+import { StatCard, EmptyState, FormField, QuickChipRow, RecordList, DiffBox } from './_components/primitives'
 
-type TabKey = 'overview' | 'fill' | 'requests' | 'problems' | 'readiness' | 'records' | 'documents' | 'imaging' | 'audit'
+type TabKey = 'workspace' | 'overview' | 'fill' | 'requests' | 'problems' | 'readiness' | 'records' | 'documents' | 'imaging' | 'audit'
 type ProblemFilter = 'all' | 'open' | 'verified' | 'published'
 type ProblemStatus = 'underlying' | 'following' | 'resolved'
 type PublishMode = 'publish_now' | 'verify_draft' | 'verify_needs_secondary_review'
@@ -79,6 +82,9 @@ interface HealthRecord {
   unit: string | null
   note: string | null
   recorded_at: string | null
+  source?: string | null
+  is_verified?: boolean
+  is_published?: boolean
 }
 
 interface Reminder {
@@ -192,6 +198,68 @@ interface AuditEntry {
   created_at: string | null
   undo_available: boolean
   snapshot: Record<string, unknown>
+}
+
+interface FollowUp {
+  id: number
+  reason: string
+  item: string
+  suggested_date: string | null
+  priority: 'high' | 'medium' | 'low'
+  notify_patient: boolean
+  needs_more_data: boolean
+  needs_cmo_recheck: boolean
+  source_excerpt: string | null
+  status: string
+  created_at: string | null
+}
+
+interface MissingDataRequest {
+  id: string
+  patient_id: string
+  member_name?: string | null
+  title: string
+  reason: string
+  instructions?: string | null
+  priority: 'high' | 'medium' | 'low' | string
+  due_date?: string | null
+  notify_patient: boolean
+  source_type?: string | null
+  source_id?: string | null
+  source_excerpt?: string | null
+  status: string
+  response_text?: string | null
+  response_document_id?: string | null
+  responded_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  resolved_at?: string | null
+}
+
+// Colors sourced from canonical statusSystem.ts (single source of truth).
+// Bespoke labels (zh-TW priority text, "User Responded") are kept intentionally.
+const FU_PRIORITY: Record<string, { label: string; bg: string; color: string }> = {
+  high: { label: '高優先', bg: PRIORITY_META.high.bg, color: PRIORITY_META.high.fg },
+  medium: { label: '中優先', bg: PRIORITY_META.medium.bg, color: PRIORITY_META.medium.fg },
+  low: { label: '低優先', bg: PRIORITY_META.low.bg, color: PRIORITY_META.low.fg },
+}
+const FU_STATUS: Record<string, { label: string; bg: string; color: string }> = {
+  open: { label: 'Open', bg: FOLLOW_UP_STATUS_META.open.bg, color: FOLLOW_UP_STATUS_META.open.fg },
+  waiting_for_user: { label: 'Waiting for User', bg: FOLLOW_UP_STATUS_META.waiting_for_user.bg, color: FOLLOW_UP_STATUS_META.waiting_for_user.fg },
+  due_soon: { label: 'Due soon', bg: FOLLOW_UP_STATUS_META.due_soon.bg, color: FOLLOW_UP_STATUS_META.due_soon.fg },
+  overdue: { label: 'Overdue', bg: FOLLOW_UP_STATUS_META.overdue.bg, color: FOLLOW_UP_STATUS_META.overdue.fg },
+  completed: { label: 'Completed', bg: FOLLOW_UP_STATUS_META.completed.bg, color: FOLLOW_UP_STATUS_META.completed.fg },
+  resolved: { label: 'Resolved', bg: FOLLOW_UP_STATUS_META.resolved.bg, color: FOLLOW_UP_STATUS_META.resolved.fg },
+  done: { label: 'Done', bg: FOLLOW_UP_STATUS_META.completed.bg, color: FOLLOW_UP_STATUS_META.completed.fg },
+  deleted: { label: 'Deleted', bg: '#f8fafc', color: '#64748b' },
+}
+const MISSING_STATUS: Record<string, { label: string; bg: string; color: string }> = {
+  open: { label: 'Open', bg: FOLLOW_UP_STATUS_META.open.bg, color: FOLLOW_UP_STATUS_META.open.fg },
+  waiting_for_user: { label: 'Waiting for User', bg: FOLLOW_UP_STATUS_META.waiting_for_user.bg, color: FOLLOW_UP_STATUS_META.waiting_for_user.fg },
+  needs_cmo_review: { label: 'User Responded', bg: FOLLOW_UP_STATUS_META.due_soon.bg, color: FOLLOW_UP_STATUS_META.due_soon.fg },
+  resolved: { label: 'Resolved', bg: FOLLOW_UP_STATUS_META.resolved.bg, color: FOLLOW_UP_STATUS_META.resolved.fg },
+  canceled: { label: 'Canceled', bg: '#f8fafc', color: '#64748b' },
+  deleted: { label: 'Deleted', bg: '#f8fafc', color: '#64748b' },
 }
 
 interface PatientData {
@@ -309,6 +377,118 @@ interface CriticalSummary {
   }
 }
 
+type TimelineFilter = 'all' | 'important' | 'record' | 'document' | 'imaging' | 'request' | 'follow_up'
+type ReviewTargetKind =
+  | 'change_request'
+  | 'reported_state'
+  | 'problem'
+  | 'condition'
+  | 'medication'
+  | 'document'
+  | 'unlinked_condition'
+  | 'unlinked_medication'
+  | 'follow_up'
+  | 'missing_data'
+
+interface MedicalTimelineItem {
+  id: string
+  kind: string
+  kindKey: TimelineFilter
+  title: string
+  detail: string
+  date: string | null | undefined
+  source: string
+  status: string
+  important: boolean
+  tab?: TabKey
+  selector?: string
+}
+
+interface PriorityReviewItem {
+  id: string
+  targetKind: ReviewTargetKind
+  type: string
+  source: string
+  title: string
+  detail: string
+  evidence: string
+  priority: ReviewPriority
+  status: string
+  suggestedAction: string
+  summaryText: string
+  tab: TabKey
+  selector?: string
+  meta?: {
+    requestId?: string
+    reportedStateId?: string
+    problemId?: number
+    conditionId?: number
+    medicationId?: number
+    documentId?: string
+    followUpId?: number
+    missingDataId?: string
+  }
+}
+
+interface RecommendationSourceRef {
+  id: string
+  type: string
+  title: string
+  source: string
+  status: string
+}
+
+interface CmoRecommendation {
+  id: string
+  series_id: string
+  patient_id: string
+  member_name: string
+  version: number
+  status: 'draft' | 'ready_to_publish' | 'published' | 'updated' | 'withdrawn' | string
+  title: string
+  health_summary: string
+  recommendation: string
+  next_step: string
+  follow_up_date?: string | null
+  source_refs: RecommendationSourceRef[]
+  quality_checks?: Record<string, boolean>
+  created_by?: string | null
+  published_by?: string | null
+  withdrawn_by?: string | null
+  created_at?: string | null
+  published_at?: string | null
+  withdrawn_at?: string | null
+}
+
+interface InternalNoteEntry {
+  id: string
+  created_at?: string | null
+  created_by?: string | null
+  snapshot: {
+    note?: string
+    source_refs?: RecommendationSourceRef[]
+    visibility?: string
+  }
+}
+
+interface RecommendationWorkspace {
+  current: CmoRecommendation | null
+  published: CmoRecommendation | null
+  drafts: CmoRecommendation[]
+  history: CmoRecommendation[]
+  internal_notes: InternalNoteEntry[]
+}
+
+interface RecommendationForm {
+  series_id: string
+  title: string
+  health_summary: string
+  recommendation: string
+  next_step: string
+  follow_up_date: string
+  source_refs: RecommendationSourceRef[]
+}
+
 const RECORD_LABELS: Record<string, string> = { blood_pressure: '血壓', heart_rate: '心率', glucose: '血糖', weight: '體重', steps: '步數', sleep: '睡眠', bmi: 'BMI', body_fat: '體脂', temperature: '體溫', spo2: '血氧', hba1c: 'HbA1c' }
 const DOC_LABELS: Record<string, string> = { lab_report: '檢驗報告', prescription: '處方', discharge: '出院摘要', image: '影像', other: '其他' }
 const PROBLEM_TEMPLATES: Array<Pick<ProblemForm, 'display_name' | 'display_layman' | 'icd10_code' | 'status' | 'tier'> & { label: string }> = [
@@ -357,6 +537,87 @@ const DOCUMENT_STATUS_ACTIONS: Array<{ value: DocumentStatusAction; label: strin
   { value: 'rejected', label: '退件或需補件', help: '文件不適合作為病歷整理依據。' },
   { value: 'failed', label: '處理失敗', help: '格式、畫質或檔案損毀導致無法處理。' },
 ]
+
+const DEFAULT_RECOMMENDATION_TITLE = 'CMO 最新健康建議'
+const INTERNAL_NOTE_MARKERS = ['internal note', 'cmo-only', 'cmo only', 'handoff', 'do not publish', '不要發布', '不要給病人', '內部備註', '交班']
+
+function defaultRecommendationForm(): RecommendationForm {
+  return {
+    series_id: '',
+    title: DEFAULT_RECOMMENDATION_TITLE,
+    health_summary: '',
+    recommendation: '',
+    next_step: '',
+    follow_up_date: '',
+    source_refs: [],
+  }
+}
+
+function recommendationFormFromRow(row: CmoRecommendation | null): RecommendationForm {
+  if (!row) return defaultRecommendationForm()
+  return {
+    series_id: row.series_id,
+    title: row.title || DEFAULT_RECOMMENDATION_TITLE,
+    health_summary: row.health_summary || '',
+    recommendation: row.recommendation || '',
+    next_step: row.next_step || '',
+    follow_up_date: row.follow_up_date || '',
+    source_refs: row.source_refs || [],
+  }
+}
+
+function simplifyMedicalLanguage(text: string) {
+  return text
+    .replace(/\b[A-Z]\d{2}(?:\.\d+)?\b/g, '')
+    .replace(/Hypertension/gi, '高血壓')
+    .replace(/Type 2 diabetes mellitus/gi, '第二型糖尿病')
+    .replace(/Hyperlipidemia/gi, '高血脂')
+    .replace(/Chronic kidney disease|CKD/gi, '慢性腎臟病')
+    .replace(/Suspected atrial fibrillation/gi, '疑似心房顫動')
+    .replace(/\beGFR\b/g, '腎功能指標 eGFR')
+    .replace(/\bHbA1c\b/g, '糖化血色素 HbA1c')
+    .replace(/\bLDL\b/g, '低密度膽固醇 LDL')
+    .replace(/\babnormal findings?\b/gi, '需要留意的結果')
+    .replace(/\bconfirmed\b/gi, '已確認')
+    .replace(/\bunconfirmed\b/gi, '尚未確認')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function recommendationSourceFromItem(item: PriorityReviewItem): RecommendationSourceRef {
+  return {
+    id: item.id,
+    type: item.type,
+    title: item.title,
+    source: item.source,
+    status: item.status,
+  }
+}
+
+function recommendationChecks(form: RecommendationForm) {
+  const text = [form.title, form.health_summary, form.recommendation, form.next_step].join('\n')
+  const lower = text.toLowerCase()
+  const noInternalNote = !INTERNAL_NOTE_MARKERS.some((marker) => lower.includes(marker.toLowerCase()))
+  const noUnconfirmedSources = form.source_refs.every((ref) => {
+    const source = ref.source.toLowerCase()
+    const status = ref.status.toLowerCase()
+    const isSystem = source.includes('system') || source.includes('extracted')
+    const isConfirmed = ['confirmed', 'published', 'accepted', 'reviewed', 'imported'].some((token) => status.includes(token))
+    return !isSystem || isConfirmed
+  })
+  return {
+    plain_language: !/\b[A-Z]\d{2}(?:\.\d+)?\b/.test(text),
+    has_next_step: Boolean(form.next_step.trim()),
+    has_follow_up_or_missing_data: Boolean(form.follow_up_date.trim() || /補資料|補充|上傳|回覆/.test(form.next_step)),
+    no_internal_note: noInternalNote,
+    no_unconfirmed_sources: noUnconfirmedSources,
+    medical_safety_copy: !/保證|一定會|診斷為|絕對/.test(text),
+  }
+}
+
+function allRecommendationChecksPass(checks: Record<string, boolean>) {
+  return Object.values(checks).every(Boolean)
+}
 
 const PUBLISH_MODE_COPY: Record<PublishMode, { label: string; help: string; submit: string }> = {
   publish_now: {
@@ -414,10 +675,36 @@ function editorFieldsFor(targetType: string): string[] {
   return []
 }
 
+// Human-readable labels for payload keys so review items never expose raw JSON
+// to the CMO (clinician-grade readability instead of {"drug_name":...}).
+const PAYLOAD_FIELD_LABELS: Record<string, string> = {
+  drug_name: '藥品', dose: '劑量', frequency: '頻率', route: '途徑', intent: '用途', note: '備註',
+  display_name: '名稱', display_layman: '白話名稱', status: '狀態', is_suspected: '疑似', onset_date: '起始日',
+  tier: '分級', substance: '過敏原', category: '類別', reaction: '反應', severity: '嚴重度',
+  official_status: '官方狀態', usage_status: '使用狀態', title: '標題', due_date: '到期日', type: '類型',
+  value1: '數值1', value2: '數值2', unit: '單位', recorded_at: '記錄時間', record_type: '項目',
+}
+const PAYLOAD_HIDDEN_KEYS = new Set(['id', 'target_label', 'requested_action', 'clarification_reply', 'clarification_draft', 'source_refs'])
+
+function scalarToText(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  return String(value)
+}
+
 function valueToText(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
-  if (typeof value === 'object') return JSON.stringify(value)
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (Array.isArray(value)) {
+    const parts = value.map(scalarToText).filter((t) => t !== '—')
+    return parts.length ? parts.join('、') : '—'
+  }
+  if (typeof value === 'object') {
+    const parts = Object.entries(value as Record<string, unknown>)
+      .filter(([key, v]) => !PAYLOAD_HIDDEN_KEYS.has(key) && v !== '' && v !== null && v !== undefined)
+      .map(([key, v]) => `${PAYLOAD_FIELD_LABELS[key] ?? key}：${scalarToText(v)}`)
+    return parts.length ? parts.join(' · ') : '—'
+  }
   return String(value)
 }
 
@@ -644,20 +931,6 @@ function readinessChecklist(data: PatientData, critical: CriticalSummary | null,
   ]
 }
 
-function StatCard({ label, value, note, tone }: { label: string; value: number | string; note: string; tone: string }) {
-  return (
-    <div className="cmo-card cmo-kpi">
-      <div className="cmo-kpi-label">{label}</div>
-      <div className="cmo-kpi-value" style={{ color: tone }}>{value}</div>
-      <div className="cmo-subtitle" style={{ marginTop: 8 }}>{note}</div>
-    </div>
-  )
-}
-
-function EmptyState({ children }: { children: string }) {
-  return <div className="cmo-card cmo-section cmo-muted" style={{ textAlign: 'center' }}>{children}</div>
-}
-
 function CmoPageState({
   eyebrow,
   title,
@@ -706,6 +979,8 @@ function CmoLoadingSkeleton() {
 export default function PatientPovPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const routeSearch = searchParams.toString()
   const [data, setData] = useState<PatientData | null>(null)
   const [critical, setCritical] = useState<CriticalSummary | null>(null)
   const [unlinked, setUnlinked] = useState<UnlinkedItems>({ conditions: [], medications: [] })
@@ -713,8 +988,10 @@ export default function PatientPovPage() {
   const [reportedStates, setReportedStates] = useState<ReportedState[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
-  const [activeTab, setActiveTab] = useState<TabKey>('overview')
+  const [activeTab, setActiveTab] = useState<TabKey>('workspace')
   const [query, setQuery] = useState('')
+  const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>('all')
+  const [timelineExpanded, setTimelineExpanded] = useState(false)
   const [problemFilter, setProblemFilter] = useState<ProblemFilter>('all')
   const [busyProblem, setBusyProblem] = useState<number | null>(null)
   const [entryBusy, setEntryBusy] = useState('')
@@ -729,6 +1006,23 @@ export default function PatientPovPage() {
   const [recordForm, setRecordForm] = useState<RecordForm>(defaultRecordForm)
   const [sourceAssignment, setSourceAssignment] = useState<SourceAssignmentForm>(defaultSourceAssignment)
   const [selectedMember, setSelectedMember] = useState('全部')
+  // Smart Summary Builder + 追蹤任務（改版 §5.2 D/F）
+  const [followUps, setFollowUps] = useState<FollowUp[]>([])
+  const [fuOpen, setFuOpen] = useState(false)
+  const [fuBusy, setFuBusy] = useState(false)
+  const defaultFuForm = { reason: '', item: '', suggested_date: '', priority: 'medium', notify_patient: true, needs_more_data: false, needs_cmo_recheck: false, source_excerpt: '' }
+  const [fuForm, setFuForm] = useState(defaultFuForm)
+  const [missingRequests, setMissingRequests] = useState<MissingDataRequest[]>([])
+  const [missingOpen, setMissingOpen] = useState(false)
+  const [missingBusy, setMissingBusy] = useState('')
+  const defaultMissingForm = { title: '', reason: '', instructions: '', due_date: '', priority: 'medium', notify_patient: true, source_type: '', source_id: '', source_excerpt: '' }
+  const [missingForm, setMissingForm] = useState(defaultMissingForm)
+  const [recommendationData, setRecommendationData] = useState<RecommendationWorkspace>({ current: null, published: null, drafts: [], history: [], internal_notes: [] })
+  const [recommendationForm, setRecommendationForm] = useState<RecommendationForm>(defaultRecommendationForm)
+  const [recommendationTouched, setRecommendationTouched] = useState(false)
+  const [recommendationBusy, setRecommendationBusy] = useState('')
+  const [publishConfirmOpen, setPublishConfirmOpen] = useState(false)
+  const [internalNoteText, setInternalNoteText] = useState('')
 
   const loadData = useCallback(async () => {
     setLoadError('')
@@ -789,9 +1083,23 @@ export default function PatientPovPage() {
   useEffect(() => {
     const applyHash = () => {
       const hash = window.location.hash
-      if (hash === '#publish-readiness' || hash === '#patient-facing-preview') {
-        setActiveTab('readiness')
-        window.setTimeout(() => document.querySelector(hash)?.scrollIntoView({ block: 'start' }), 80)
+      const targets: Record<string, { tab: TabKey; selector?: string }> = {
+        '#patient-snapshot': { tab: 'workspace', selector: '#patient-snapshot' },
+        '#priority-review-items': { tab: 'workspace', selector: '#priority-review-items' },
+        '#medical-timeline': { tab: 'workspace', selector: '#medical-timeline' },
+        '#publish-readiness': { tab: 'readiness', selector: '#publish-readiness' },
+        '#patient-facing-preview': { tab: 'readiness', selector: '#patient-facing-preview' },
+        '#user-requests': { tab: 'requests' },
+        '#documents': { tab: 'documents', selector: '#documents' },
+        '#follow-ups': { tab: 'workspace', selector: '#follow-ups' },
+        '#missing-data': { tab: 'workspace', selector: '#missing-data' },
+      }
+      const target = targets[hash]
+      if (!target) return
+      setActiveTab(target.tab)
+      const selector = target.selector
+      if (selector) {
+        window.setTimeout(() => document.querySelector(selector)?.scrollIntoView({ block: 'start' }), 120)
       }
     }
     applyHash()
@@ -846,6 +1154,15 @@ export default function PatientPovPage() {
     if (!critical) return 0
     return critical.tier1.drug_allergies.length + critical.tier1.contrast_allergies.length + critical.tier1.implants.length + (critical.tier1.renal_function ? 1 : 0)
   }, [critical])
+  // 風險雙軸（改版 §5.1 / 解 C-4）：臨床嚴重度 ≠ 待處理量，兩者分開呈現，避免把待辦量誤當病情危急。
+  const tier1ProblemCount = openProblems.filter((problem) => problem.tier === 1).length
+  const clinicalRisk = criticalCount > 0 || tier1ProblemCount > 0
+    ? { label: '高', tone: '#dc2626' }
+    : openProblems.length > 0
+      ? { label: '中', tone: '#b45309' }
+      : { label: '低', tone: '#15803d' }
+  const workloadTotal = pendingClinicalRows + pendingChangeRequests.length + openReportedStates.length + unlinkedCount
+  const workloadRisk = workloadTotal >= 8 ? { label: '高', tone: '#2563eb' } : workloadTotal >= 3 ? { label: '中', tone: '#2563eb' } : { label: '低', tone: '#64748b' }
   const sourceAssignmentTargets = useMemo<SourceAssignmentTarget[]>(() => {
     if (!data) return []
     const allergyTargets: SourceAssignmentTarget[] = critical ? [
@@ -911,32 +1228,449 @@ export default function PatientPovPage() {
     }).sort((a, b) => a.tier - b.tier || Number(a.is_published) - Number(b.is_published))
   }, [problemFilter, query, scopedData])
 
-  const timeline = useMemo(() => {
-    const records = (scopedData?.records ?? []).map((record) => ({
-      id: record.id,
-      kind: '紀錄',
-      title: RECORD_LABELS[record.record_type] ?? record.record_type,
-      detail: `${formatRecordValue(record)} · ${record.member_name}`,
-      date: record.recorded_at,
-    }))
-    const documents = (scopedData?.documents ?? []).map((doc) => ({
-      id: doc.id,
-      kind: '文件',
-      title: DOC_LABELS[doc.doc_type] ?? doc.doc_type,
-      detail: `${doc.file_name}${doc.note ? ` · ${doc.note}` : ''}`,
-      date: doc.doc_date ?? doc.created_at,
-    }))
-    const imaging = (scopedData?.dicom_studies ?? []).map((study) => ({
-      id: study.id,
-      kind: '影像',
+  const timeline = useMemo<MedicalTimelineItem[]>(() => {
+    const records: MedicalTimelineItem[] = (scopedData?.records ?? []).map((record) => {
+      const isLab = ['egfr', 'creatinine', 'glucose', 'hba1c', 'ldl', 'hdl', 'cholesterol'].includes(record.record_type)
+      return {
+        id: `record-${record.id}`,
+        kind: isLab ? 'Lab' : 'Health Record',
+        kindKey: 'record',
+        title: RECORD_LABELS[record.record_type] ?? record.record_type,
+        detail: `${formatRecordValue(record)} · ${record.member_name}${record.note ? ` · ${record.note}` : ''}`,
+        date: record.recorded_at,
+        source: record.source === 'cmo_entry' || record.source === 'cmo_created' ? 'CMO Added' : record.source === 'imported' ? 'System Imported' : 'User Entered',
+        status: record.is_published ? 'Published to User' : record.is_verified ? 'CMO Confirmed' : 'Unconfirmed',
+        important: isLab || ['blood_pressure', 'spo2'].includes(record.record_type),
+        tab: 'records',
+      }
+    })
+    const documents: MedicalTimelineItem[] = (scopedData?.documents ?? []).map((doc) => {
+      const tone = documentProcessingTone(doc.processing_status)
+      return {
+        id: `document-${doc.id}`,
+        kind: 'Document',
+        kindKey: 'document',
+        title: DOC_LABELS[doc.doc_type] ?? doc.doc_type,
+        detail: `${doc.file_name}${doc.note ? ` · ${doc.note}` : ''}`,
+        date: doc.doc_date ?? doc.created_at,
+        source: doc.source === 'cmo_entry' || doc.source === 'cmo_created' ? 'CMO Added' : doc.source === 'imported' ? 'System Imported' : 'User Uploaded',
+        status: tone.label,
+        important: ['needs_review', 'uploaded', 'queued', 'extracting'].includes(doc.processing_status ?? 'uploaded') || ['lab_report', 'discharge'].includes(doc.doc_type),
+        tab: 'documents',
+        selector: '#documents',
+      }
+    })
+    const imaging: MedicalTimelineItem[] = (scopedData?.dicom_studies ?? []).map((study) => ({
+      id: `imaging-${study.id}`,
+      kind: 'Imaging',
+      kindKey: 'imaging',
       title: `${study.modality ?? 'DICOM'} ${study.study_description ?? ''}`.trim(),
-      detail: `${study.series_count} series · ${study.instance_count} images`,
+      detail: `${study.series_count} series · ${study.instance_count} images · ${study.member_name}`,
       date: study.created_at,
+      source: 'DICOM Upload',
+      status: 'Imported',
+      important: ['CT', 'MR', 'MRI'].includes(String(study.modality ?? '').toUpperCase()),
+      tab: 'imaging',
     }))
-    return [...records, ...documents, ...imaging]
-      .filter((item) => !query.trim() || `${item.title} ${item.detail}`.toLowerCase().includes(query.trim().toLowerCase()))
+    const requests: MedicalTimelineItem[] = changeRequests.map((request) => ({
+      id: `request-${request.id}`,
+      kind: 'User Request',
+      kindKey: 'request',
+      title: requestTargetLabel(request),
+      detail: `${requestStatusCopy(request).label} · ${requestActionLabel(request)}${request.patient_note ? ` · ${request.patient_note}` : ''}`,
+      date: request.updated_at ?? request.created_at,
+      source: 'User App',
+      status: requestStatusCopy(request).label,
+      important: ['pending_review', 'needs_secondary_review'].includes(request.status),
+      tab: 'requests',
+    }))
+    const followUpItems: MedicalTimelineItem[] = followUps.map((task) => {
+      const status = FU_STATUS[task.status] ?? FU_STATUS.open
+      return {
+        id: `follow-up-${task.id}`,
+        kind: 'Follow-up Task',
+        kindKey: 'follow_up',
+        title: task.item,
+        detail: `${task.reason}${task.suggested_date ? ` · due ${task.suggested_date}` : ''}`,
+        date: task.suggested_date ?? task.created_at,
+        source: task.notify_patient ? 'CMO Added · User Notified' : 'CMO Added',
+        status: status.label,
+        important: ['waiting_for_user', 'due_soon', 'overdue', 'open'].includes(task.status) || task.needs_cmo_recheck || task.needs_more_data,
+        tab: 'workspace',
+        selector: '#follow-ups',
+      }
+    })
+    const missingItems: MedicalTimelineItem[] = missingRequests.map((request) => {
+      const status = MISSING_STATUS[request.status] ?? MISSING_STATUS.open
+      return {
+        id: `missing-data-${request.id}`,
+        kind: 'Missing Data Request',
+        kindKey: 'request',
+        title: request.title,
+        detail: `${request.reason}${request.due_date ? ` · due ${request.due_date}` : ''}${request.response_text ? ` · user replied: ${request.response_text}` : ''}`,
+        date: request.responded_at ?? request.updated_at ?? request.created_at,
+        source: request.notify_patient ? 'CMO Request · User Visible' : 'CMO Request',
+        status: status.label,
+        important: ['waiting_for_user', 'needs_cmo_review', 'open'].includes(request.status),
+        tab: 'workspace',
+        selector: '#missing-data',
+      }
+    })
+    const term = query.trim().toLowerCase()
+    return [...records, ...documents, ...imaging, ...requests, ...followUpItems, ...missingItems]
+      .filter((item) => !term || `${item.kind} ${item.title} ${item.detail} ${item.source} ${item.status}`.toLowerCase().includes(term))
       .sort((a, b) => new Date(b.date ?? 0).getTime() - new Date(a.date ?? 0).getTime())
-  }, [query, scopedData])
+  }, [changeRequests, followUps, missingRequests, query, scopedData])
+
+  const lastReviewAt = useMemo(() => {
+    const reviewActions = auditLog
+      .filter((entry) => /review|verify|publish|confirm|accept|reconcile/i.test(entry.action))
+      .map((entry) => new Date(entry.created_at ?? 0).getTime())
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((a, b) => b - a)
+    return reviewActions[0] ? new Date(reviewActions[0]).toISOString() : null
+  }, [auditLog])
+
+  const changedSinceLastReview = useMemo(() => {
+    const lastReviewTs = lastReviewAt ? new Date(lastReviewAt).getTime() : 0
+    const isNew = (value: string | null | undefined) => {
+      const ts = new Date(value ?? 0).getTime()
+      return !lastReviewTs || (Number.isFinite(ts) && ts > lastReviewTs)
+    }
+    const items: Array<{
+      key: string
+      type: string
+      title: string
+      detail: string
+      date: string | null | undefined
+      tone: 'critical' | 'attention' | 'info' | 'success'
+      action: string
+      tab: TabKey
+      selector?: string
+    }> = []
+    pendingChangeRequests.slice(0, 3).forEach((request) => {
+      items.push({
+        key: `request-${request.id}`,
+        type: 'User reply',
+        title: requestTargetLabel(request),
+        detail: request.patient_note || requestClarificationQuestion(request) || requestActionLabel(request),
+        date: request.updated_at ?? request.created_at,
+        tone: 'attention',
+        action: 'Review user request',
+        tab: 'requests',
+      })
+    })
+    openReportedStates.slice(0, 3).forEach((state) => {
+      items.push({
+        key: `reported-${state.id}`,
+        type: 'Patient reported state',
+        title: `${state.target_type}${state.target_id ? ` #${state.target_id}` : ''}`,
+        detail: state.note || valueToText(state.reported_payload),
+        date: state.updated_at ?? state.created_at,
+        tone: 'info',
+        action: 'Reconcile',
+        tab: 'requests',
+      })
+    })
+    ;(scopedData?.documents ?? []).filter((doc) => isNew(doc.created_at ?? doc.doc_date) || ['uploaded', 'queued', 'extracting', 'needs_review'].includes(doc.processing_status ?? 'uploaded')).slice(0, 4).forEach((doc) => {
+      items.push({
+        key: `doc-${doc.id}`,
+        type: 'New source document',
+        title: doc.file_name,
+        detail: `${DOC_LABELS[doc.doc_type] ?? doc.doc_type} · ${documentProcessingTone(doc.processing_status).label}`,
+        date: doc.doc_date ?? doc.created_at,
+        tone: doc.processing_status === 'confirmed' ? 'success' : 'attention',
+        action: 'Open documents',
+        tab: 'documents',
+        selector: '#documents',
+      })
+    })
+    timeline.filter((item) => isNew(item.date)).slice(0, 3).forEach((item) => {
+      items.push({
+        key: `timeline-${item.kind}-${item.id}`,
+        type: item.kind,
+        title: item.title,
+        detail: item.detail,
+        date: item.date,
+        tone: 'info',
+        action: 'Review timeline',
+        tab: 'workspace',
+      })
+    })
+    pendingProblems.slice(0, 2).forEach((problem) => {
+      items.push({
+        key: `problem-${problem.id}`,
+        type: 'Draft not published',
+        title: problem.display_layman || problem.display_name,
+        detail: `${problem.is_verified ? 'CMO confirmed' : 'Needs CMO review'} · ${problem.is_published ? 'Published' : 'Not published'}`,
+        date: problem.onset_date ?? null,
+        tone: problem.tier <= 1 ? 'critical' : 'attention',
+        action: 'Open publish readiness',
+        tab: 'readiness',
+        selector: '#publish-readiness',
+      })
+    })
+    followUps.filter((task) => !['done', 'completed', 'resolved', 'deleted'].includes(task.status)).slice(0, 3).forEach((task) => {
+      const status = FU_STATUS[task.status] ?? FU_STATUS.open
+      items.push({
+        key: `fu-${task.id}`,
+        type: 'Follow-up',
+        title: task.item,
+        detail: `${status.label} · ${task.reason}`,
+        date: task.suggested_date ?? task.created_at,
+        tone: task.status === 'overdue' ? 'critical' : task.status === 'waiting_for_user' || task.needs_more_data ? 'attention' : 'info',
+        action: 'Open follow-up',
+        tab: 'workspace',
+        selector: '#follow-ups',
+      })
+    })
+    missingRequests.filter((request) => !['resolved', 'canceled', 'deleted'].includes(request.status)).slice(0, 3).forEach((request) => {
+      const status = MISSING_STATUS[request.status] ?? MISSING_STATUS.open
+      items.push({
+        key: `missing-${request.id}`,
+        type: request.status === 'needs_cmo_review' ? 'User responded' : 'Missing data',
+        title: request.title,
+        detail: request.status === 'needs_cmo_review'
+          ? `${status.label} · ${request.response_text || 'User submitted a response'}`
+          : `${status.label} · ${request.reason}`,
+        date: request.responded_at ?? request.updated_at ?? request.created_at,
+        tone: request.status === 'needs_cmo_review' ? 'attention' : 'info',
+        action: request.status === 'needs_cmo_review' ? 'Review response' : 'Open request',
+        tab: 'workspace',
+        selector: '#missing-data',
+      })
+    })
+    return items
+      .sort((a, b) => new Date(b.date ?? 0).getTime() - new Date(a.date ?? 0).getTime())
+      .slice(0, 8)
+  }, [followUps, lastReviewAt, missingRequests, openReportedStates, pendingChangeRequests, pendingProblems, scopedData, timeline])
+
+  const priorityReviewItems = useMemo<PriorityReviewItem[]>(() => {
+    const items: PriorityReviewItem[] = []
+    pendingChangeRequests.slice(0, 5).forEach((request) => {
+      const title = requestTargetLabel(request)
+      items.push({
+        id: `request-${request.id}`,
+        targetKind: 'change_request',
+        type: 'User Request',
+        source: 'User App',
+        title,
+        detail: request.patient_note || requestClarificationQuestion(request) || requestActionLabel(request),
+        evidence: `Created ${formatDate(request.created_at)} · ${request.target_type}${request.target_id ? ` #${request.target_id}` : ''}`,
+        priority: request.priority === 'high' ? 'high' : 'medium',
+        status: 'Needs CMO Review',
+        suggestedAction: 'Review user change, decide accept / modify / clarify / reject.',
+        summaryText: `${title}: ${request.patient_note || valueToText(request.proposed_payload)}`,
+        tab: 'requests',
+        meta: { requestId: request.id },
+      })
+    })
+    openReportedStates.slice(0, 4).forEach((state) => {
+      const title = reportedStateTitle(state)
+      items.push({
+        id: `reported-${state.id}`,
+        targetKind: 'reported_state',
+        type: 'Patient Reported State',
+        source: 'User App',
+        title,
+        detail: state.note || valueToText(state.reported_payload),
+        evidence: `Reported ${formatDate(state.created_at)} · ${state.target_type}${state.target_id ? ` #${state.target_id}` : ''}`,
+        priority: 'high',
+        status: 'Needs Reconcile',
+        suggestedAction: 'Reconcile to official record, keep as overlay, or ask user for clarification.',
+        summaryText: `${title}: ${state.note || valueToText(state.reported_payload)}`,
+        tab: 'requests',
+        meta: { reportedStateId: state.id },
+      })
+    })
+    pendingProblems.slice(0, 5).forEach((problem) => {
+      const title = problem.display_layman || problem.display_name
+      items.push({
+        id: `problem-${problem.id}`,
+        targetKind: 'problem',
+        type: 'Problem',
+        source: problem.source_document_id ? 'CMO Confirmed Source' : 'CMO/System Draft',
+        title,
+        detail: `${problem.display_name} · ${problem.icd10_code ?? 'No ICD'} · ${statusLabel(problem.status)}`,
+        evidence: problem.source_document_id ? `Source document ${problem.source_document_id}` : 'No source document linked',
+        priority: problem.tier <= 1 ? 'critical' : problem.tier === 2 ? 'high' : 'medium',
+        status: problem.is_published ? 'Published to User' : problem.is_verified ? 'CMO Confirmed' : 'Needs CMO Review',
+        suggestedAction: problem.is_verified ? 'Preview patient wording and publish when safe.' : 'Verify before publish.',
+        summaryText: `${title}: ${problem.display_name}${problem.icd10_code ? ` (${problem.icd10_code})` : ''}`,
+        tab: 'readiness',
+        selector: '#publish-readiness',
+        meta: { problemId: problem.id },
+      })
+    })
+    pendingConditions.slice(0, 3).forEach((condition) => {
+      const title = condition.display_name ?? `Condition #${condition.id}`
+      items.push({
+        id: `condition-${condition.id}`,
+        targetKind: 'condition',
+        type: 'Condition',
+        source: condition.source_document_id ? 'Source Linked' : 'Unlinked Clinical Row',
+        title,
+        detail: `${condition.icd10_code ?? 'No ICD'} · ${condition.status ?? 'No status'}`,
+        evidence: condition.source_document_id ? `Source document ${condition.source_document_id}` : 'No source document linked',
+        priority: 'medium',
+        status: condition.is_published ? 'Published to User' : condition.is_verified ? 'CMO Confirmed' : 'Needs CMO Review',
+        suggestedAction: 'Review non-problem clinical row and publish only after wording/source check.',
+        summaryText: `${title}: ${condition.note ?? condition.status ?? ''}`,
+        tab: 'readiness',
+        selector: '#publish-readiness',
+        meta: { conditionId: condition.id },
+      })
+    })
+    pendingMedicationPublishes.slice(0, 3).forEach((medication) => {
+      items.push({
+        id: `medication-${medication.id}`,
+        targetKind: 'medication',
+        type: 'Medication',
+        source: medication.source_document_id ? 'Source Linked' : 'CMO/System Draft',
+        title: medication.drug_name,
+        detail: [medication.dose, medication.frequency, medication.intent, medication.is_active ? 'active' : 'inactive'].filter(Boolean).join(' · '),
+        evidence: medication.source_document_id ? `Source document ${medication.source_document_id}` : medication.note ?? 'No source document linked',
+        priority: medication.is_active ? 'medium' : 'low',
+        status: medication.is_published ? 'Published to User' : medication.is_verified ? 'CMO Confirmed' : 'Needs CMO Review',
+        suggestedAction: 'Confirm active/stopped status and publish patient-facing medication summary when ready.',
+        summaryText: `${medication.drug_name}: ${[medication.dose, medication.frequency, medication.intent].filter(Boolean).join(' · ')}`,
+        tab: 'readiness',
+        selector: '#publish-readiness',
+        meta: { medicationId: medication.id },
+      })
+    })
+    ;(scopedData?.documents ?? []).filter((doc) => ['uploaded', 'queued', 'extracting', 'needs_review'].includes(doc.processing_status ?? 'uploaded')).slice(0, 4).forEach((doc) => {
+      const tone = documentProcessingTone(doc.processing_status)
+      items.push({
+        id: `document-${doc.id}`,
+        targetKind: 'document',
+        type: 'Source Document',
+        source: doc.source === 'imported' ? 'System Imported' : 'User Uploaded',
+        title: doc.file_name,
+        detail: `${DOC_LABELS[doc.doc_type] ?? doc.doc_type} · ${tone.label}`,
+        evidence: doc.note || `Uploaded ${formatDate(doc.created_at)}`,
+        priority: doc.doc_type === 'discharge' || doc.doc_type === 'lab_report' ? 'high' : 'medium',
+        status: tone.label,
+        suggestedAction: 'Review source document, add audit note, then confirm/reject in Documents tab.',
+        summaryText: `${DOC_LABELS[doc.doc_type] ?? doc.doc_type}: ${doc.file_name}${doc.note ? ` · ${doc.note}` : ''}`,
+        tab: 'documents',
+        selector: '#documents',
+        meta: { documentId: doc.id },
+      })
+    })
+    unlinked.conditions.slice(0, 3).forEach((condition) => {
+      const title = condition.display_name ?? `Condition #${condition.id}`
+      items.push({
+        id: `unlinked-condition-${condition.id}`,
+        targetKind: 'unlinked_condition',
+        type: 'Unlinked Condition',
+        source: condition.source_document_id ? 'System Extracted' : 'System Extracted · No Source',
+        title,
+        detail: `${condition.icd10_code ?? 'No ICD'} · ${condition.status ?? 'No status'}`,
+        evidence: condition.source_document_id ? `Source document ${condition.source_document_id}` : condition.note ?? 'No linked evidence',
+        priority: 'medium',
+        status: 'Needs Routing',
+        suggestedAction: 'Attach to a Problem or mark reviewed after source check.',
+        summaryText: `${title}: ${condition.note ?? condition.status ?? ''}`,
+        tab: 'problems',
+        meta: { conditionId: condition.id },
+      })
+    })
+    unlinked.medications.slice(0, 3).forEach((medication) => {
+      items.push({
+        id: `unlinked-medication-${medication.id}`,
+        targetKind: 'unlinked_medication',
+        type: 'Unlinked Medication',
+        source: 'System Extracted',
+        title: medication.drug_name,
+        detail: [medication.dose, medication.frequency, medication.intent].filter(Boolean).join(' · '),
+        evidence: medication.note ?? 'No linked evidence',
+        priority: medication.intent === 'chronic' ? 'medium' : 'low',
+        status: 'Needs Routing',
+        suggestedAction: 'Attach to medication regimen or mark reviewed after source check.',
+        summaryText: `${medication.drug_name}: ${[medication.dose, medication.frequency, medication.intent].filter(Boolean).join(' · ')}`,
+        tab: 'problems',
+        meta: { medicationId: medication.id },
+      })
+    })
+    followUps.filter((task) => !['done', 'completed', 'resolved', 'deleted'].includes(task.status)).slice(0, 4).forEach((task) => {
+      const status = FU_STATUS[task.status] ?? FU_STATUS.open
+      items.push({
+        id: `follow-up-${task.id}`,
+        targetKind: 'follow_up',
+        type: 'Follow-up Task',
+        source: task.notify_patient ? 'CMO Added · User Notified' : 'CMO Added',
+        title: task.item,
+        detail: task.reason,
+        evidence: task.suggested_date ? `Due ${task.suggested_date}` : `Created ${formatDate(task.created_at)}`,
+        priority: task.priority === 'high' || task.status === 'overdue' ? 'high' : task.needs_cmo_recheck ? 'medium' : 'low',
+        status: status.label,
+        suggestedAction: task.needs_more_data ? 'Wait for user data or open missing-data follow-up.' : 'Resolve, update date, or keep on queue.',
+        summaryText: `${task.item}: ${task.reason}${task.suggested_date ? ` · due ${task.suggested_date}` : ''}`,
+        tab: 'workspace',
+        selector: '#follow-ups',
+        meta: { followUpId: task.id },
+      })
+    })
+    missingRequests.filter((request) => !['resolved', 'canceled', 'deleted'].includes(request.status)).slice(0, 5).forEach((request) => {
+      const status = MISSING_STATUS[request.status] ?? MISSING_STATUS.open
+      const userResponded = request.status === 'needs_cmo_review'
+      items.push({
+        id: `missing-data-${request.id}`,
+        targetKind: 'missing_data',
+        type: userResponded ? 'Missing Data Reply' : 'Missing Data Request',
+        source: userResponded ? 'User App Reply' : 'CMO Request',
+        title: request.title,
+        detail: userResponded ? (request.response_text || 'User replied to missing-data request.') : request.reason,
+        evidence: [
+          request.due_date ? `Due ${request.due_date}` : null,
+          request.response_document_id ? `Document ${request.response_document_id}` : null,
+          request.source_excerpt || null,
+        ].filter(Boolean).join(' · ') || `Created ${formatDate(request.created_at)}`,
+        priority: userResponded || request.priority === 'high' ? 'high' : request.priority === 'low' ? 'low' : 'medium',
+        status: status.label,
+        suggestedAction: userResponded ? 'Review user response, then resolve or create follow-up.' : 'Wait for user reply, adjust due date, or resolve if no longer needed.',
+        summaryText: `${request.title}: ${userResponded ? (request.response_text || request.reason) : request.reason}`,
+        tab: 'workspace',
+        selector: '#missing-data',
+        meta: { missingDataId: request.id },
+      })
+    })
+    const priorityRank: Record<ReviewPriority, number> = { critical: 0, high: 1, medium: 2, low: 3 }
+    return items.sort((a, b) => priorityRank[a.priority] - priorityRank[b.priority]).slice(0, 16)
+  }, [followUps, missingRequests, openReportedStates, pendingChangeRequests, pendingConditions, pendingMedicationPublishes, pendingProblems, scopedData, unlinked])
+
+  const filteredTimeline = useMemo(() => {
+    const filtered = timeline.filter((item) => {
+      if (timelineFilter === 'all') return true
+      if (timelineFilter === 'important') return item.important
+      return item.kindKey === timelineFilter
+    })
+    return filtered.slice(0, timelineExpanded ? 80 : 12)
+  }, [timeline, timelineExpanded, timelineFilter])
+
+  useEffect(() => {
+    if (loading) return
+    const validTabs: TabKey[] = ['workspace', 'overview', 'fill', 'requests', 'problems', 'readiness', 'records', 'documents', 'imaging', 'audit']
+    const tabParam = searchParams.get('tab') as TabKey | null
+    const explicitReview = searchParams.get('review') || searchParams.get('focus')
+    const targetAnchor = reviewAnchorForTarget(
+      searchParams.get('target_type') || searchParams.get('type'),
+      searchParams.get('target_id') || searchParams.get('target'),
+    )
+    if (tabParam && validTabs.includes(tabParam)) setActiveTab(tabParam)
+    const candidates = [
+      explicitReview && explicitReview.startsWith('review-item-') ? explicitReview : null,
+      explicitReview ? `review-item-${explicitReview}` : null,
+      targetAnchor,
+    ].filter(Boolean) as string[]
+    if (candidates.length === 0) return
+    if (!tabParam) setActiveTab('workspace')
+    window.setTimeout(() => {
+      const anchor = candidates.map((candidate) => document.getElementById(candidate)).find(Boolean)
+      anchor?.scrollIntoView({ block: 'start' })
+    }, 160)
+  }, [loading, priorityReviewItems.length, routeSearch, searchParams])
 
   const handoffText = useMemo(() => {
     if (!data) return ''
@@ -961,6 +1695,303 @@ export default function PatientPovPage() {
     if (!handoffText) return
     await navigator.clipboard.writeText(handoffText)
     notify('已複製交班摘要')
+  }
+
+  const openWorkspaceTarget = (tab: TabKey, selector?: string) => {
+    setActiveTab(tab)
+    const targetSelector = selector
+    if (targetSelector) window.setTimeout(() => document.querySelector(targetSelector)?.scrollIntoView({ block: 'start' }), 120)
+  }
+
+  const addReviewItemToSummary = (item: PriorityReviewItem) => {
+    sendToPatientContentPanel({
+      text: item.summaryText,
+      source: `${item.type} · ${item.source}`,
+      open: true,
+    })
+    notify('已帶入填寫面板')
+  }
+
+  const createFollowUpFromReviewItem = (item: PriorityReviewItem) => {
+    setFuForm((prev) => ({
+      ...prev,
+      item: item.title,
+      reason: item.detail || item.suggestedAction,
+      priority: item.priority === 'critical' || item.priority === 'high' ? 'high' : item.priority === 'medium' ? 'medium' : 'low',
+      needs_more_data: item.targetKind === 'change_request' || item.status.toLowerCase().includes('missing'),
+      needs_cmo_recheck: item.priority === 'critical' || item.priority === 'high',
+      source_excerpt: item.summaryText,
+    }))
+    setFuOpen(true)
+    window.setTimeout(() => document.querySelector('#follow-ups')?.scrollIntoView({ block: 'start' }), 120)
+    notify('已用此 review item 預填追蹤項目')
+  }
+
+  const createMissingDataFromReviewItem = (item: PriorityReviewItem) => {
+    setMissingForm((prev) => ({
+      ...prev,
+      title: item.title,
+      reason: item.detail || item.suggestedAction,
+      instructions: item.targetKind === 'document'
+        ? '請上傳或補充這份報告的完整頁面、日期與檢查院所。'
+        : '請補充相關報告、照片或文字說明，CMO 會在收到後再次審閱。',
+      priority: item.priority === 'critical' || item.priority === 'high' ? 'high' : item.priority === 'medium' ? 'medium' : 'low',
+      source_type: item.targetKind,
+      source_id: item.id,
+      source_excerpt: item.summaryText,
+      notify_patient: true,
+    }))
+    setMissingOpen(true)
+    window.setTimeout(() => document.querySelector('#missing-data')?.scrollIntoView({ block: 'start' }), 120)
+    notify('已用此 review item 預填補資料 request')
+  }
+
+  const confirmReviewItem = async (item: PriorityReviewItem) => {
+    if (item.targetKind === 'problem' && item.meta?.problemId) {
+      await runProblemAction(item.meta.problemId, 'verify')
+      notify('已 verify Problem')
+      return
+    }
+    if (item.targetKind === 'condition' && item.meta?.conditionId) {
+      await runConditionPublishAction(item.meta.conditionId, 'publish')
+      return
+    }
+    if (item.targetKind === 'medication' && item.meta?.medicationId) {
+      await runMedicationPublishAction(item.meta.medicationId, 'publish')
+      return
+    }
+    if (item.targetKind === 'follow_up' && item.meta?.followUpId) {
+      const task = followUps.find((followUp) => followUp.id === item.meta?.followUpId)
+      if (task) await setFollowUpStatus(task, 'completed')
+      return
+    }
+    if (item.targetKind === 'missing_data' && item.meta?.missingDataId) {
+      const request = missingRequests.find((row) => row.id === item.meta?.missingDataId)
+      if (request) await setMissingRequestStatus(request, 'resolved')
+      return
+    }
+    openWorkspaceTarget(item.tab, item.selector)
+    notify('此項目需要進入對應分頁完成 audited review')
+  }
+
+  const loadRecommendations = useCallback(async () => {
+    try {
+      const payload = await api.get(`/api/cmo/patients/${id}/recommendations`) as RecommendationWorkspace
+      setRecommendationData(payload)
+      const seed = payload.current ?? payload.published
+      if (seed && !recommendationTouched) {
+        setRecommendationForm(recommendationFormFromRow(seed))
+      }
+    } catch {
+      /* Recommendation editor remains usable for new drafts even if history fails. */
+    }
+  }, [id, recommendationTouched])
+  useEffect(() => { loadRecommendations() }, [loadRecommendations])
+
+  const recommendationPayload = (readyToPublish = false) => ({
+    ...recommendationForm,
+    ready_to_publish: readyToPublish,
+    quality_checks: recommendationChecks(recommendationForm),
+  })
+
+  const saveRecommendationDraft = async (readyToPublish = false) => {
+    setRecommendationBusy(readyToPublish ? 'ready' : 'draft')
+    try {
+      const row = await api.post(`/api/cmo/patients/${id}/recommendations/draft`, recommendationPayload(readyToPublish)) as CmoRecommendation
+      setRecommendationForm(recommendationFormFromRow(row))
+      setRecommendationTouched(false)
+      await loadRecommendations()
+      notify(readyToPublish ? '已儲存為 Ready to Publish' : '已儲存 recommendation draft')
+    } finally {
+      setRecommendationBusy('')
+    }
+  }
+
+  const publishRecommendation = async () => {
+    const checks = recommendationChecks(recommendationForm)
+    if (!allRecommendationChecksPass(checks)) {
+      notify('發布前 checklist 尚未通過')
+      return
+    }
+    setRecommendationBusy('publish')
+    try {
+      const row = await api.post(`/api/cmo/patients/${id}/recommendations/publish`, recommendationPayload(true)) as CmoRecommendation
+      setRecommendationForm(recommendationFormFromRow(row))
+      setRecommendationTouched(false)
+      setPublishConfirmOpen(false)
+      await loadRecommendations()
+      notify('已發布給使用者')
+    } finally {
+      setRecommendationBusy('')
+    }
+  }
+
+  const withdrawRecommendation = async () => {
+    const target = recommendationData.published ?? recommendationData.current
+    if (!target?.series_id) return
+    if (!window.confirm('Withdraw published recommendation from user view?')) return
+    setRecommendationBusy('withdraw')
+    try {
+      const row = await api.post(`/api/cmo/patients/${id}/recommendations/${target.series_id}/withdraw`, { note: 'CMO withdrew from Recommendation Editor' }) as CmoRecommendation
+      setRecommendationForm(recommendationFormFromRow(row))
+      setRecommendationTouched(false)
+      await loadRecommendations()
+      notify('已撤回已發布建議')
+    } finally {
+      setRecommendationBusy('')
+    }
+  }
+
+  const updateRecommendationForm = (patch: Partial<RecommendationForm>) => {
+    setRecommendationTouched(true)
+    setRecommendationForm((prev) => ({ ...prev, ...patch }))
+  }
+
+  const addReviewItemToRecommendation = (item: PriorityReviewItem) => {
+    const sourceRef = recommendationSourceFromItem(item)
+    setRecommendationTouched(true)
+    setRecommendationForm((prev) => {
+      const exists = prev.source_refs.some((ref) => ref.id === sourceRef.id)
+      return {
+        ...prev,
+        source_refs: exists ? prev.source_refs : [...prev.source_refs, sourceRef],
+        health_summary: [prev.health_summary, item.summaryText].filter(Boolean).join('\n'),
+        recommendation: prev.recommendation || simplifyMedicalLanguage(item.summaryText),
+        next_step: prev.next_step || (item.targetKind === 'follow_up' ? item.detail : item.suggestedAction),
+      }
+    })
+    notify('已加入 Recommendation Editor')
+  }
+
+  const addReviewItemToInternalNote = (item: PriorityReviewItem) => {
+    setInternalNoteText((prev) => [prev, `[${item.type}] ${item.title}: ${item.detail}`].filter(Boolean).join('\n'))
+    notify('已帶入 Internal Note Panel')
+  }
+
+  const saveInternalNote = async () => {
+    if (!internalNoteText.trim()) {
+      notify('請先輸入 internal note')
+      return
+    }
+    setRecommendationBusy('internal-note')
+    try {
+      await api.post(`/api/cmo/patients/${id}/internal-notes`, {
+        note: internalNoteText.trim(),
+        source_refs: recommendationForm.source_refs,
+      })
+      setInternalNoteText('')
+      await Promise.all([loadRecommendations(), loadData()])
+      notify('已儲存 CMO internal note')
+    } finally {
+      setRecommendationBusy('')
+    }
+  }
+
+  const convertRecommendationToPlainLanguage = () => {
+    updateRecommendationForm({
+      health_summary: simplifyMedicalLanguage(recommendationForm.health_summary),
+      recommendation: simplifyMedicalLanguage(recommendationForm.recommendation),
+      next_step: simplifyMedicalLanguage(recommendationForm.next_step),
+    })
+    notify('已轉成較白話版本，發布前請 CMO 再確認')
+  }
+
+  // ── Follow-up tasks（追蹤任務）+ Smart Summary Builder ──────────────────────
+  const loadFollowUps = useCallback(async () => {
+    try {
+      const rows = await api.get(`/api/cmo/patients/${id}/follow-ups`)
+      setFollowUps(Array.isArray(rows) ? (rows as FollowUp[]) : [])
+    } catch { /* 保留現有 */ }
+  }, [id])
+  useEffect(() => { loadFollowUps() }, [loadFollowUps])
+
+  const loadMissingRequests = useCallback(async () => {
+    try {
+      const rows = await api.get(`/api/cmo/patients/${id}/missing-data-requests`)
+      setMissingRequests(Array.isArray(rows) ? (rows as MissingDataRequest[]) : [])
+    } catch { /* keep current rows */ }
+  }, [id])
+  useEffect(() => { loadMissingRequests() }, [loadMissingRequests])
+
+  const selectionText = () => (typeof window !== 'undefined' ? (window.getSelection()?.toString().trim() ?? '') : '')
+  const selectionToPanel = () => {
+    const text = selectionText()
+    if (!text) { notify('請先在時間軸選取一段文字'); return }
+    sendToPatientContentPanel({ text, source: '時間軸選取', open: true })
+    notify('已帶入填寫面板，請選擇 摘要 / Problem / 備註')
+  }
+  const selectionToRecommendation = () => {
+    const text = selectionText()
+    if (!text) { notify('請先在時間軸選取一段文字'); return }
+    updateRecommendationForm({
+      health_summary: [recommendationForm.health_summary, simplifyMedicalLanguage(text)].filter(Boolean).join('\n'),
+      recommendation: recommendationForm.recommendation || simplifyMedicalLanguage(text),
+    })
+    notify('已加入 Recommendation Editor')
+  }
+  const selectionToFollowUp = () => {
+    const text = selectionText()
+    setFuForm((prev) => ({ ...prev, reason: text || prev.reason, source_excerpt: text }))
+    setFuOpen(true)
+    notify(text ? '已帶入選取文字，補上追蹤項目即可建立' : '可直接填寫追蹤項目')
+  }
+  const selectionToMissingData = () => {
+    const text = selectionText()
+    setMissingForm((prev) => ({
+      ...prev,
+      reason: text || prev.reason,
+      source_excerpt: text,
+      instructions: prev.instructions || '請上傳或補充相關資料，CMO 會在收到後再次審閱。',
+    }))
+    setMissingOpen(true)
+    notify(text ? '已帶入選取文字，補上缺資料項目即可建立' : '可直接建立補資料 request')
+  }
+  const createFollowUp = async () => {
+    if (!fuForm.reason.trim() || !fuForm.item.trim()) { notify('請填寫追蹤原因與項目'); return }
+    setFuBusy(true)
+    try {
+      await api.post(`/api/cmo/patients/${id}/follow-ups`, { ...fuForm })
+      setFuForm(defaultFuForm)
+      setFuOpen(false)
+      await loadFollowUps()
+      notify('已建立追蹤項目')
+    } catch { notify('建立失敗，請重試') } finally { setFuBusy(false) }
+  }
+  const setFollowUpStatus = async (task: FollowUp, status: string) => {
+    try { await api.patch(`/api/cmo/follow-ups/${task.id}`, { status }); await loadFollowUps() } catch { notify('更新失敗') }
+  }
+  const removeFollowUp = async (task: FollowUp) => {
+    if (!window.confirm('刪除這個追蹤項目？系統會保留 audit log。')) return
+    try { await api.delete(`/api/cmo/follow-ups/${task.id}`); await loadFollowUps() } catch { notify('刪除失敗') }
+  }
+
+  const createMissingRequest = async () => {
+    if (!missingForm.title.trim() || !missingForm.reason.trim()) { notify('請填寫缺少資料與原因'); return }
+    setMissingBusy('create')
+    try {
+      await api.post(`/api/cmo/patients/${id}/missing-data-requests`, { ...missingForm })
+      setMissingForm(defaultMissingForm)
+      setMissingOpen(false)
+      await Promise.all([loadMissingRequests(), loadData()])
+      notify('已建立補資料 request')
+    } catch { notify('建立補資料 request 失敗') } finally { setMissingBusy('') }
+  }
+  const setMissingRequestStatus = async (request: MissingDataRequest, status: string) => {
+    setMissingBusy(request.id)
+    try {
+      await api.patch(`/api/cmo/missing-data-requests/${request.id}`, { status })
+      await Promise.all([loadMissingRequests(), loadData()])
+      notify(status === 'resolved' ? '已標記補資料 request resolved' : '已更新補資料 request')
+    } catch { notify('更新補資料 request 失敗') } finally { setMissingBusy('') }
+  }
+  const removeMissingRequest = async (request: MissingDataRequest) => {
+    if (!window.confirm('刪除這個補資料 request？系統會保留 audit log，且 user 端不再顯示。')) return
+    setMissingBusy(request.id)
+    try {
+      await api.delete(`/api/cmo/missing-data-requests/${request.id}`)
+      await Promise.all([loadMissingRequests(), loadData()])
+      notify('已刪除補資料 request')
+    } catch { notify('刪除補資料 request 失敗') } finally { setMissingBusy('') }
   }
 
   const verifyRedZoneAll = async () => {
@@ -1407,6 +2438,12 @@ export default function PatientPovPage() {
             <span className="cmo-badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>
               Published {data.user.verification_summary?.published ?? 0}/{data.user.verification_summary?.total ?? data.problems.length}
             </span>
+            <span className="cmo-badge" style={{ background: '#fff', border: '1px solid #e2e8f0', color: '#0f172a' }} title="臨床嚴重度反映病情（紅區/Tier1 Problem），與待辦量分開。">
+              臨床嚴重度：<strong style={{ color: clinicalRisk.tone, marginLeft: 4 }}>{clinicalRisk.label}</strong>
+            </span>
+            <span className="cmo-badge" style={{ background: '#fff', border: '1px solid #e2e8f0', color: '#0f172a' }} title="待處理量為整理負擔（待審/待發布/未掛載），不等於病情危急。">
+              待處理量：<strong style={{ color: workloadRisk.tone, marginLeft: 4 }}>{workloadTotal} 項 · {workloadRisk.label}</strong>
+            </span>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1440,6 +2477,7 @@ export default function PatientPovPage() {
         </div>
       </section>
 
+      {activeTab !== 'workspace' && (
       <section className="cmo-kpi-grid">
         <StatCard label="待發布 clinical rows" value={pendingClinicalRows} note={`${pendingProblems.length} Problem · ${pendingConditions.length} Condition · ${pendingMedicationPublishes.length} Medication`} tone="#be123c" />
         <StatCard label="User requests" value={pendingChangeRequests.length} note="使用者異動待審核" tone="#a16207" />
@@ -1450,7 +2488,9 @@ export default function PatientPovPage() {
         <StatCard label="Publish readiness" value={`${readinessDone}/${readiness.length}`} note="發布前 checklist" tone={readinessDone === readiness.length ? '#059669' : '#be123c'} />
         <StatCard label="文件/影像" value={(scopedData?.documents.length ?? 0) + (scopedData?.dicom_studies.length ?? 0)} note={`${scopedData?.documents.length ?? 0} 文件 · ${scopedData?.dicom_studies.length ?? 0} 影像`} tone="#0f766e" />
       </section>
+      )}
 
+      {activeTab !== 'workspace' && (
       <section className="cmo-grid-2">
         <div className="cmo-card cmo-section">
           <h2 className="cmo-section-title">Critical Red Zone</h2>
@@ -1470,11 +2510,13 @@ export default function PatientPovPage() {
           <textarea className="cmo-textarea" rows={9} readOnly value={handoffText} />
         </div>
       </section>
+      )}
 
       <div className="cmo-card cmo-toolbar">
         <div className="cmo-tabs" style={{ flex: '1 1 460px' }}>
           {[
-            ['overview', '總覽'],
+            ['workspace', '工作台'],
+            ['overview', '總覽（清單）'],
             ['requests', `User requests${pendingChangeRequests.length ? ` (${pendingChangeRequests.length})` : ''}`],
             ['problems', 'Problem'],
             ['readiness', 'Publish readiness'],
@@ -1503,6 +2545,413 @@ export default function PatientPovPage() {
           </select>
         )}
       </div>
+
+      {activeTab === 'workspace' && (
+        <>
+        <section id="patient-snapshot" className="cmo-card cmo-section cmo-workspace-snapshot" style={{ scrollMarginTop: 90 }}>
+          <div className="cmo-title-row" style={{ alignItems: 'flex-start' }}>
+            <div>
+              <div className="cmo-kpi-label">Patient Snapshot</div>
+              <h2 className="cmo-section-title" style={{ margin: '4px 0' }}>{data.user.display_name}</h2>
+              <div className="cmo-subtitle">
+                {selectedMember === '全部' ? '全家 / 全帳號' : selectedMember}
+                {' · '}Last edited {formatDate(data.user.last_edited)}
+                {' · '}Blood {data.user.blood_type ?? 'not recorded'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <span className="cmo-badge" style={{ background: '#fff', border: '1px solid #e2e8f0', color: clinicalRisk.tone }}>臨床風險 {clinicalRisk.label}</span>
+              <span className="cmo-badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>待處理 {workloadTotal}</span>
+              <span className="cmo-badge" style={{ background: criticalCount > 0 ? '#fef2f2' : '#ecfdf5', color: criticalCount > 0 ? '#be123c' : '#047857' }}>Red zone {criticalCount}</span>
+              <span className="cmo-badge" style={{ background: unlinkedCount > 0 ? '#fff7ed' : '#f8fafc', color: unlinkedCount > 0 ? '#c2410c' : '#64748b' }}>缺漏/未掛載 {unlinkedCount}</span>
+            </div>
+          </div>
+          <div className="cmo-workspace-snapshot-metrics">
+            <div className="cmo-snapshot-metric">
+              <span>主要問題</span>
+              <strong>{openProblems.slice(0, 3).map((p) => p.display_layman || p.display_name).join(' / ') || '未記錄'}</strong>
+            </div>
+            <div className="cmo-snapshot-metric">
+              <span>最近資料</span>
+              <strong>{timeline[0] ? `${formatDate(timeline[0].date)} · ${timeline[0].kind} · ${timeline[0].title}` : '尚無近期資料'}</strong>
+            </div>
+            <div className="cmo-snapshot-metric">
+              <span>最新 CMO 狀態</span>
+              <strong>{`${readinessDone}/${readiness.length} publish checks · ${auditLog.length} audit events`}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section className="cmo-card cmo-section">
+          <div className="cmo-title-row" style={{ alignItems: 'flex-start', marginBottom: 10 }}>
+            <div>
+              <div className="cmo-kpi-label">What Changed Since Last Review</div>
+              <h2 className="cmo-section-title" style={{ margin: '4px 0' }}>這次需要看的變化</h2>
+              <div className="cmo-subtitle">
+                Last CMO review/audit: {formatDate(lastReviewAt)} · changed-first view prevents re-reading the full chart.
+              </div>
+            </div>
+            <span className="cmo-badge" style={{ background: changedSinceLastReview.length > 0 ? '#fff7ed' : '#ecfdf5', color: changedSinceLastReview.length > 0 ? '#c2410c' : '#047857' }}>
+              {changedSinceLastReview.length} item{changedSinceLastReview.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          {changedSinceLastReview.length === 0 ? (
+            <div style={{ border: '1px dashed #cbd5e1', borderRadius: 8, padding: 14, color: '#64748b', fontSize: 13 }}>
+              沒有偵測到新上傳、user reply、未發布 draft 或到期追蹤。可直接檢查下方待處理佇列。
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 8 }}>
+              {changedSinceLastReview.map((item) => {
+                const tone = item.tone === 'critical'
+                  ? { bg: '#fff1f2', fg: '#be123c', border: '#fecdd3' }
+                  : item.tone === 'attention'
+                    ? { bg: '#fff7ed', fg: '#c2410c', border: '#fed7aa' }
+                    : item.tone === 'success'
+                      ? { bg: '#ecfdf5', fg: '#047857', border: '#bbf7d0' }
+                      : { bg: '#f0f9ff', fg: '#075985', border: '#bae6fd' }
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className="cmo-card"
+                    onClick={() => {
+                      setActiveTab(item.tab)
+                      const selector = item.selector
+                      if (selector) window.setTimeout(() => document.querySelector(selector)?.scrollIntoView({ block: 'start' }), 120)
+                    }}
+                    style={{ textAlign: 'left', borderColor: tone.border, background: '#fff', cursor: 'pointer', padding: 12 }}
+                  >
+                    <span className="cmo-badge" style={{ background: tone.bg, color: tone.fg }}>{item.type}</span>
+                    <strong style={{ display: 'block', marginTop: 8, color: '#0f172a', fontSize: 13 }}>{item.title}</strong>
+                    <div className="cmo-subtitle" style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45 }}>{item.detail}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                      <span className="cmo-subtitle" style={{ fontSize: 11 }}>{formatDate(item.date)}</span>
+                      <span style={{ color: '#0f766e', fontSize: 12, fontWeight: 850 }}>{item.action}</span>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </section>
+
+        <section className="cmo-workspace-grid">
+          <div id="priority-review-items" className="cmo-card cmo-section" style={{ scrollMarginTop: 90 }}>
+            <div className="cmo-title-row" style={{ marginBottom: 10 }}>
+              <div>
+                <h2 className="cmo-section-title" style={{ margin: 0 }}>Priority Review Items</h2>
+                <div className="cmo-subtitle">Item-level work queue. Confirm only where an audited endpoint exists; publish stays behind preview/readiness gates.</div>
+              </div>
+              <span className="cmo-badge" style={{ background: priorityReviewItems.length > 0 ? '#fff7ed' : '#ecfdf5', color: priorityReviewItems.length > 0 ? '#c2410c' : '#047857' }}>
+                {priorityReviewItems.length} active
+              </span>
+            </div>
+            {priorityReviewItems.length === 0 ? (
+              <div className="cmo-list-item"><div className="cmo-subtitle">目前沒有待處理 review item。</div></div>
+            ) : (
+              <div className="cmo-list">
+                {priorityReviewItems.map((item) => {
+                  const canConfirm = item.targetKind === 'problem' && item.status === 'Needs CMO Review'
+                  const canMarkReviewed = item.targetKind === 'follow_up' || item.targetKind === 'missing_data'
+                  return (
+                    <article id={`review-item-${item.id}`} key={item.id} className="cmo-list-item" style={{ borderColor: item.priority === 'critical' ? '#fecdd3' : '#e2e8f0', scrollMarginTop: 90 }}>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                        <PriorityBadge priority={item.priority} />
+                        <DataSourceBadge source={item.source} />
+                        <ReviewStatusBadge status={item.status} />
+                        <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>{item.type}</span>
+                      </div>
+                      <strong style={{ display: 'block', color: '#0f172a', fontSize: 13 }}>{item.title}</strong>
+                      <div className="cmo-subtitle" style={{ marginTop: 4, lineHeight: 1.45 }}>{item.detail || 'No detail provided.'}</div>
+                      <div className="cmo-subtitle" style={{ marginTop: 4, fontSize: 11 }}>Evidence: {item.evidence}</div>
+                      <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#334155', fontSize: 12 }}>
+                        Suggested action: <strong>{item.suggestedAction}</strong>
+                      </div>
+                      {/* Primary actions stay visible; secondary actions move into a
+                          "更多動作" overflow to cut per-item visual load from 10 buttons
+                          to 3 + overflow (recognition over recall, lower cognitive load).
+                          No actions were removed. */}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'flex-start' }}>
+                        <button type="button" className="cmo-button primary" onClick={() => openWorkspaceTarget(item.tab, item.selector)}>Review</button>
+                        <button type="button" className="cmo-button" disabled={!canConfirm} title={canConfirm ? 'Use audited endpoint for this item.' : 'This item requires the detailed tab or publish preview before confirmation.'} onClick={() => confirmReviewItem(item)}>
+                          Confirm
+                        </button>
+                        <button type="button" className="cmo-button" onClick={() => addReviewItemToSummary(item)}>Add to Summary</button>
+                        <details className="cmo-overflow">
+                          <summary className="cmo-button" style={{ listStyle: 'none', cursor: 'pointer' }}>更多動作 ▾</summary>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                            <button type="button" className="cmo-button" onClick={() => openWorkspaceTarget(item.tab, item.selector)}>Edit</button>
+                            <button type="button" className="cmo-button" onClick={() => addReviewItemToRecommendation(item)}>Add Recommendation</button>
+                            <button type="button" className="cmo-button" onClick={() => createFollowUpFromReviewItem(item)}>Create Follow-up</button>
+                            <button type="button" className="cmo-button" onClick={() => createMissingDataFromReviewItem(item)} title="Create an audited user-facing missing-data request from this review item.">
+                              Request More Info
+                            </button>
+                            <button type="button" className="cmo-button" disabled={!canMarkReviewed} title={canMarkReviewed ? 'Mark this follow-up task completed.' : 'Reviewed/resolved requires the detailed tab or audited status transition for this item.'} onClick={() => confirmReviewItem(item)}>
+                              Mark Reviewed
+                            </button>
+                            <button type="button" className="cmo-button" onClick={() => addReviewItemToInternalNote(item)}>Internal Note</button>
+                            <button type="button" className="cmo-button" disabled title="Ignore must be an audited item-level status transition. Use the detailed request/document/draft panel until Phase 4 batch-safe ignore is implemented.">Ignore</button>
+                          </div>
+                        </details>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              <button type="button" className="cmo-button primary" onClick={() => sendToPatientContentPanel({ source: 'Patient POV' })}>開啟填寫面板</button>
+              <button type="button" className="cmo-button" onClick={copyHandoff}>複製交班摘要</button>
+              <button type="button" className="cmo-button" onClick={() => setActiveTab('documents')}>文件 / 影像（{(scopedData?.documents.length ?? 0) + (scopedData?.dicom_studies.length ?? 0)}）</button>
+            </div>
+          </div>
+
+          {/* 醫療時間軸（Timeline）：紀錄 / 文件 / 影像 依時間整合 */}
+          <div id="medical-timeline" className="cmo-card cmo-section" style={{ scrollMarginTop: 90 }}>
+            <div className="cmo-title-row" style={{ marginBottom: 8 }}>
+              <div>
+                <h2 className="cmo-section-title" style={{ margin: 0 }}>Medical Timeline</h2>
+                <div className="cmo-subtitle">Filtered, source-labeled timeline. Important findings stay visible without expanding full raw history.</div>
+              </div>
+              <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#475569' }}>{filteredTimeline.length}/{timeline.length}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+              {([
+                ['all', 'All'],
+                ['important', 'Important'],
+                ['record', 'Records'],
+                ['document', 'Documents'],
+                ['imaging', 'Imaging'],
+                ['request', 'User Requests'],
+                ['follow_up', 'Follow-up'],
+              ] as Array<[TimelineFilter, string]>).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`cmo-chip ${timelineFilter === key ? 'active' : ''}`}
+                  onClick={() => setTimelineFilter(key)}
+                >
+                  {label}
+                </button>
+              ))}
+              <button type="button" className="cmo-chip" onClick={() => setTimelineExpanded((value) => !value)}>
+                {timelineExpanded ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
+            {/* Smart Summary Builder：選取下方文字 → 一鍵整理（改版 §5.2 D） */}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', padding: '8px 10px', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 8, marginBottom: 10 }}>
+              <strong style={{ fontSize: 12, color: '#0f172a' }}>Smart Summary Builder</strong>
+              <span className="cmo-subtitle">選取下方文字後 →</span>
+              <button type="button" className="cmo-button" onClick={selectionToPanel}>填寫面板（摘要/Problem/備註）</button>
+              <button type="button" className="cmo-button" onClick={selectionToFollowUp}>建立追蹤項目</button>
+              <button type="button" className="cmo-button" onClick={selectionToMissingData}>要求補資料</button>
+            </div>
+            <div className="cmo-list">
+              {filteredTimeline.map((item) => (
+                <button
+                  id={`timeline-item-${item.id}`}
+                  key={item.id}
+                  type="button"
+                  className="cmo-list-item cmo-row"
+                  onClick={() => item.tab && openWorkspaceTarget(item.tab, item.selector)}
+                  style={{
+                    textAlign: 'left',
+                    cursor: item.tab ? 'pointer' : 'default',
+                    borderColor: item.important ? '#fbbf24' : '#e2e8f0',
+                    background: item.important ? '#fffbeb' : '#fff',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 5 }}>
+                      <span className="cmo-badge" style={{ background: '#eef2ff', color: '#3730a3' }}>{item.kind}</span>
+                      <DataSourceBadge source={item.source} />
+                      <ReviewStatusBadge status={item.status} />
+                      {item.important && <span className="cmo-badge" style={{ background: '#fef3c7', color: '#92400e' }}>Important</span>}
+                    </div>
+                    <strong>{item.title}</strong>
+                    <div className="cmo-subtitle">{item.detail}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                    <div className="cmo-subtitle" style={{ marginTop: 4 }}>{formatDate(item.date)}</div>
+                  </div>
+                </button>
+              ))}
+              {filteredTimeline.length === 0 && (<div className="cmo-list-item"><div className="cmo-subtitle">目前篩選下沒有 timeline item。</div></div>)}
+            </div>
+          </div>
+
+          <div className="cmo-card cmo-section cmo-builder-panel">
+            <h2 className="cmo-section-title">Smart Summary Builder</h2>
+            <div className="cmo-subtitle" style={{ marginBottom: 10 }}>
+              Select text from the timeline or source rows, then route it into audited draft, internal note, follow-up, or user-facing recommendation workflows.
+            </div>
+            <div className="cmo-list">
+              <button type="button" className="cmo-list-item cmo-row" onClick={selectionToPanel} style={{ textAlign: 'left', cursor: 'pointer' }}>
+                <div><strong>Add to structured draft</strong><div className="cmo-subtitle">Opens Patient-facing content panel for summary / Problem / record entry.</div></div>
+                <span className="cmo-badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>audited flow</span>
+              </button>
+              <button type="button" className="cmo-list-item cmo-row" onClick={selectionToRecommendation} style={{ textAlign: 'left', cursor: 'pointer' }}>
+                <div><strong>Add selected text to recommendation</strong><div className="cmo-subtitle">Routes selected text into user-facing draft, never directly to publish.</div></div>
+                <span className="cmo-badge" style={{ background: '#f5f3ff', color: '#6d28d9' }}>draft</span>
+              </button>
+              <button type="button" className="cmo-list-item cmo-row" onClick={selectionToFollowUp} style={{ textAlign: 'left', cursor: 'pointer' }}>
+                <div><strong>Create follow-up task</strong><div className="cmo-subtitle">Uses existing FollowUp API and audit log.</div></div>
+                <span className="cmo-badge" style={{ background: '#ecfdf5', color: '#047857' }}>active</span>
+              </button>
+              <button type="button" className="cmo-list-item cmo-row" onClick={selectionToMissingData} style={{ textAlign: 'left', cursor: 'pointer' }}>
+                <div><strong>Request missing data</strong><div className="cmo-subtitle">Creates a user-facing task with closed-loop CMO review.</div></div>
+                <span className="cmo-badge" style={{ background: '#fff7ed', color: '#c2410c' }}>closed loop</span>
+              </button>
+            </div>
+            <RecommendationEditor
+              form={recommendationForm}
+              data={recommendationData}
+              busy={recommendationBusy}
+              publishConfirmOpen={publishConfirmOpen}
+              internalNoteText={internalNoteText}
+              onChange={updateRecommendationForm}
+              onPlainLanguage={convertRecommendationToPlainLanguage}
+              onSaveDraft={() => saveRecommendationDraft(false)}
+              onMarkReady={() => saveRecommendationDraft(true)}
+              onOpenPublishConfirm={() => setPublishConfirmOpen(true)}
+              onCancelPublish={() => setPublishConfirmOpen(false)}
+              onConfirmPublish={publishRecommendation}
+              onWithdraw={withdrawRecommendation}
+              onInternalNoteChange={setInternalNoteText}
+              onSaveInternalNote={saveInternalNote}
+            />
+          </div>
+        </section>
+
+        {/* 追蹤任務（Follow-up Tasks，改版 §5.2 F）— 建立後（已通知）顯示於病患「提醒」分頁 */}
+        <section id="follow-ups" className="cmo-card cmo-section" style={{ marginTop: 14, scrollMarginTop: 90 }}>
+          <div className="cmo-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <h2 className="cmo-section-title" style={{ margin: 0 }}>追蹤任務（{followUps.length}）</h2>
+            <button type="button" className="cmo-button primary" onClick={() => setFuOpen((v) => !v)}>{fuOpen ? '收合' : '+ 新增追蹤'}</button>
+          </div>
+          <div className="cmo-subtitle" style={{ margin: '4px 0 12px' }}>建立後（已通知）會出現在病患的「提醒」分頁；所有操作均寫入 audit log。</div>
+          {fuOpen && (
+            <div className="cmo-card" style={{ background: '#f8fafc', marginBottom: 14 }}>
+              <div className="cmo-grid-2">
+                <label className="cmo-field"><span className="cmo-kpi-label">追蹤項目 *</span><input className="cmo-input" value={fuForm.item} onChange={(e) => setFuForm((f) => ({ ...f, item: e.target.value }))} placeholder="例：HbA1c / 腹部超音波" /></label>
+                <label className="cmo-field"><span className="cmo-kpi-label">建議時間</span><input className="cmo-input" value={fuForm.suggested_date} onChange={(e) => setFuForm((f) => ({ ...f, suggested_date: e.target.value }))} placeholder="例：3 個月後 / 2026-09-01" /></label>
+              </div>
+              <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}><span className="cmo-kpi-label">追蹤原因 *</span><textarea className="cmo-textarea" rows={2} value={fuForm.reason} onChange={(e) => setFuForm((f) => ({ ...f, reason: e.target.value }))} placeholder="例：脂肪肝，AST/ALT 待複查" /></label>
+              {fuForm.source_excerpt ? <div className="cmo-subtitle" style={{ marginTop: 6 }}>來源片段：「{fuForm.source_excerpt.slice(0, 80)}{fuForm.source_excerpt.length > 80 ? '…' : ''}」</div> : null}
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+                <label className="cmo-field" style={{ minWidth: 120 }}><span className="cmo-kpi-label">優先級</span>
+                  <select className="cmo-select" value={fuForm.priority} onChange={(e) => setFuForm((f) => ({ ...f, priority: e.target.value }))}>
+                    <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+                  </select>
+                </label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={fuForm.notify_patient} onChange={(e) => setFuForm((f) => ({ ...f, notify_patient: e.target.checked }))} />通知病患</label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={fuForm.needs_more_data} onChange={(e) => setFuForm((f) => ({ ...f, needs_more_data: e.target.checked }))} />需補資料</label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={fuForm.needs_cmo_recheck} onChange={(e) => setFuForm((f) => ({ ...f, needs_cmo_recheck: e.target.checked }))} />需 CMO 再確認</label>
+                <button type="button" className="cmo-button primary" disabled={fuBusy} onClick={createFollowUp} style={{ marginLeft: 'auto' }}>{fuBusy ? '建立中…' : '建立追蹤項目'}</button>
+              </div>
+            </div>
+          )}
+          {followUps.length === 0 ? (
+            <div className="cmo-subtitle">尚無追蹤項目。選取時間軸文字或點「+ 新增追蹤」即可建立。</div>
+          ) : (
+            <div className="cmo-grid-3">
+              {followUps.map((t) => {
+                const pri = FU_PRIORITY[t.priority] ?? FU_PRIORITY.medium
+                const status = FU_STATUS[t.status] ?? FU_STATUS.open
+                const isDone = ['done', 'completed', 'resolved'].includes(t.status)
+                return (
+                  <div key={t.id} className="cmo-card" style={{ opacity: isDone ? 0.62 : 1 }}>
+                    <div className="cmo-row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <strong style={{ fontSize: 14 }}>{t.item}</strong>
+                      <span className="cmo-badge" style={{ background: pri.bg, color: pri.color }}>{pri.label}</span>
+                    </div>
+                    <div className="cmo-subtitle" style={{ marginTop: 4 }}>原因：{t.reason}</div>
+                    <div className="cmo-subtitle">建議時間：{t.suggested_date || '—'}</div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                      <span className="cmo-badge" style={{ background: status.bg, color: status.color }}>{status.label}</span>
+                      {t.notify_patient && <span className="cmo-badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>已通知病患</span>}
+                      {t.needs_more_data && <span className="cmo-badge" style={{ background: '#fef3c7', color: '#a16207' }}>需補資料</span>}
+                      {t.needs_cmo_recheck && <span className="cmo-badge" style={{ background: '#fef2f2', color: '#be123c' }}>需再確認</span>}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                      <button type="button" className="cmo-button" onClick={() => setFollowUpStatus(t, isDone ? 'open' : 'completed')}>{isDone ? '重新開啟' : '標記完成'}</button>
+                      <button type="button" className="cmo-button" onClick={() => removeFollowUp(t)}>刪除</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+        <section id="missing-data" className="cmo-card cmo-section" style={{ marginTop: 14, scrollMarginTop: 90 }}>
+          <div className="cmo-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h2 className="cmo-section-title" style={{ margin: 0 }}>補資料 Requests（{missingRequests.length}）</h2>
+              <div className="cmo-subtitle" style={{ marginTop: 4 }}>獨立於提醒的 closed-loop request：User 回覆後會回到 CMO work queue。</div>
+            </div>
+            <button type="button" className="cmo-button primary" onClick={() => setMissingOpen((value) => !value)}>{missingOpen ? '收合' : '+ 要求補資料'}</button>
+          </div>
+          {missingOpen && (
+            <div className="cmo-card" style={{ background: '#f8fafc', marginTop: 12, marginBottom: 14 }}>
+              <div className="cmo-grid-2">
+                <label className="cmo-field"><span className="cmo-kpi-label">需要補什麼 *</span><input className="cmo-input" value={missingForm.title} onChange={(event) => setMissingForm((form) => ({ ...form, title: event.target.value }))} placeholder="例：最近三個月 HbA1c 報告 / 腹部超音波完整報告" /></label>
+                <label className="cmo-field"><span className="cmo-kpi-label">Due date</span><input className="cmo-input" value={missingForm.due_date} onChange={(event) => setMissingForm((form) => ({ ...form, due_date: event.target.value }))} placeholder="例：2026-07-15 / 下次回診前" /></label>
+              </div>
+              <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}><span className="cmo-kpi-label">為什麼需要 *</span><textarea className="cmo-textarea" rows={2} value={missingForm.reason} onChange={(event) => setMissingForm((form) => ({ ...form, reason: event.target.value }))} placeholder="例：目前摘要缺少檢驗日期與完整數值，CMO 需要確認趨勢後再給建議。" /></label>
+              <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}><span className="cmo-kpi-label">User 看到的補充方式</span><textarea className="cmo-textarea" rows={2} value={missingForm.instructions} onChange={(event) => setMissingForm((form) => ({ ...form, instructions: event.target.value }))} placeholder="例：請到上傳頁補上報告照片或 PDF，也可以用文字說明檢查日期與院所。" /></label>
+              {missingForm.source_excerpt ? <div className="cmo-subtitle" style={{ marginTop: 6 }}>來源片段：「{missingForm.source_excerpt.slice(0, 90)}{missingForm.source_excerpt.length > 90 ? '…' : ''}」</div> : null}
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+                <label className="cmo-field" style={{ minWidth: 120 }}><span className="cmo-kpi-label">優先級</span>
+                  <select className="cmo-select" value={missingForm.priority} onChange={(event) => setMissingForm((form) => ({ ...form, priority: event.target.value }))}>
+                    <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+                  </select>
+                </label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={missingForm.notify_patient} onChange={(event) => setMissingForm((form) => ({ ...form, notify_patient: event.target.checked }))} />通知病患</label>
+                <button type="button" className="cmo-button primary" disabled={missingBusy === 'create'} onClick={createMissingRequest} style={{ marginLeft: 'auto' }}>{missingBusy === 'create' ? '建立中…' : '建立補資料 request'}</button>
+              </div>
+            </div>
+          )}
+          {missingRequests.length === 0 ? (
+            <div className="cmo-subtitle" style={{ marginTop: 12 }}>目前沒有補資料 request。可從 review item 或時間軸選取文字建立。</div>
+          ) : (
+            <div className="cmo-grid-3" style={{ marginTop: 12 }}>
+              {missingRequests.map((request) => {
+                const pri = FU_PRIORITY[request.priority] ?? FU_PRIORITY.medium
+                const status = MISSING_STATUS[request.status] ?? MISSING_STATUS.open
+                const isClosed = ['resolved', 'canceled'].includes(request.status)
+                const userResponded = request.status === 'needs_cmo_review'
+                return (
+                  <div key={request.id} className="cmo-card" style={{ opacity: isClosed ? 0.68 : 1, borderColor: userResponded ? '#fde68a' : '#e2e8f0' }}>
+                    <div className="cmo-row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <strong style={{ fontSize: 14 }}>{request.title}</strong>
+                      <span className="cmo-badge" style={{ background: pri.bg, color: pri.color }}>{pri.label}</span>
+                    </div>
+                    <div className="cmo-subtitle" style={{ marginTop: 4 }}>原因：{request.reason}</div>
+                    {request.instructions && <div className="cmo-subtitle">補充方式：{request.instructions}</div>}
+                    <div className="cmo-subtitle">期限：{request.due_date || '未設定'}</div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                      <span className="cmo-badge" style={{ background: status.bg, color: status.color }}>{status.label}</span>
+                      {request.notify_patient && <span className="cmo-badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>User 可見</span>}
+                      {userResponded && <span className="cmo-badge" style={{ background: '#fef3c7', color: '#a16207' }}>需 CMO 審閱</span>}
+                    </div>
+                    {request.response_text && (
+                      <div style={{ marginTop: 8, padding: 8, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12, color: '#78350f' }}>
+                        User 回覆：{request.response_text}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+                      <button type="button" className="cmo-button" disabled={missingBusy === request.id} onClick={() => setMissingRequestStatus(request, isClosed ? 'waiting_for_user' : 'resolved')}>{isClosed ? '重新開啟' : 'Resolve'}</button>
+                      {!isClosed && <button type="button" className="cmo-button" disabled={missingBusy === request.id} onClick={() => setMissingRequestStatus(request, 'waiting_for_user')}>等待 User</button>}
+                      <button type="button" className="cmo-button" disabled={missingBusy === request.id} onClick={() => removeMissingRequest(request)}>刪除</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+        </>
+      )}
 
       {activeTab === 'overview' && (
         <section className="cmo-grid-2">
@@ -1639,13 +3088,342 @@ export default function PatientPovPage() {
   )
 }
 
-function CriticalTile({ title, value, tone }: { title: string; value: string; tone: string }) {
+function RecommendationEditor({
+  form,
+  data,
+  busy,
+  publishConfirmOpen,
+  internalNoteText,
+  onChange,
+  onPlainLanguage,
+  onSaveDraft,
+  onMarkReady,
+  onOpenPublishConfirm,
+  onCancelPublish,
+  onConfirmPublish,
+  onWithdraw,
+  onInternalNoteChange,
+  onSaveInternalNote,
+}: {
+  form: RecommendationForm
+  data: RecommendationWorkspace
+  busy: string
+  publishConfirmOpen: boolean
+  internalNoteText: string
+  onChange: (patch: Partial<RecommendationForm>) => void
+  onPlainLanguage: () => void
+  onSaveDraft: () => void
+  onMarkReady: () => void
+  onOpenPublishConfirm: () => void
+  onCancelPublish: () => void
+  onConfirmPublish: () => void
+  onWithdraw: () => void
+  onInternalNoteChange: (value: string) => void
+  onSaveInternalNote: () => void
+}) {
+  const checks = recommendationChecks(form)
+  const canPublish = allRecommendationChecksPass(checks)
+  const checkItems: Array<[keyof typeof checks, string]> = [
+    ['plain_language', 'Plain language'],
+    ['has_next_step', 'Clear next step'],
+    ['has_follow_up_or_missing_data', 'Follow-up or data state'],
+    ['no_internal_note', 'No internal note'],
+    ['no_unconfirmed_sources', 'No unconfirmed extraction'],
+    ['medical_safety_copy', 'Safe medical wording'],
+  ]
+  const latest = data.current
+  const published = data.published
+  const status = latest?.status ?? 'new draft'
+  const publishTitle = canPublish ? 'Preview before publishing to user.' : 'Publish checklist is incomplete.'
   return (
-    <div className="cmo-card cmo-section" style={{ background: '#f8fafc' }}>
-      <div className="cmo-kpi-label">{title}</div>
-      <div style={{ marginTop: 8, color: tone, fontWeight: 820, lineHeight: 1.45 }}>{value}</div>
+    <div id="recommendation-editor" style={{ marginTop: 12 }}>
+      <div className="cmo-title-row" style={{ alignItems: 'flex-start', marginBottom: 8 }}>
+        <div>
+          <h3 className="cmo-section-title" style={{ margin: 0 }}>Recommendation Editor</h3>
+          <div className="cmo-subtitle">CMO edit mode + user preview. Internal notes are stored separately and never enter this payload.</div>
+        </div>
+        <ReviewStatusBadge status={status} />
+      </div>
+
+      <div className="cmo-grid-2">
+        <div className="cmo-card" style={{ background: '#f8fafc' }}>
+          <div className="cmo-kpi-label">CMO edit</div>
+          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
+            <span className="cmo-kpi-label">Title</span>
+            <input className="cmo-input" value={form.title} onChange={(event) => onChange({ title: event.target.value })} />
+          </label>
+          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
+            <span className="cmo-kpi-label">User-facing health summary</span>
+            <textarea className="cmo-textarea" rows={4} value={form.health_summary} onChange={(event) => onChange({ health_summary: event.target.value })} placeholder="白話說明目前最重要的健康狀態，不放 CMO internal note。" />
+          </label>
+          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
+            <span className="cmo-kpi-label">User-facing recommendation *</span>
+            <textarea className="cmo-textarea" rows={4} value={form.recommendation} onChange={(event) => onChange({ recommendation: event.target.value })} placeholder="給使用者看的建議：簡短、白話、避免診斷承諾。" />
+          </label>
+          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
+            <span className="cmo-kpi-label">Next step *</span>
+            <textarea className="cmo-textarea" rows={2} value={form.next_step} onChange={(event) => onChange({ next_step: event.target.value })} placeholder="例：請上傳最近 3 個月抽血報告，或下次回診時與醫師確認。" />
+          </label>
+          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
+            <span className="cmo-kpi-label">Follow-up date / state</span>
+            <input className="cmo-input" value={form.follow_up_date} onChange={(event) => onChange({ follow_up_date: event.target.value })} placeholder="例：2026-09-01 / 補資料後 CMO 再審閱" />
+          </label>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+            <button type="button" className="cmo-button" onClick={onPlainLanguage}>Plain-language conversion</button>
+            <button type="button" className="cmo-button" disabled={busy === 'draft'} onClick={onSaveDraft}>{busy === 'draft' ? 'Saving…' : 'Save Draft'}</button>
+            <button type="button" className="cmo-button" disabled={busy === 'ready'} onClick={onMarkReady}>{busy === 'ready' ? 'Saving…' : 'Mark Ready'}</button>
+            <button type="button" className="cmo-button primary" disabled={!canPublish || busy === 'publish'} title={publishTitle} onClick={onOpenPublishConfirm}>
+              Preview / Publish
+            </button>
+            <button type="button" className="cmo-button" disabled={!published || busy === 'withdraw'} title={!published ? 'No published recommendation to withdraw.' : 'Withdraw from user view with audit trail.'} onClick={onWithdraw}>
+              Withdraw
+            </button>
+          </div>
+        </div>
+
+        <UserPreviewPanel form={form} published={published} />
+      </div>
+
+      <div className="cmo-card" style={{ marginTop: 10, background: '#fff' }}>
+        <div className="cmo-title-row" style={{ marginBottom: 8 }}>
+          <div>
+            <div className="cmo-kpi-label">Publish checklist</div>
+            <div className="cmo-subtitle">All checks must pass before user-facing publish.</div>
+          </div>
+          <span className="cmo-badge" style={{ background: canPublish ? '#ecfdf5' : '#fff7ed', color: canPublish ? '#047857' : '#c2410c' }}>
+            {Object.values(checks).filter(Boolean).length}/{Object.values(checks).length}
+          </span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 6 }}>
+          {checkItems.map(([key, label]) => (
+            <span key={key} className="cmo-badge" style={{ justifyContent: 'center', background: checks[key] ? '#ecfdf5' : '#fff7ed', color: checks[key] ? '#047857' : '#c2410c' }}>
+              {checks[key] ? '✓' : 'Needs'} {label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="cmo-card" style={{ marginTop: 10, background: '#f8fafc' }}>
+        <div className="cmo-kpi-label">Source refs</div>
+        {form.source_refs.length === 0 ? (
+          <div className="cmo-subtitle" style={{ marginTop: 6 }}>No linked review item yet. Use Add Recommendation on a review item or select timeline text.</div>
+        ) : (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+            {form.source_refs.map((ref) => (
+              <span key={ref.id} className="cmo-badge" style={{ background: '#eef2ff', color: '#3730a3' }}>
+                {ref.type} · {ref.title}
+                <button
+                  type="button"
+                  onClick={() => onChange({ source_refs: form.source_refs.filter((item) => item.id !== ref.id) })}
+                  style={{ marginLeft: 6, border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', fontWeight: 900 }}
+                  aria-label={`Remove ${ref.title}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <InternalNotePanel
+        value={internalNoteText}
+        notes={data.internal_notes}
+        busy={busy}
+        onChange={onInternalNoteChange}
+        onSave={onSaveInternalNote}
+      />
+
+      <VersionHistoryPanel history={data.history} />
+
+      {publishConfirmOpen && (
+        <PublishConfirmationModal
+          form={form}
+          checks={checks}
+          busy={busy}
+          onCancel={onCancelPublish}
+          onConfirm={onConfirmPublish}
+        />
+      )}
     </div>
   )
+}
+
+function UserPreviewPanel({ form, published }: { form: RecommendationForm; published: CmoRecommendation | null }) {
+  return (
+    <div className="cmo-card" style={{ background: '#ffffff', borderColor: '#bae6fd' }}>
+      <div className="cmo-kpi-label">User preview</div>
+      <div style={{ marginTop: 8, padding: 12, borderRadius: 8, background: '#f0fdfa', border: '1px solid #ccfbf1' }}>
+        <div style={{ fontWeight: 850, color: '#0f172a', fontSize: 14 }}>{form.title || DEFAULT_RECOMMENDATION_TITLE}</div>
+        <div style={{ marginTop: 8, color: '#334155', fontSize: 13, lineHeight: 1.6 }}>
+          {form.health_summary || 'CMO 整理完成後，健康摘要會顯示在這裡。'}
+        </div>
+        <div style={{ marginTop: 10, color: '#0f766e', fontWeight: 820, fontSize: 13, lineHeight: 1.55 }}>
+          {form.recommendation || '尚未填寫給使用者看的建議。'}
+        </div>
+        <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: '#fff', border: '1px solid #dbeafe', color: '#1e40af', fontSize: 13 }}>
+          下一步：{form.next_step || '尚未設定'}
+        </div>
+        {form.follow_up_date && <div className="cmo-subtitle" style={{ marginTop: 8 }}>追蹤：{form.follow_up_date}</div>}
+      </div>
+      <div className="cmo-subtitle" style={{ marginTop: 8 }}>
+        Currently published: {published ? `${published.title} · v${published.version} · ${formatDate(published.published_at)}` : 'none'}
+      </div>
+    </div>
+  )
+}
+
+function InternalNotePanel({
+  value,
+  notes,
+  busy,
+  onChange,
+  onSave,
+}: {
+  value: string
+  notes: InternalNoteEntry[]
+  busy: string
+  onChange: (value: string) => void
+  onSave: () => void
+}) {
+  return (
+    <div className="cmo-card" style={{ marginTop: 10, background: '#fff' }}>
+      <div className="cmo-title-row" style={{ marginBottom: 8 }}>
+        <div>
+          <div className="cmo-kpi-label">Internal CMO Note</div>
+          <div className="cmo-subtitle">CMO-only audit note. This is stored separately and cannot be published to user.</div>
+        </div>
+        <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>CMO only</span>
+      </div>
+      <textarea className="cmo-textarea" rows={3} value={value} onChange={(event) => onChange(event.target.value)} placeholder="交班、判斷依據、需二次審閱原因。此內容不會進入 user-facing recommendation。" />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+        <button type="button" className="cmo-button" disabled={busy === 'internal-note'} onClick={onSave}>
+          {busy === 'internal-note' ? 'Saving…' : 'Save Internal Note'}
+        </button>
+      </div>
+      {notes.length > 0 && (
+        <div className="cmo-list" style={{ marginTop: 10 }}>
+          {notes.slice(0, 4).map((note) => (
+            <div key={note.id} className="cmo-list-item">
+              <div className="cmo-subtitle">{formatDate(note.created_at)} · CMO {note.created_by ?? ''}</div>
+              <div style={{ color: '#0f172a', fontSize: 13, lineHeight: 1.5 }}>{note.snapshot.note}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function VersionHistoryPanel({ history }: { history: CmoRecommendation[] }) {
+  return (
+    <div className="cmo-card" style={{ marginTop: 10, background: '#f8fafc' }}>
+      <div className="cmo-title-row" style={{ marginBottom: 8 }}>
+        <div>
+          <div className="cmo-kpi-label">Version history</div>
+          <div className="cmo-subtitle">Every draft, publish, update, and withdrawal creates a version.</div>
+        </div>
+        <span className="cmo-badge" style={{ background: '#eef2ff', color: '#3730a3' }}>{history.length}</span>
+      </div>
+      {history.length === 0 ? (
+        <div className="cmo-subtitle">No recommendation version yet.</div>
+      ) : (
+        <div className="cmo-list">
+          {history.slice(0, 6).map((row) => (
+            <div key={row.id} className="cmo-list-item">
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 5 }}>
+                <ReviewStatusBadge status={row.status} />
+                <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>v{row.version}</span>
+                <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>{formatDate(row.created_at)}</span>
+              </div>
+              <strong style={{ fontSize: 13 }}>{row.title}</strong>
+              <div className="cmo-subtitle" style={{ marginTop: 4 }}>{row.recommendation.slice(0, 130)}{row.recommendation.length > 130 ? '...' : ''}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PublishConfirmationModal({
+  form,
+  checks,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  form: RecommendationForm
+  checks: Record<string, boolean>
+  busy: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const canConfirm = allRecommendationChecksPass(checks)
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 80,
+        background: 'rgba(15, 23, 42, 0.38)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 18,
+      }}
+    >
+      <div className="cmo-card cmo-section" style={{ width: 'min(760px, 96vw)', maxHeight: '88vh', overflow: 'auto', background: '#fff' }}>
+        <div className="cmo-title-row">
+          <div>
+            <h2 className="cmo-section-title" style={{ margin: 0 }}>Publish Confirmation</h2>
+            <div className="cmo-subtitle">Review exactly what the user will see. This action writes a version and sync event.</div>
+          </div>
+          <span className="cmo-badge" style={{ background: canConfirm ? '#ecfdf5' : '#fff7ed', color: canConfirm ? '#047857' : '#c2410c' }}>
+            {canConfirm ? 'Ready' : 'Blocked'}
+          </span>
+        </div>
+        <UserPreviewPanel form={form} published={null} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 6, marginTop: 10 }}>
+          {Object.entries(checks).map(([key, ok]) => (
+            <span key={key} className="cmo-badge" style={{ background: ok ? '#ecfdf5' : '#fff7ed', color: ok ? '#047857' : '#c2410c' }}>
+              {ok ? '✓' : 'Needs'} {key.replaceAll('_', ' ')}
+            </span>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+          <button type="button" className="cmo-button" onClick={onCancel}>Cancel</button>
+          <button type="button" className="cmo-button primary" disabled={!canConfirm || busy === 'publish'} onClick={onConfirm}>
+            {busy === 'publish' ? 'Publishing…' : 'Confirm Publish to User'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function reviewAnchorForTarget(targetType: string | null, targetId: string | null) {
+  if (!targetType || !targetId) return null
+  const normalized: Record<string, string> = {
+    source_document: 'document',
+    document: 'document',
+    change_request: 'request',
+    patient_change_request: 'request',
+    reported_state: 'reported',
+    patient_reported_state: 'reported',
+    problem: 'problem',
+    condition: 'condition',
+    medication: 'medication',
+    medication_regimen: 'medication',
+    unlinked_condition: 'unlinked-condition',
+    unlinked_medication: 'unlinked-medication',
+    follow_up: 'follow-up',
+    followup: 'follow-up',
+  }
+  const prefix = normalized[targetType] ?? targetType.replaceAll('_', '-')
+  return `review-item-${prefix}-${targetId}`
 }
 
 function AuditHistoryPanel({ entries, busy, onUndo }: { entries: AuditEntry[]; busy: string; onUndo: (entry: AuditEntry) => void }) {
@@ -2145,21 +3923,6 @@ function renderFinalValueInput(field: string, value: unknown, targetType: string
   return <input className="cmo-input" value={String(value ?? '')} onChange={(event) => setField(field, event.target.value)} />
 }
 
-function DiffBox({ title, data, empty }: { title: string; data: Record<string, unknown> | null; empty: string }) {
-  return (
-    <div className="cmo-card cmo-section" style={{ background: '#fff' }}>
-      <div className="cmo-kpi-label">{title}</div>
-      {data && Object.keys(data).length > 0 ? (
-        <pre style={{ marginTop: 8, whiteSpace: 'pre-wrap', fontSize: 12, lineHeight: 1.5, color: '#334155', maxHeight: 260, overflow: 'auto' }}>
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      ) : (
-        <div className="cmo-muted" style={{ marginTop: 8 }}>{empty}</div>
-      )}
-    </div>
-  )
-}
-
 function ProblemRow({ problem }: { problem: Problem }) {
   const tier = tierStyle(problem.tier)
   return (
@@ -2555,19 +4318,6 @@ function PatientSurfaceEditor({
   )
 }
 
-function FormField({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label style={{ display: 'block' }}>
-      <div className="cmo-kpi-label" style={{ marginBottom: 6 }}>{label}</div>
-      {children}
-    </label>
-  )
-}
-
-function QuickChipRow({ children }: { children: ReactNode }) {
-  return <div className="cmo-chipbar" style={{ margin: '10px 0 12px' }}>{children}</div>
-}
-
 function NoteTemplateRow({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   return (
     <div style={{ marginTop: 10, marginBottom: 12 }}>
@@ -2580,18 +4330,6 @@ function NoteTemplateRow({ value, onChange }: { value: string; onChange: (value:
         ))}
       </div>
       <textarea className="cmo-textarea" rows={3} value={value} onChange={(event) => onChange(event.target.value)} placeholder="CMO-only note 或 source trace；病人端不直接顯示。" />
-    </div>
-  )
-}
-
-function RecordList({ title, empty, children }: { title: string; empty: string; children: ReactNode }) {
-  const hasChildren = Array.isArray(children) ? children.length > 0 : Boolean(children)
-  return (
-    <div style={{ marginTop: 14 }}>
-      <div className="cmo-kpi-label" style={{ marginBottom: 8 }}>{title}</div>
-      <div className="cmo-list">
-        {hasChildren ? children : <div className="cmo-muted">{empty}</div>}
-      </div>
     </div>
   )
 }
@@ -2670,13 +4408,6 @@ function PatientFacingPreview({ problems }: { problems: Problem[] }) {
       )}
     </div>
   )
-}
-
-function ClinicalPublishBadge({ verified, published }: { verified?: boolean; published?: boolean }) {
-  const copy = published ? 'Patient visible' : verified ? 'Verified, not published' : 'Needs CMO verify'
-  const bg = published ? '#eff6ff' : verified ? '#ecfdf5' : '#fff7ed'
-  const fg = published ? '#1d4ed8' : verified ? '#047857' : '#c2410c'
-  return <span className="cmo-badge" style={{ background: bg, color: fg }}>{copy}</span>
 }
 
 function NonProblemPublishPanel({
@@ -2836,16 +4567,20 @@ function UnlinkedColumn({ title, rows }: { title: string; rows: Array<{ id: stri
   )
 }
 
-function TimelinePanel({ items }: { items: Array<{ id: string; kind: string; title: string; detail: string; date: string | null }> }) {
+function TimelinePanel({ items }: { items: MedicalTimelineItem[] }) {
   return (
     <div className="cmo-card cmo-section">
       <h2 className="cmo-section-title">近期資料時間線</h2>
       <div className="cmo-list">
         {items.length === 0 ? <div className="cmo-muted">尚無近期資料。</div> : items.map((item) => (
-          <div className="cmo-list-item" key={`${item.kind}-${item.id}`}>
+          <div className="cmo-list-item" key={item.id} style={{ borderColor: item.important ? '#fbbf24' : '#e2e8f0', background: item.important ? '#fffbeb' : '#fff' }}>
             <div className="cmo-row">
               <strong>{item.title}</strong>
-              <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#334155' }}>{item.kind}</span>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#334155' }}>{item.kind}</span>
+                <DataSourceBadge source={item.source} />
+                <ReviewStatusBadge status={item.status} />
+              </div>
             </div>
             <div className="cmo-subtitle">{formatDate(item.date)} · {item.detail}</div>
           </div>

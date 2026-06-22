@@ -15,6 +15,7 @@ import {
   MOCK_SOURCE_DOCS, MOCK_ALLERGIES, MOCK_QUEUE_TYPE,
 } from '@/lib/mockClinicalData'
 import { type DrawerOrigin } from '@/lib/healthkeepTypes'
+import { PRIORITY_META, toPriority } from '@/lib/statusSystem'
 import { api } from '@/lib/api'
 import { useSync } from '@/lib/sync'
 import {
@@ -78,9 +79,61 @@ interface CockpitBucket {
   items: CockpitQueueItem[]
 }
 
+interface CockpitSummary {
+  all_pending: number
+  needs_review: number
+  critical_high: number
+  new_uploads: number
+  need_user_reply: number
+  follow_up_due: number
+  draft_ready: number
+  missing_data: number
+  nhi_imports: number
+  abnormal_findings: number
+  recently_processed: number
+}
+
+interface PatientPriorityRow {
+  patient_id: string
+  patient: string
+  patient_public_id: string
+  priority: 'Critical' | 'High' | 'Medium' | 'Low' | 'No Action Needed' | string
+  priority_score: number
+  latest_event: string
+  latest_event_type: string
+  new_sources: string[]
+  abnormal_count: number
+  pending_count: number
+  need_user_reply: boolean
+  missing_data_count: number
+  draft_ready_count: number
+  follow_up_due: boolean
+  last_updated: string | null
+  cmo_status: string
+  suggested_action: string
+  review_url: string
+  workspace_url: string
+  matched_buckets: string[]
+  items: CockpitQueueItem[]
+}
+
 interface CockpitEnvelope {
+  summary?: CockpitSummary
+  patients?: PatientPriorityRow[]
   buckets: CockpitBucket[]
 }
+
+type QueueFilterKey =
+  | 'all_pending'
+  | 'critical_high'
+  | 'new_uploads'
+  | 'abnormal_findings'
+  | 'need_user_reply'
+  | 'follow_up_due'
+  | 'draft_ready'
+  | 'missing_data'
+  | 'nhi_imports'
+  | 'recently_processed'
 
 // RISK_OPTION_LABEL / FOLLOW_OPTION_LABEL moved into _components/worklist.tsx
 // where the filter UI lives.
@@ -115,10 +168,374 @@ function persistReviewedAlerts(s: Set<string>) {
 
 function bucketTone(key: string): { bg: string; fg: string; border: string } {
   if (key === 'high_risk' || key === 'red_zone_pending') return { bg: '#fff1f2', fg: '#be123c', border: '#fecdd3' }
-  if (key === 'needs_clarification' || key === 'user_replies') return { bg: '#fff7ed', fg: '#c2410c', border: '#fed7aa' }
+  if (key === 'needs_clarification' || key === 'missing_data_requests' || key === 'user_replies') return { bg: '#fff7ed', fg: '#c2410c', border: '#fed7aa' }
   if (key === 'nhi_imports') return { bg: '#f0f9ff', fg: '#075985', border: '#bae6fd' }
   if (key === 'verified_drafts') return { bg: '#ecfdf5', fg: '#047857', border: '#bbf7d0' }
   return { bg: '#f8fafc', fg: '#475569', border: '#e2e8f0' }
+}
+
+function priorityTone(priority: string): { bg: string; fg: string; border: string } {
+  // Backed by the canonical PRIORITY_META (single source of truth, statusSystem.ts).
+  const meta = PRIORITY_META[toPriority(priority)]
+  return { bg: meta.bg, fg: meta.fg, border: meta.border }
+}
+
+// group:'action' = needs CMO action today (prominent). group:'reference' =
+// situational-awareness counts (NHI updated / Resolved) that should NOT compete
+// visually with action items — rendered as a smaller muted row.
+const QUEUE_FILTERS: Array<{ key: QueueFilterKey; label: string; short: string; group: 'action' | 'reference' }> = [
+  { key: 'all_pending', label: 'All pending', short: 'Pending', group: 'action' },
+  { key: 'critical_high', label: 'Critical / High', short: 'High', group: 'action' },
+  { key: 'new_uploads', label: 'New uploads', short: 'Uploads', group: 'action' },
+  { key: 'abnormal_findings', label: 'Abnormal findings', short: 'Abnormal', group: 'action' },
+  { key: 'need_user_reply', label: 'Need reply', short: 'Reply', group: 'action' },
+  { key: 'follow_up_due', label: 'Follow-up due', short: 'Due', group: 'action' },
+  { key: 'draft_ready', label: 'Draft ready', short: 'Draft', group: 'action' },
+  { key: 'missing_data', label: 'Missing data', short: 'Missing', group: 'action' },
+  { key: 'nhi_imports', label: 'NHI updated', short: 'NHI', group: 'reference' },
+  { key: 'recently_processed', label: 'Resolved', short: 'Resolved', group: 'reference' },
+]
+
+function summaryCount(summary: CockpitSummary | null, key: QueueFilterKey) {
+  return summary?.[key] ?? 0
+}
+
+function patientMatchesFilter(row: PatientPriorityRow, key: QueueFilterKey) {
+  if (key === 'all_pending') return row.pending_count > 0
+  if (key === 'critical_high') return row.priority === 'Critical' || row.priority === 'High'
+  if (key === 'new_uploads') return row.matched_buckets.includes('follow_up_uploads')
+  if (key === 'abnormal_findings') return row.abnormal_count > 0
+  if (key === 'need_user_reply') return row.need_user_reply || row.matched_buckets.includes('user_replies')
+  if (key === 'follow_up_due') return row.follow_up_due || row.matched_buckets.includes('follow_up_due')
+  if (key === 'draft_ready') return row.draft_ready_count > 0 || row.matched_buckets.includes('verified_drafts')
+  if (key === 'missing_data') return row.missing_data_count > 0 || row.matched_buckets.includes('needs_clarification') || row.matched_buckets.includes('missing_data_requests')
+  if (key === 'nhi_imports') return row.matched_buckets.includes('nhi_imports')
+  if (key === 'recently_processed') return row.matched_buckets.includes('recently_processed')
+  return true
+}
+
+function CMOStatsBar({
+  summary,
+  activeKey,
+  onSelect,
+}: {
+  summary: CockpitSummary | null
+  activeKey: QueueFilterKey
+  onSelect: (key: QueueFilterKey) => void
+}) {
+  return (
+    <section className="cmo-card cmo-section" style={{ marginTop: 10, padding: 12 }}>
+      <div className="cmo-title-row" style={{ marginBottom: 10 }}>
+        <div>
+          <h2 className="cmo-section-title" style={{ margin: 0 }}>Today&apos;s CMO Work</h2>
+          <div className="cmo-subtitle">Click a number to filter the patient-level queue. Counts are patient-first unless the source only exposes work-item totals.</div>
+        </div>
+      </div>
+      {(() => {
+        const renderCard = (filter: typeof QUEUE_FILTERS[number], compact: boolean) => {
+          const isActive = activeKey === filter.key
+          const tone = filter.key === 'critical_high' || filter.key === 'abnormal_findings'
+            ? priorityTone('Critical')
+            : filter.key === 'missing_data' || filter.key === 'need_user_reply' || filter.key === 'follow_up_due'
+              ? bucketTone('needs_clarification')
+              : filter.key === 'draft_ready'
+                ? bucketTone('verified_drafts')
+                : bucketTone(filter.key)
+          return (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => onSelect(filter.key)}
+              style={{
+                textAlign: 'left',
+                border: `1px solid ${isActive ? tone.fg : tone.border}`,
+                background: isActive ? tone.bg : '#fff',
+                borderRadius: 8,
+                padding: compact ? '7px 10px' : '10px 11px',
+                cursor: 'pointer',
+                minHeight: compact ? 54 : 82,
+                opacity: compact && !isActive ? 0.92 : 1,
+              }}
+              aria-pressed={isActive}
+            >
+              <div style={{ fontSize: compact ? 10 : 11, color: tone.fg, fontWeight: 850 }}>{filter.label}</div>
+              <div style={{ fontSize: compact ? 18 : 26, lineHeight: compact ? '22px' : '30px', color: '#0f172a', fontWeight: 900 }}>{summaryCount(summary, filter.key)}</div>
+              {!compact && <div className="cmo-subtitle" style={{ fontSize: 10 }}>{filter.short}</div>}
+            </button>
+          )
+        }
+        const actionFilters = QUEUE_FILTERS.filter((f) => f.group === 'action')
+        const refFilters = QUEUE_FILTERS.filter((f) => f.group === 'reference')
+        return (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))', gap: 8 }}>
+              {actionFilters.map((f) => renderCard(f, false))}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', whiteSpace: 'nowrap' }}>參考數字</span>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 170px))', gap: 8, flex: 1 }}>
+                {refFilters.map((f) => renderCard(f, true))}
+              </div>
+            </div>
+          </>
+        )
+      })()}
+    </section>
+  )
+}
+
+type BatchActionPayload = {
+  action: string
+  title?: string
+  item?: string
+  reason?: string
+  instructions?: string
+  days?: number
+  due_date?: string
+  suggested_date?: string
+  priority?: string
+  notify_patient?: boolean
+}
+
+function BatchActionToolbar({
+  selectedRows,
+  busy,
+  onClear,
+  onRun,
+}: {
+  selectedRows: PatientPriorityRow[]
+  busy: boolean
+  onClear: () => void
+  onRun: (payload: BatchActionPayload) => void
+}) {
+  const [action, setAction] = useState('request_missing_data')
+  const [title, setTitle] = useState('請補充最近的報告或檢查資料')
+  const [reason, setReason] = useState('CMO 整理資料時發現目前資訊不足，需要補充後才能完成建議。')
+  const [instructions, setInstructions] = useState('請到上傳頁補上報告照片或 PDF；如果沒有檔案，也可以用文字說明檢查日期、院所與結果。')
+  const [days, setDays] = useState(7)
+  const [priority, setPriority] = useState('medium')
+  const selectedCount = selectedRows.length
+  const hasHighRisk = selectedRows.some((row) => row.priority === 'Critical' || row.priority === 'High' || row.abnormal_count > 0)
+  const needsTitle = action === 'request_missing_data'
+  const needsItem = action === 'create_follow_up'
+  const needsReason = action === 'request_missing_data' || action === 'create_follow_up'
+  const disabled = selectedCount === 0 || busy || (needsTitle && !title.trim()) || (needsItem && !title.trim()) || (needsReason && !reason.trim())
+
+  return (
+    <section className="cmo-card cmo-section" style={{ marginTop: 10, padding: 12, borderColor: selectedCount > 0 ? '#bae6fd' : '#e2e8f0', background: selectedCount > 0 ? '#f8fafc' : '#fff' }}>
+      <div className="cmo-title-row" style={{ marginBottom: 10 }}>
+        <div>
+          <h2 className="cmo-section-title" style={{ margin: 0 }}>Batch Action Toolbar</h2>
+          <div className="cmo-subtitle">{selectedCount} selected. Batch resolve/snooze only touches follow-up and missing-data tasks; high-risk patients are blocked by backend guardrails.</div>
+        </div>
+        <button type="button" className="cmo-button" disabled={selectedCount === 0 || busy} onClick={onClear}>Clear selection</button>
+      </div>
+      {hasHighRisk && (
+        <div style={{ border: '1px solid #fecdd3', background: '#fff1f2', color: '#991b1b', borderRadius: 8, padding: '8px 10px', fontSize: 12, marginBottom: 10 }}>
+          Selection includes Critical/High or abnormal patients. Snooze, resolve, and low-priority actions will be blocked for those patients.
+        </div>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 240px) repeat(auto-fit, minmax(180px, 1fr))', gap: 8, alignItems: 'end' }}>
+        <label className="cmo-field">
+          <span className="cmo-kpi-label">Action</span>
+          <select className="cmo-select" value={action} onChange={(event) => setAction(event.target.value)}>
+            <option value="request_missing_data">Request missing data</option>
+            <option value="create_follow_up">Create follow-up</option>
+            <option value="snooze">Snooze operational tasks</option>
+            <option value="resolve_operational">Resolve operational tasks</option>
+            <option value="set_low_priority">Set operational tasks low priority</option>
+          </select>
+        </label>
+        {(needsTitle || needsItem) && (
+          <label className="cmo-field">
+            <span className="cmo-kpi-label">{needsItem ? 'Follow-up item' : 'Missing data title'}</span>
+            <input className="cmo-input" value={title} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+        )}
+        {needsReason && (
+          <label className="cmo-field">
+            <span className="cmo-kpi-label">Reason</span>
+            <input className="cmo-input" value={reason} onChange={(event) => setReason(event.target.value)} />
+          </label>
+        )}
+        {action === 'request_missing_data' && (
+          <label className="cmo-field">
+            <span className="cmo-kpi-label">User instructions</span>
+            <input className="cmo-input" value={instructions} onChange={(event) => setInstructions(event.target.value)} />
+          </label>
+        )}
+        <label className="cmo-field">
+          <span className="cmo-kpi-label">Days / due</span>
+          <input className="cmo-input" type="number" min={1} max={90} value={days} onChange={(event) => setDays(Number(event.target.value) || 7)} />
+        </label>
+        <label className="cmo-field">
+          <span className="cmo-kpi-label">Priority</span>
+          <select className="cmo-select" value={priority} onChange={(event) => setPriority(event.target.value)}>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          className="cmo-button primary"
+          disabled={disabled}
+          onClick={() => onRun({
+            action,
+            title: needsTitle ? title : undefined,
+            item: needsItem ? title : undefined,
+            reason: needsReason ? reason : undefined,
+            instructions: action === 'request_missing_data' ? instructions : undefined,
+            days,
+            priority,
+            notify_patient: true,
+          })}
+        >
+          {busy ? 'Running…' : 'Run audited batch'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function PriorityWorkQueue({
+  rows,
+  activeKey,
+  allRowsCount,
+  onOpenUrl,
+  onOpenWorkspace,
+  selectedIds,
+  onToggleSelected,
+  onRequestMissing,
+  onSnooze,
+  onResolve,
+}: {
+  rows: PatientPriorityRow[]
+  activeKey: QueueFilterKey
+  allRowsCount: number
+  onOpenUrl: (url: string) => void
+  onOpenWorkspace: (patientId: string) => void
+  selectedIds: Set<string>
+  onToggleSelected: (patientId: string) => void
+  onRequestMissing: (row: PatientPriorityRow) => void
+  onSnooze: (row: PatientPriorityRow) => void
+  onResolve: (row: PatientPriorityRow) => void
+}) {
+  const activeLabel = QUEUE_FILTERS.find((filter) => filter.key === activeKey)?.label ?? 'All pending'
+  return (
+    <section className="cmo-card cmo-section" style={{ marginTop: 10 }}>
+      <div className="cmo-title-row" style={{ marginBottom: 10 }}>
+        <div>
+          <h2 className="cmo-section-title" style={{ margin: 0 }}>Priority Work Queue</h2>
+          <div className="cmo-subtitle">One row per patient. Expand a row for source-level review items and deep links.</div>
+        </div>
+        <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#475569' }}>
+          {rows.length} / {allRowsCount} patients · {activeLabel}
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <div className="cmo-cockpit-empty" style={{ border: '1px dashed #cbd5e1', borderRadius: 8, padding: 16, color: '#64748b', fontSize: 13 }}>
+          No patients match this filter. Switch filters or refresh the live queue after the backend sync completes.
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {rows.map((row) => {
+            const tone = priorityTone(row.priority)
+            const latestSource = row.new_sources.length ? row.new_sources.join(' · ') : row.latest_event_type
+            const selected = selectedIds.has(row.patient_id)
+            const hasUnsafeRisk = row.priority === 'Critical' || row.priority === 'High' || row.abnormal_count > 0
+            const hasOperationalTasks = row.follow_up_due || row.missing_data_count > 0 || row.matched_buckets.includes('missing_data_requests')
+            return (
+              <article
+                key={row.patient_id}
+                className="cmo-card"
+                style={{ padding: 12, borderColor: tone.border, background: row.priority === 'Critical' ? '#fffafa' : '#fff' }}
+              >
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, alignItems: 'start' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#64748b', fontWeight: 800 }}>
+                        <input type="checkbox" checked={selected} onChange={() => onToggleSelected(row.patient_id)} />
+                        Select
+                      </label>
+                      <strong style={{ color: '#0f172a', fontSize: 14 }}>{row.patient}</strong>
+                      <span className="cmo-badge" style={{ background: tone.bg, color: tone.fg }}>{row.priority}</span>
+                    </div>
+                    <div className="cmo-subtitle" style={{ fontSize: 11, marginTop: 2 }}>{row.patient_public_id}</div>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                      <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>{row.pending_count} pending</span>
+                      {row.abnormal_count > 0 && <span className="cmo-badge" style={{ background: '#fff1f2', color: '#be123c' }}>{row.abnormal_count} abnormal</span>}
+                      {row.draft_ready_count > 0 && <span className="cmo-badge" style={{ background: '#ecfdf5', color: '#047857' }}>{row.draft_ready_count} draft ready</span>}
+                      {row.missing_data_count > 0 && <span className="cmo-badge" style={{ background: '#fff7ed', color: '#c2410c' }}>{row.missing_data_count} missing</span>}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 850, color: '#0f172a' }}>{row.latest_event}</div>
+                    <div className="cmo-subtitle" style={{ fontSize: 11, marginTop: 3 }}>
+                      {latestSource} · Updated {formatRelative(row.last_updated)}
+                    </div>
+                    <div style={{ marginTop: 7, fontSize: 12, color: '#334155' }}>
+                      Suggested action: <strong>{row.suggested_action}</strong>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="cmo-kpi-label">CMO status</div>
+                    <div style={{ fontSize: 13, color: '#0f172a', fontWeight: 800 }}>{row.cmo_status}</div>
+                    <div className="cmo-subtitle" style={{ fontSize: 11, marginTop: 4 }}>
+                      {row.matched_buckets.slice(0, 3).join(' · ') || 'No active bucket'}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', minWidth: 220 }}>
+                    <button type="button" className="cmo-button primary" onClick={() => onOpenUrl(row.review_url)}>Review Now</button>
+                    <button type="button" className="cmo-button" onClick={() => onOpenWorkspace(row.patient_id)}>Workspace</button>
+                    <button type="button" className="cmo-button" onClick={() => onRequestMissing(row)}>Request Missing Data</button>
+                    <button
+                      type="button"
+                      className="cmo-button"
+                      disabled={row.draft_ready_count === 0}
+                      title={row.draft_ready_count === 0 ? 'No CMO-confirmed draft is ready to publish.' : 'Open publish readiness for preview and confirmation.'}
+                      onClick={() => onOpenUrl(`/cmo/patients/${row.patient_id}#publish-readiness`)}
+                    >
+                      Publish Draft
+                    </button>
+                    <button type="button" className="cmo-button" disabled={hasUnsafeRisk || !hasOperationalTasks} title={hasUnsafeRisk ? 'High-risk or abnormal rows cannot be snoozed in batch.' : hasOperationalTasks ? 'Snooze eligible follow-up and missing-data tasks.' : 'No follow-up or missing-data task to snooze.'} onClick={() => onSnooze(row)}>Snooze</button>
+                    <button type="button" className="cmo-button" disabled={hasUnsafeRisk || !hasOperationalTasks} title={hasUnsafeRisk ? 'High-risk or abnormal rows require item-level review before resolve.' : hasOperationalTasks ? 'Resolve eligible operational tasks only.' : 'No operational task to resolve.'} onClick={() => onResolve(row)}>Mark Resolved</button>
+                  </div>
+                </div>
+                <details style={{ marginTop: 10 }}>
+                  <summary style={{ cursor: 'pointer', color: '#0f766e', fontSize: 12, fontWeight: 850 }}>
+                    {row.items.length} source item{row.items.length === 1 ? '' : 's'} · open review details
+                  </summary>
+                  <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                    {row.items.slice(0, 6).map((item, index) => {
+                      const itemTone = item.priority === 'high' ? priorityTone('Critical') : item.priority === 'medium' ? priorityTone('Medium') : priorityTone('Low')
+                      return (
+                        <div
+                          key={`${item.id}:${index}`}
+                          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8, alignItems: 'center', border: '1px solid #e2e8f0', borderRadius: 8, padding: 8 }}
+                        >
+                          <div>
+                            <strong style={{ fontSize: 12, color: '#0f172a' }}>{item.target_label}</strong>
+                            <div className="cmo-subtitle" style={{ fontSize: 11 }}>{item.target_type}{item.target_id ? ` · ${item.target_id}` : ''}</div>
+                          </div>
+                          <div>
+                            <span className="cmo-badge" style={{ background: itemTone.bg, color: itemTone.fg }}>{item.bucket}</span>
+                            <div className="cmo-subtitle" style={{ fontSize: 11, marginTop: 3 }}>{item.source} · {item.status}</div>
+                          </div>
+                          <div style={{ fontSize: 12, color: '#334155' }}>{item.next_action}</div>
+                          <button type="button" className="cmo-button" onClick={() => onOpenUrl(item.review_url)}>Open item</button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </details>
+              </article>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
 }
 
 function CockpitQueues({ buckets, onOpen }: { buckets: CockpitBucket[]; onOpen: (patientId: string) => void }) {
@@ -136,8 +553,8 @@ function CockpitQueues({ buckets, onOpen }: { buckets: CockpitBucket[]; onOpen: 
     <section className="cmo-card cmo-section" style={{ marginTop: 10 }}>
       <div className="cmo-title-row" style={{ marginBottom: 10 }}>
         <div>
-          <h2 className="cmo-section-title" style={{ margin: 0 }}>CMO Cockpit Queue · 8+1</h2>
-          <div className="cmo-subtitle">Start here for the next CMO action. Every row shows target, source, current status, and what the patient will see after completion.</div>
+          <h2 className="cmo-section-title" style={{ margin: 0 }}>Priority Queue</h2>
+          <div className="cmo-subtitle">Start here. Every row shows patient, target, priority, source, current status, next action, and patient-visible effect.</div>
         </div>
         <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#475569' }}>
           {buckets.reduce((sum, bucket) => sum + bucket.count, 0)} work items
@@ -226,6 +643,8 @@ export default function WorkbenchPage() {
   const searchParams = useSearchParams()
   const [stats, setStats] = useState<Stats | null>(null)
   const [queue, setQueue] = useState<QueueItem[]>([])
+  const [cockpitSummary, setCockpitSummary] = useState<CockpitSummary | null>(null)
+  const [patientQueueRows, setPatientQueueRows] = useState<PatientPriorityRow[]>([])
   const [cockpitBuckets, setCockpitBuckets] = useState<CockpitBucket[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -245,10 +664,14 @@ export default function WorkbenchPage() {
   const [cohortFilter, setCohortFilter] = useState<string>(() => searchParams.get('cohort') ?? '')
   const [followFilter, setFollowFilter] = useState<'all' | FollowUpStatus>(() => (searchParams.get('follow') as 'all' | FollowUpStatus) || 'all')
   const [sortKey, setSortKey] = useState<SortKey>(() => (searchParams.get('sort') as SortKey) || 'risk_desc')
+  const [queueFilter, setQueueFilter] = useState<QueueFilterKey>(() => (searchParams.get('queue') as QueueFilterKey) || 'all_pending')
   const [drawerPatientId, setDrawerPatientId] = useState<string | null>(initialPatientId)
   const [drawerOrigin, setDrawerOrigin] = useState<DrawerOrigin>(initialOrigin)
   const [drawerOriginContext, setDrawerOriginContext] = useState<string | undefined>(initialOriginContext)
   const [reviewedAlerts, setReviewedAlerts] = useState<Set<string>>(() => loadReviewedAlerts())
+  const [selectedPatientIds, setSelectedPatientIds] = useState<Set<string>>(new Set())
+  const [batchBusy, setBatchBusy] = useState(false)
+  const [batchNotice, setBatchNotice] = useState('')
 
   // Sync filters + drawer to URL (replace, not push — no history bloat).
   // Only run on changes after mount.
@@ -259,6 +682,7 @@ export default function WorkbenchPage() {
     if (followFilter !== 'all') next.set('follow', followFilter)
     if (cohortFilter) next.set('cohort', cohortFilter)
     if (sortKey !== 'risk_desc') next.set('sort', sortKey)
+    if (queueFilter !== 'all_pending') next.set('queue', queueFilter)
     const pid = extra && 'patient' in extra ? extra.patient : drawerPatientId
     if (pid) next.set('patient', pid)
     const from = extra?.from ?? drawerOrigin
@@ -267,10 +691,10 @@ export default function WorkbenchPage() {
     if (pid && ctx) next.set('ctx', ctx)
     const qs = next.toString()
     router.replace(qs ? `?${qs}` : '?', { scroll: false })
-  }, [router, search, riskFilter, followFilter, cohortFilter, sortKey, drawerPatientId, drawerOrigin, drawerOriginContext])
+  }, [router, search, riskFilter, followFilter, cohortFilter, sortKey, queueFilter, drawerPatientId, drawerOrigin, drawerOriginContext])
 
   // Push filter changes to URL whenever they change (after mount)
-  const filterDeps = [search, riskFilter, followFilter, cohortFilter, sortKey]
+  const filterDeps = [search, riskFilter, followFilter, cohortFilter, sortKey, queueFilter]
   useEffect(() => { syncUrl() }, filterDeps) // eslint-disable-line react-hooks/exhaustive-deps
 
   const worklistRef = useRef<HTMLElement | null>(null)
@@ -289,10 +713,14 @@ export default function WorkbenchPage() {
       ])
       setStats(nextStats)
       setQueue(unwrapQueue(nextQueue))
+      setCockpitSummary(nextCockpit.summary ?? null)
+      setPatientQueueRows(safeArray(nextCockpit.patients))
       setCockpitBuckets(nextCockpit.buckets)
     } catch (error) {
       setStats(null)
       setQueue([])
+      setCockpitSummary(null)
+      setPatientQueueRows([])
       setCockpitBuckets([])
       setLoadError(errorMessage(error))
     } finally {
@@ -423,8 +851,66 @@ export default function WorkbenchPage() {
     })
   }, [patients, search, riskFilter, followFilter, cohortFilter, sortKey])
 
+  const filteredPatientQueueRows = useMemo(() => {
+    if (showDemo) return []
+    return patientQueueRows.filter((row) => patientMatchesFilter(row, queueFilter))
+  }, [patientQueueRows, queueFilter, showDemo])
+  const selectedPatientRows = useMemo(() => patientQueueRows.filter((row) => selectedPatientIds.has(row.patient_id)), [patientQueueRows, selectedPatientIds])
+
   const hasActiveFilter = search.trim().length > 0 || riskFilter !== 'all' || followFilter !== 'all' || cohortFilter !== ''
   const clearAllFilters = () => { setSearch(''); setRiskFilter('all'); setFollowFilter('all'); setCohortFilter('') }
+  const toggleSelectedPatient = (patientId: string) => {
+    setSelectedPatientIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(patientId)) next.delete(patientId)
+      else next.add(patientId)
+      return next
+    })
+  }
+  const runBatchAction = async (payload: BatchActionPayload, patientIds?: string[]) => {
+    const ids = patientIds ?? Array.from(selectedPatientIds)
+    if (ids.length === 0) return
+    setBatchBusy(true)
+    setBatchNotice('')
+    try {
+      const result = await api.post('/api/cmo/workbench/batch-actions', { ...payload, patient_ids: ids }) as {
+        updated?: unknown[]
+        blocked_high_risk_patients?: string[]
+        skipped?: unknown[]
+      }
+      const blocked = result.blocked_high_risk_patients?.length ?? 0
+      const skipped = result.skipped?.length ?? 0
+      setBatchNotice(`Batch completed: ${result.updated?.length ?? 0} patient rows touched${blocked ? ` · ${blocked} blocked by high-risk guardrail` : ''}${skipped ? ` · ${skipped} skipped pending CMO review` : ''}.`)
+      await loadWorkbench()
+      if (!patientIds) setSelectedPatientIds(new Set())
+    } catch (error) {
+      setBatchNotice(error instanceof Error ? error.message : 'Batch action failed.')
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+  const requestMissingForRow = (row: PatientPriorityRow) => {
+    const title = window.prompt('需要使用者補什麼資料？', row.latest_event || '請補充最近的報告或檢查資料')
+    if (!title?.trim()) return
+    const reason = window.prompt('為什麼需要這份資料？', row.suggested_action || 'CMO 整理資料時發現目前資訊不足，需要補充後才能完成建議。')
+    if (!reason?.trim()) return
+    void runBatchAction({
+      action: 'request_missing_data',
+      title: title.trim(),
+      reason: reason.trim(),
+      instructions: '請到上傳頁補上報告照片或 PDF；如果沒有檔案，也可以用文字說明檢查日期、院所與結果。',
+      priority: row.priority === 'Critical' || row.priority === 'High' ? 'high' : 'medium',
+      notify_patient: true,
+    }, [row.patient_id])
+  }
+  const snoozeRow = (row: PatientPriorityRow) => {
+    void runBatchAction({ action: 'snooze', days: 7 }, [row.patient_id])
+  }
+  const resolveRow = (row: PatientPriorityRow) => {
+    const ok = window.confirm(`Resolve eligible follow-up/missing-data tasks for ${row.patient}? High-risk, user-response, and publish items will remain untouched.`)
+    if (!ok) return
+    void runBatchAction({ action: 'resolve_operational' }, [row.patient_id])
+  }
 
   const markAlertReviewed = (id: string) => {
     setReviewedAlerts((prev) => {
@@ -474,7 +960,7 @@ export default function WorkbenchPage() {
   }
 
   // ── Empty state for entire dashboard ─────────────────────────────────────
-  if (patients.length === 0) {
+  if (patients.length === 0 && patientQueueRows.length === 0) {
     return (
       <div className="cmo-page">
         <div className="cmo-card cmo-section" style={{ textAlign: 'center', padding: 40 }}>
@@ -552,7 +1038,72 @@ export default function WorkbenchPage() {
         </div>
       )}
 
-      <CockpitQueues buckets={cockpitBuckets} onOpen={(patientId) => router.push(`/cmo/patients/${patientId}`)} />
+      {!showDemo && (
+        <CMOStatsBar
+          summary={cockpitSummary}
+          activeKey={queueFilter}
+          onSelect={setQueueFilter}
+        />
+      )}
+
+      {showDemo ? (
+        <section className="cmo-card cmo-section" style={{ marginTop: 10 }}>
+          <div className="cmo-kpi-label">Priority Work Queue</div>
+          <h2 className="cmo-section-title" style={{ margin: '4px 0 0' }}>Live queue hidden in Demo Cohort</h2>
+          <div className="cmo-subtitle">
+            Patient-level triage is connected to the real CMO API. Demo patients remain in the secondary worklist below so test data never looks publishable.
+          </div>
+        </section>
+      ) : patientQueueRows.length > 0 ? (
+        <>
+          <BatchActionToolbar
+            selectedRows={selectedPatientRows}
+            busy={batchBusy}
+            onClear={() => setSelectedPatientIds(new Set())}
+            onRun={(payload) => runBatchAction(payload)}
+          />
+          {batchNotice && (
+            <div className="cmo-card" style={{ marginTop: 8, padding: '8px 10px', background: '#f8fafc', color: '#334155', fontSize: 12 }}>
+              {batchNotice}
+            </div>
+          )}
+          <PriorityWorkQueue
+            rows={filteredPatientQueueRows}
+            activeKey={queueFilter}
+            allRowsCount={patientQueueRows.length}
+            onOpenUrl={(url) => router.push(url)}
+            onOpenWorkspace={(patientId) => router.push(`/cmo/patients/${patientId}`)}
+            selectedIds={selectedPatientIds}
+            onToggleSelected={toggleSelectedPatient}
+            onRequestMissing={requestMissingForRow}
+            onSnooze={snoozeRow}
+            onResolve={resolveRow}
+          />
+        </>
+      ) : (
+        <CockpitQueues buckets={cockpitBuckets} onOpen={(patientId) => router.push(`/cmo/patients/${patientId}`)} />
+      )}
+
+      <div className="cmo-card cmo-operator-strip" style={{
+        display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px',
+        marginTop: 10, marginBottom: 12, flexWrap: 'wrap',
+      }}>
+        <span className="cmo-kpi-label">Queue controls</span>
+        <button type="button" className="cmo-button primary" onClick={loadWorkbench}>Refresh live queue</button>
+        <span className="cmo-subtitle" style={{ fontSize: 12 }}>
+          Review flow: Priority Queue → Patient Workspace → Preview / Publish → Audit.
+        </span>
+        <span className="cmo-operator-meta" style={{ marginLeft: 'auto', color: '#94a3b8', fontSize: 11 }}>
+          Total {kpis.totalPatients} patient{kpis.totalPatients > 1 ? 's' : ''} · Avg health {kpis.avgHealth}/100
+        </span>
+      </div>
+
+      <details className="cmo-command-secondary">
+        <summary>
+          Secondary analytics, cohorts, and legacy worklist
+          <span>{worklist.length} filtered rows · {enrichedAlerts.length - reviewedAlerts.size} unreviewed alerts</span>
+        </summary>
+        <div className="cmo-command-secondary-body">
 
       {/* ── NHI Health Passbook quick access ──────────────────────────
           Lists patients with imported 健康存摺 drafts (any status).
@@ -800,6 +1351,9 @@ export default function WorkbenchPage() {
           </div>
         )}
       </section>
+
+        </div>
+      </details>
 
       {drawerPatient && (
         <PatientSnapshot
