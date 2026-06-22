@@ -26,6 +26,11 @@ const COLORS = ['#f44336','#e91e63','#9c27b0','#2196f3','#4caf50','#ff9800','#00
 
 const BLANK_MEMBER: NewMember = { name: '', relation: '', age: '', gender: '男', color: '#607d8b' };
 
+async function readApiError(resp: Response, fallback: string) {
+  const err = await resp.json().catch(() => ({}));
+  return err?.error?.message ?? err?.detail ?? fallback;
+}
+
 export default function SetupPage() {
   const router = useRouter();
   const [step, setStep] = useState<1 | 2>(1);
@@ -56,8 +61,7 @@ export default function SetupPage() {
         body: JSON.stringify({ family_name: familyName.trim() || '我的家庭' }),
       });
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        setStep1Error(err?.detail ?? '建立失敗，請稍後再試');
+        setStep1Error(await readApiError(resp, '建立失敗，請稍後再試'));
         return;
       }
       setStep(2);
@@ -83,8 +87,7 @@ export default function SetupPage() {
         body: JSON.stringify({ join_code: code }),
       });
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        setStep1Error(err?.detail ?? '加入失敗，請確認代碼後再試');
+        setStep1Error(await readApiError(resp, '加入失敗，請確認代碼後再試'));
         return;
       }
       // Joined an existing family — skip member setup, go to dashboard
