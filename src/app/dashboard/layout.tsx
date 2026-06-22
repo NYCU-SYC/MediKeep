@@ -81,6 +81,139 @@ function MobileNavItem({
   );
 }
 
+function MobileMenuSheet({
+  open,
+  onClose,
+  pathname,
+  navHref,
+}: {
+  open: boolean;
+  onClose: () => void;
+  pathname: string;
+  navHref: (href: string) => string;
+}) {
+  if (!open) return null;
+
+  const isActive = (href: string) => href === '/dashboard'
+    ? pathname === href
+    : pathname === href || pathname.startsWith(`${href}/`);
+
+  return (
+    <div
+      className="mobile-menu-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="全部功能"
+    >
+      <button
+        type="button"
+        aria-label="關閉全部功能選單"
+        onClick={onClose}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          background: 'rgba(15,23,42,0.38)',
+        }}
+      />
+      <section className="mobile-menu-sheet">
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          padding: '16px 18px 12px',
+          borderBottom: '1px solid var(--hk-line)',
+        }}>
+          <div>
+            <div style={{ fontSize: '17px', fontWeight: 850, color: 'var(--hk-ink)' }}>全部功能</div>
+            <div style={{ fontSize: '12px', color: 'var(--hk-ink-2)', marginTop: '2px' }}>
+              健康細節、資料紀錄與急診工具
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="關閉"
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: 19,
+              background: '#f1f5f9',
+              color: '#334155',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 22,
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ padding: '12px 14px 18px', overflowY: 'auto', maxHeight: 'calc(84vh - 68px)' }}>
+          {menuSections.map((section) => (
+            <div key={section.label} style={{ marginBottom: '14px' }}>
+              <div style={{
+                fontSize: '11px',
+                fontWeight: 850,
+                color: '#64748b',
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                padding: '4px 4px 8px',
+              }}>
+                {section.label}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                {section.items.map((item) => {
+                  const active = isActive(item.href);
+                  return (
+                    <Link
+                      key={item.name}
+                      href={navHref(item.href)}
+                      onClick={onClose}
+                      aria-current={active ? 'page' : undefined}
+                      style={{
+                        minHeight: '58px',
+                        borderRadius: '12px',
+                        border: `1px solid ${active ? '#99f6e4' : 'var(--hk-line)'}`,
+                        background: active ? '#f0fdfa' : '#fff',
+                        color: active ? '#0f766e' : 'var(--hk-ink)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '10px 11px',
+                        boxShadow: active ? '0 6px 18px rgba(15,118,110,0.10)' : 'none',
+                      }}
+                    >
+                      <span style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 9,
+                        background: active ? '#ccfbf1' : '#f8fafc',
+                        color: active ? '#0f766e' : '#475569',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>
+                        <Icon name={item.icon} size={17} />
+                      </span>
+                      <span style={{ fontSize: '13px', fontWeight: 800, lineHeight: 1.25 }}>{item.name}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function MemberActionBar({
   canUseFamilyUi,
   onSwitchMember,
@@ -244,6 +377,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const searchKey = searchParams.toString();
   const {
     activeMember, setActiveMember,
     members, setMembers, setMembersLoading,
@@ -253,6 +387,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   const [familyName, setFamilyName] = useState('我的家庭');
   const [canUseFamilyUi, setCanUseFamilyUi] = useState(false);
   const [displayName, setDisplayName] = useState('');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   // ── Auth check ───────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -325,6 +460,10 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
     if (href === '/dashboard/settings') return href;
     return memberHref(href, activeMember);
   };
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname, searchKey]);
 
   const switchMember = (member: string) => {
     const normalized = normalizeMemberName(member);
@@ -653,7 +792,37 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             </>
           )}
         </div>}
+
+        <button
+          type="button"
+          onClick={() => setMobileMenuOpen(true)}
+          aria-label="開啟全部功能"
+          style={{
+            flexShrink: 0,
+            minHeight: '36px',
+            padding: '7px 10px',
+            borderRadius: '11px',
+            background: '#0f766e',
+            color: '#fff',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+            fontSize: '12px',
+            fontWeight: 850,
+            boxShadow: '0 6px 14px rgba(15,118,110,0.22)',
+          }}
+        >
+          <span style={{ fontSize: 15, lineHeight: 1 }}>☰</span>
+          全部
+        </button>
       </header>
+
+      <MobileMenuSheet
+        open={mobileMenuOpen}
+        onClose={() => setMobileMenuOpen(false)}
+        pathname={pathname}
+        navHref={navHref}
+      />
 
       {/* ── Main Content ─────────────────────────────────────────────────────────── */}
       <main className="app-main">
