@@ -36,7 +36,7 @@ type MemberOverview = { id: string; name: string; relation: string; age: number 
 
 // ── Vital types used for abnormal detection on the home ───────────────────────
 const VITAL_TYPES = [
-  { key: 'blood_pressure', label: '血壓', format: (r: RecordOut) => (r.value2 ? `${r.value1}/${r.value2}` : r.value1 ?? '–') },
+  { key: 'blood_pressure', label: '血壓', format: (r: RecordOut) => (r.value2 ? `${r.value1}/${r.value2} mmHg` : r.value1 ? `收縮壓 ${r.value1} mmHg` : '–') },
   { key: 'glucose', label: '血糖', format: (r: RecordOut) => r.value1 ?? '–' },
   { key: 'heart_rate', label: '心跳', format: (r: RecordOut) => r.value1 ?? '–' },
   { key: 'bmi', label: 'BMI', format: (r: RecordOut) => r.value1 ?? '–' },

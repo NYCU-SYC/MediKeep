@@ -9,11 +9,18 @@ import { normalizeMemberName, uniqueMemberNames } from '@/lib/members'
 import PatientContentEntryLauncher, { sendToPatientContentPanel } from './_components/PatientContentEntryDrawer'
 import { PriorityBadge, DataSourceBadge, ReviewStatusBadge, ClinicalPublishBadge, CriticalTile, type ReviewPriority } from './_components/badges'
 import { StatCard, EmptyState, FormField, QuickChipRow, RecordList, DiffBox } from './_components/primitives'
+import {
+  defaultRecommendationForm, recommendationFormFromRow,
+  simplifyMedicalLanguage, recommendationSourceFromItem, recommendationChecks, allRecommendationChecksPass,
+  PUBLISH_MODE_COPY, formatDate, RECORD_LABELS, DOC_LABELS, formatRecordValue, formatFileSize,
+} from './_lib'
+import { RecommendationEditor, reviewAnchorForTarget } from './_components/RecommendationEditor'
+import { UnlinkedItemsPanel, TimelinePanel, RecordTable, ImagingTable } from './_components/tables'
 
 type TabKey = 'workspace' | 'overview' | 'fill' | 'requests' | 'problems' | 'readiness' | 'records' | 'documents' | 'imaging' | 'audit'
 type ProblemFilter = 'all' | 'open' | 'verified' | 'published'
 type ProblemStatus = 'underlying' | 'following' | 'resolved'
-type PublishMode = 'publish_now' | 'verify_draft' | 'verify_needs_secondary_review'
+export type PublishMode = 'publish_now' | 'verify_draft' | 'verify_needs_secondary_review'
 type SourceAssignmentTargetType = 'problem' | 'condition' | 'medication' | 'allergy'
 type DocumentStatusAction = 'needs_review' | 'confirmed' | 'rejected' | 'failed'
 
@@ -54,7 +61,7 @@ interface UnlinkedMedication {
   note?: string | null
 }
 
-interface UnlinkedItems {
+export interface UnlinkedItems {
   conditions: UnlinkedCondition[]
   medications: UnlinkedMedication[]
 }
@@ -73,7 +80,7 @@ interface Medication {
   source_document_id?: string | null
 }
 
-interface HealthRecord {
+export interface HealthRecord {
   id: string
   member_name: string
   record_type: string
@@ -141,7 +148,7 @@ interface ReportedState {
   withdrawn_at: string | null
 }
 
-interface HealthDocument {
+export interface HealthDocument {
   id: string
   member_name: string
   doc_type: string
@@ -175,7 +182,7 @@ interface HealthDocument {
   created_at: string | null
 }
 
-interface DicomStudy {
+export interface DicomStudy {
   id: string
   member_name: string
   modality: string | null
@@ -390,7 +397,7 @@ type ReviewTargetKind =
   | 'follow_up'
   | 'missing_data'
 
-interface MedicalTimelineItem {
+export interface MedicalTimelineItem {
   id: string
   kind: string
   kindKey: TimelineFilter
@@ -404,7 +411,7 @@ interface MedicalTimelineItem {
   selector?: string
 }
 
-interface PriorityReviewItem {
+export interface PriorityReviewItem {
   id: string
   targetKind: ReviewTargetKind
   type: string
@@ -430,7 +437,7 @@ interface PriorityReviewItem {
   }
 }
 
-interface RecommendationSourceRef {
+export interface RecommendationSourceRef {
   id: string
   type: string
   title: string
@@ -438,7 +445,7 @@ interface RecommendationSourceRef {
   status: string
 }
 
-interface CmoRecommendation {
+export interface CmoRecommendation {
   id: string
   series_id: string
   patient_id: string
@@ -460,7 +467,7 @@ interface CmoRecommendation {
   withdrawn_at?: string | null
 }
 
-interface InternalNoteEntry {
+export interface InternalNoteEntry {
   id: string
   created_at?: string | null
   created_by?: string | null
@@ -471,7 +478,7 @@ interface InternalNoteEntry {
   }
 }
 
-interface RecommendationWorkspace {
+export interface RecommendationWorkspace {
   current: CmoRecommendation | null
   published: CmoRecommendation | null
   drafts: CmoRecommendation[]
@@ -479,7 +486,7 @@ interface RecommendationWorkspace {
   internal_notes: InternalNoteEntry[]
 }
 
-interface RecommendationForm {
+export interface RecommendationForm {
   series_id: string
   title: string
   health_summary: string
@@ -489,8 +496,6 @@ interface RecommendationForm {
   source_refs: RecommendationSourceRef[]
 }
 
-const RECORD_LABELS: Record<string, string> = { blood_pressure: '血壓', heart_rate: '心率', glucose: '血糖', weight: '體重', steps: '步數', sleep: '睡眠', bmi: 'BMI', body_fat: '體脂', temperature: '體溫', spo2: '血氧', hba1c: 'HbA1c' }
-const DOC_LABELS: Record<string, string> = { lab_report: '檢驗報告', prescription: '處方', discharge: '出院摘要', image: '影像', other: '其他' }
 const PROBLEM_TEMPLATES: Array<Pick<ProblemForm, 'display_name' | 'display_layman' | 'icd10_code' | 'status' | 'tier'> & { label: string }> = [
   { label: '高血壓', display_name: 'Hypertension', display_layman: '高血壓（血管壓力長期偏高）', icd10_code: 'I10', status: 'underlying', tier: 2 },
   { label: '糖尿病', display_name: 'Type 2 diabetes mellitus', display_layman: '第二型糖尿病（血糖長期偏高）', icd10_code: 'E11.9', status: 'underlying', tier: 2 },
@@ -538,104 +543,6 @@ const DOCUMENT_STATUS_ACTIONS: Array<{ value: DocumentStatusAction; label: strin
   { value: 'failed', label: '處理失敗', help: '格式、畫質或檔案損毀導致無法處理。' },
 ]
 
-const DEFAULT_RECOMMENDATION_TITLE = 'CMO 最新健康建議'
-const INTERNAL_NOTE_MARKERS = ['internal note', 'cmo-only', 'cmo only', 'handoff', 'do not publish', '不要發布', '不要給病人', '內部備註', '交班']
-
-function defaultRecommendationForm(): RecommendationForm {
-  return {
-    series_id: '',
-    title: DEFAULT_RECOMMENDATION_TITLE,
-    health_summary: '',
-    recommendation: '',
-    next_step: '',
-    follow_up_date: '',
-    source_refs: [],
-  }
-}
-
-function recommendationFormFromRow(row: CmoRecommendation | null): RecommendationForm {
-  if (!row) return defaultRecommendationForm()
-  return {
-    series_id: row.series_id,
-    title: row.title || DEFAULT_RECOMMENDATION_TITLE,
-    health_summary: row.health_summary || '',
-    recommendation: row.recommendation || '',
-    next_step: row.next_step || '',
-    follow_up_date: row.follow_up_date || '',
-    source_refs: row.source_refs || [],
-  }
-}
-
-function simplifyMedicalLanguage(text: string) {
-  return text
-    .replace(/\b[A-Z]\d{2}(?:\.\d+)?\b/g, '')
-    .replace(/Hypertension/gi, '高血壓')
-    .replace(/Type 2 diabetes mellitus/gi, '第二型糖尿病')
-    .replace(/Hyperlipidemia/gi, '高血脂')
-    .replace(/Chronic kidney disease|CKD/gi, '慢性腎臟病')
-    .replace(/Suspected atrial fibrillation/gi, '疑似心房顫動')
-    .replace(/\beGFR\b/g, '腎功能指標 eGFR')
-    .replace(/\bHbA1c\b/g, '糖化血色素 HbA1c')
-    .replace(/\bLDL\b/g, '低密度膽固醇 LDL')
-    .replace(/\babnormal findings?\b/gi, '需要留意的結果')
-    .replace(/\bconfirmed\b/gi, '已確認')
-    .replace(/\bunconfirmed\b/gi, '尚未確認')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function recommendationSourceFromItem(item: PriorityReviewItem): RecommendationSourceRef {
-  return {
-    id: item.id,
-    type: item.type,
-    title: item.title,
-    source: item.source,
-    status: item.status,
-  }
-}
-
-function recommendationChecks(form: RecommendationForm) {
-  const text = [form.title, form.health_summary, form.recommendation, form.next_step].join('\n')
-  const lower = text.toLowerCase()
-  const noInternalNote = !INTERNAL_NOTE_MARKERS.some((marker) => lower.includes(marker.toLowerCase()))
-  const noUnconfirmedSources = form.source_refs.every((ref) => {
-    const source = ref.source.toLowerCase()
-    const status = ref.status.toLowerCase()
-    const isSystem = source.includes('system') || source.includes('extracted')
-    const isConfirmed = ['confirmed', 'published', 'accepted', 'reviewed', 'imported'].some((token) => status.includes(token))
-    return !isSystem || isConfirmed
-  })
-  return {
-    plain_language: !/\b[A-Z]\d{2}(?:\.\d+)?\b/.test(text),
-    has_next_step: Boolean(form.next_step.trim()),
-    has_follow_up_or_missing_data: Boolean(form.follow_up_date.trim() || /補資料|補充|上傳|回覆/.test(form.next_step)),
-    no_internal_note: noInternalNote,
-    no_unconfirmed_sources: noUnconfirmedSources,
-    medical_safety_copy: !/保證|一定會|診斷為|絕對/.test(text),
-  }
-}
-
-function allRecommendationChecksPass(checks: Record<string, boolean>) {
-  return Object.values(checks).every(Boolean)
-}
-
-const PUBLISH_MODE_COPY: Record<PublishMode, { label: string; help: string; submit: string }> = {
-  publish_now: {
-    label: 'Accept & Publish now',
-    help: '病人端會立即看到正式資料。',
-    submit: 'Accept modified & publish',
-  },
-  verify_draft: {
-    label: 'Accept as verified draft',
-    help: '只在 CMO Panel 中可見，病人端暫時看不到。',
-    submit: 'Accept modified as draft',
-  },
-  verify_needs_secondary_review: {
-    label: 'Mark for secondary review',
-    help: '保留在 queue 中，需再次確認。',
-    submit: 'Send to secondary review',
-  },
-}
 
 const CHANGE_REQUEST_STATUS_COPY: Record<string, { label: string; bg: string; fg: string; help: string }> = {
   draft: { label: 'Draft', bg: '#f8fafc', fg: '#475569', help: 'Patient has not submitted this request.' },
@@ -745,12 +652,6 @@ async function fetchJson<T>(url: string, fallback: T): Promise<T> {
   }
 }
 
-function formatDate(iso: string | null | undefined) {
-  if (!iso) return '未記錄'
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' })
-}
 
 function todayInputDate() {
   return new Date().toISOString().slice(0, 10)
@@ -834,17 +735,6 @@ function defaultDocumentStatusForm(): DocumentStatusForm {
   }
 }
 
-function formatRecordValue(record: HealthRecord) {
-  if (record.record_type === 'blood_pressure' && record.value1 && record.value2) return `${record.value1}/${record.value2} ${record.unit ?? 'mmHg'}`
-  return `${record.value1 ?? '-'}${record.unit ? ` ${record.unit}` : ''}`
-}
-
-function formatFileSize(bytes: number | null) {
-  if (!bytes) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
 
 function sourceDocumentLabel(doc: HealthDocument) {
   return `${formatDate(doc.doc_date ?? doc.created_at)} · ${DOC_LABELS[doc.doc_type] ?? doc.doc_type} · ${doc.file_name}`
@@ -3088,343 +2978,6 @@ export default function PatientPovPage() {
   )
 }
 
-function RecommendationEditor({
-  form,
-  data,
-  busy,
-  publishConfirmOpen,
-  internalNoteText,
-  onChange,
-  onPlainLanguage,
-  onSaveDraft,
-  onMarkReady,
-  onOpenPublishConfirm,
-  onCancelPublish,
-  onConfirmPublish,
-  onWithdraw,
-  onInternalNoteChange,
-  onSaveInternalNote,
-}: {
-  form: RecommendationForm
-  data: RecommendationWorkspace
-  busy: string
-  publishConfirmOpen: boolean
-  internalNoteText: string
-  onChange: (patch: Partial<RecommendationForm>) => void
-  onPlainLanguage: () => void
-  onSaveDraft: () => void
-  onMarkReady: () => void
-  onOpenPublishConfirm: () => void
-  onCancelPublish: () => void
-  onConfirmPublish: () => void
-  onWithdraw: () => void
-  onInternalNoteChange: (value: string) => void
-  onSaveInternalNote: () => void
-}) {
-  const checks = recommendationChecks(form)
-  const canPublish = allRecommendationChecksPass(checks)
-  const checkItems: Array<[keyof typeof checks, string]> = [
-    ['plain_language', 'Plain language'],
-    ['has_next_step', 'Clear next step'],
-    ['has_follow_up_or_missing_data', 'Follow-up or data state'],
-    ['no_internal_note', 'No internal note'],
-    ['no_unconfirmed_sources', 'No unconfirmed extraction'],
-    ['medical_safety_copy', 'Safe medical wording'],
-  ]
-  const latest = data.current
-  const published = data.published
-  const status = latest?.status ?? 'new draft'
-  const publishTitle = canPublish ? 'Preview before publishing to user.' : 'Publish checklist is incomplete.'
-  return (
-    <div id="recommendation-editor" style={{ marginTop: 12 }}>
-      <div className="cmo-title-row" style={{ alignItems: 'flex-start', marginBottom: 8 }}>
-        <div>
-          <h3 className="cmo-section-title" style={{ margin: 0 }}>Recommendation Editor</h3>
-          <div className="cmo-subtitle">CMO edit mode + user preview. Internal notes are stored separately and never enter this payload.</div>
-        </div>
-        <ReviewStatusBadge status={status} />
-      </div>
-
-      <div className="cmo-grid-2">
-        <div className="cmo-card" style={{ background: '#f8fafc' }}>
-          <div className="cmo-kpi-label">CMO edit</div>
-          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
-            <span className="cmo-kpi-label">Title</span>
-            <input className="cmo-input" value={form.title} onChange={(event) => onChange({ title: event.target.value })} />
-          </label>
-          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
-            <span className="cmo-kpi-label">User-facing health summary</span>
-            <textarea className="cmo-textarea" rows={4} value={form.health_summary} onChange={(event) => onChange({ health_summary: event.target.value })} placeholder="白話說明目前最重要的健康狀態，不放 CMO internal note。" />
-          </label>
-          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
-            <span className="cmo-kpi-label">User-facing recommendation *</span>
-            <textarea className="cmo-textarea" rows={4} value={form.recommendation} onChange={(event) => onChange({ recommendation: event.target.value })} placeholder="給使用者看的建議：簡短、白話、避免診斷承諾。" />
-          </label>
-          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
-            <span className="cmo-kpi-label">Next step *</span>
-            <textarea className="cmo-textarea" rows={2} value={form.next_step} onChange={(event) => onChange({ next_step: event.target.value })} placeholder="例：請上傳最近 3 個月抽血報告，或下次回診時與醫師確認。" />
-          </label>
-          <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
-            <span className="cmo-kpi-label">Follow-up date / state</span>
-            <input className="cmo-input" value={form.follow_up_date} onChange={(event) => onChange({ follow_up_date: event.target.value })} placeholder="例：2026-09-01 / 補資料後 CMO 再審閱" />
-          </label>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
-            <button type="button" className="cmo-button" onClick={onPlainLanguage}>Plain-language conversion</button>
-            <button type="button" className="cmo-button" disabled={busy === 'draft'} onClick={onSaveDraft}>{busy === 'draft' ? 'Saving…' : 'Save Draft'}</button>
-            <button type="button" className="cmo-button" disabled={busy === 'ready'} onClick={onMarkReady}>{busy === 'ready' ? 'Saving…' : 'Mark Ready'}</button>
-            <button type="button" className="cmo-button primary" disabled={!canPublish || busy === 'publish'} title={publishTitle} onClick={onOpenPublishConfirm}>
-              Preview / Publish
-            </button>
-            <button type="button" className="cmo-button" disabled={!published || busy === 'withdraw'} title={!published ? 'No published recommendation to withdraw.' : 'Withdraw from user view with audit trail.'} onClick={onWithdraw}>
-              Withdraw
-            </button>
-          </div>
-        </div>
-
-        <UserPreviewPanel form={form} published={published} />
-      </div>
-
-      <div className="cmo-card" style={{ marginTop: 10, background: '#fff' }}>
-        <div className="cmo-title-row" style={{ marginBottom: 8 }}>
-          <div>
-            <div className="cmo-kpi-label">Publish checklist</div>
-            <div className="cmo-subtitle">All checks must pass before user-facing publish.</div>
-          </div>
-          <span className="cmo-badge" style={{ background: canPublish ? '#ecfdf5' : '#fff7ed', color: canPublish ? '#047857' : '#c2410c' }}>
-            {Object.values(checks).filter(Boolean).length}/{Object.values(checks).length}
-          </span>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 6 }}>
-          {checkItems.map(([key, label]) => (
-            <span key={key} className="cmo-badge" style={{ justifyContent: 'center', background: checks[key] ? '#ecfdf5' : '#fff7ed', color: checks[key] ? '#047857' : '#c2410c' }}>
-              {checks[key] ? '✓' : 'Needs'} {label}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      <div className="cmo-card" style={{ marginTop: 10, background: '#f8fafc' }}>
-        <div className="cmo-kpi-label">Source refs</div>
-        {form.source_refs.length === 0 ? (
-          <div className="cmo-subtitle" style={{ marginTop: 6 }}>No linked review item yet. Use Add Recommendation on a review item or select timeline text.</div>
-        ) : (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-            {form.source_refs.map((ref) => (
-              <span key={ref.id} className="cmo-badge" style={{ background: '#eef2ff', color: '#3730a3' }}>
-                {ref.type} · {ref.title}
-                <button
-                  type="button"
-                  onClick={() => onChange({ source_refs: form.source_refs.filter((item) => item.id !== ref.id) })}
-                  style={{ marginLeft: 6, border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', fontWeight: 900 }}
-                  aria-label={`Remove ${ref.title}`}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <InternalNotePanel
-        value={internalNoteText}
-        notes={data.internal_notes}
-        busy={busy}
-        onChange={onInternalNoteChange}
-        onSave={onSaveInternalNote}
-      />
-
-      <VersionHistoryPanel history={data.history} />
-
-      {publishConfirmOpen && (
-        <PublishConfirmationModal
-          form={form}
-          checks={checks}
-          busy={busy}
-          onCancel={onCancelPublish}
-          onConfirm={onConfirmPublish}
-        />
-      )}
-    </div>
-  )
-}
-
-function UserPreviewPanel({ form, published }: { form: RecommendationForm; published: CmoRecommendation | null }) {
-  return (
-    <div className="cmo-card" style={{ background: '#ffffff', borderColor: '#bae6fd' }}>
-      <div className="cmo-kpi-label">User preview</div>
-      <div style={{ marginTop: 8, padding: 12, borderRadius: 8, background: '#f0fdfa', border: '1px solid #ccfbf1' }}>
-        <div style={{ fontWeight: 850, color: '#0f172a', fontSize: 14 }}>{form.title || DEFAULT_RECOMMENDATION_TITLE}</div>
-        <div style={{ marginTop: 8, color: '#334155', fontSize: 13, lineHeight: 1.6 }}>
-          {form.health_summary || 'CMO 整理完成後，健康摘要會顯示在這裡。'}
-        </div>
-        <div style={{ marginTop: 10, color: '#0f766e', fontWeight: 820, fontSize: 13, lineHeight: 1.55 }}>
-          {form.recommendation || '尚未填寫給使用者看的建議。'}
-        </div>
-        <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: '#fff', border: '1px solid #dbeafe', color: '#1e40af', fontSize: 13 }}>
-          下一步：{form.next_step || '尚未設定'}
-        </div>
-        {form.follow_up_date && <div className="cmo-subtitle" style={{ marginTop: 8 }}>追蹤：{form.follow_up_date}</div>}
-      </div>
-      <div className="cmo-subtitle" style={{ marginTop: 8 }}>
-        Currently published: {published ? `${published.title} · v${published.version} · ${formatDate(published.published_at)}` : 'none'}
-      </div>
-    </div>
-  )
-}
-
-function InternalNotePanel({
-  value,
-  notes,
-  busy,
-  onChange,
-  onSave,
-}: {
-  value: string
-  notes: InternalNoteEntry[]
-  busy: string
-  onChange: (value: string) => void
-  onSave: () => void
-}) {
-  return (
-    <div className="cmo-card" style={{ marginTop: 10, background: '#fff' }}>
-      <div className="cmo-title-row" style={{ marginBottom: 8 }}>
-        <div>
-          <div className="cmo-kpi-label">Internal CMO Note</div>
-          <div className="cmo-subtitle">CMO-only audit note. This is stored separately and cannot be published to user.</div>
-        </div>
-        <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>CMO only</span>
-      </div>
-      <textarea className="cmo-textarea" rows={3} value={value} onChange={(event) => onChange(event.target.value)} placeholder="交班、判斷依據、需二次審閱原因。此內容不會進入 user-facing recommendation。" />
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-        <button type="button" className="cmo-button" disabled={busy === 'internal-note'} onClick={onSave}>
-          {busy === 'internal-note' ? 'Saving…' : 'Save Internal Note'}
-        </button>
-      </div>
-      {notes.length > 0 && (
-        <div className="cmo-list" style={{ marginTop: 10 }}>
-          {notes.slice(0, 4).map((note) => (
-            <div key={note.id} className="cmo-list-item">
-              <div className="cmo-subtitle">{formatDate(note.created_at)} · CMO {note.created_by ?? ''}</div>
-              <div style={{ color: '#0f172a', fontSize: 13, lineHeight: 1.5 }}>{note.snapshot.note}</div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function VersionHistoryPanel({ history }: { history: CmoRecommendation[] }) {
-  return (
-    <div className="cmo-card" style={{ marginTop: 10, background: '#f8fafc' }}>
-      <div className="cmo-title-row" style={{ marginBottom: 8 }}>
-        <div>
-          <div className="cmo-kpi-label">Version history</div>
-          <div className="cmo-subtitle">Every draft, publish, update, and withdrawal creates a version.</div>
-        </div>
-        <span className="cmo-badge" style={{ background: '#eef2ff', color: '#3730a3' }}>{history.length}</span>
-      </div>
-      {history.length === 0 ? (
-        <div className="cmo-subtitle">No recommendation version yet.</div>
-      ) : (
-        <div className="cmo-list">
-          {history.slice(0, 6).map((row) => (
-            <div key={row.id} className="cmo-list-item">
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 5 }}>
-                <ReviewStatusBadge status={row.status} />
-                <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>v{row.version}</span>
-                <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>{formatDate(row.created_at)}</span>
-              </div>
-              <strong style={{ fontSize: 13 }}>{row.title}</strong>
-              <div className="cmo-subtitle" style={{ marginTop: 4 }}>{row.recommendation.slice(0, 130)}{row.recommendation.length > 130 ? '...' : ''}</div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function PublishConfirmationModal({
-  form,
-  checks,
-  busy,
-  onCancel,
-  onConfirm,
-}: {
-  form: RecommendationForm
-  checks: Record<string, boolean>
-  busy: string
-  onCancel: () => void
-  onConfirm: () => void
-}) {
-  const canConfirm = allRecommendationChecksPass(checks)
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 80,
-        background: 'rgba(15, 23, 42, 0.38)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 18,
-      }}
-    >
-      <div className="cmo-card cmo-section" style={{ width: 'min(760px, 96vw)', maxHeight: '88vh', overflow: 'auto', background: '#fff' }}>
-        <div className="cmo-title-row">
-          <div>
-            <h2 className="cmo-section-title" style={{ margin: 0 }}>Publish Confirmation</h2>
-            <div className="cmo-subtitle">Review exactly what the user will see. This action writes a version and sync event.</div>
-          </div>
-          <span className="cmo-badge" style={{ background: canConfirm ? '#ecfdf5' : '#fff7ed', color: canConfirm ? '#047857' : '#c2410c' }}>
-            {canConfirm ? 'Ready' : 'Blocked'}
-          </span>
-        </div>
-        <UserPreviewPanel form={form} published={null} />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 6, marginTop: 10 }}>
-          {Object.entries(checks).map(([key, ok]) => (
-            <span key={key} className="cmo-badge" style={{ background: ok ? '#ecfdf5' : '#fff7ed', color: ok ? '#047857' : '#c2410c' }}>
-              {ok ? '✓' : 'Needs'} {key.replaceAll('_', ' ')}
-            </span>
-          ))}
-        </div>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
-          <button type="button" className="cmo-button" onClick={onCancel}>Cancel</button>
-          <button type="button" className="cmo-button primary" disabled={!canConfirm || busy === 'publish'} onClick={onConfirm}>
-            {busy === 'publish' ? 'Publishing…' : 'Confirm Publish to User'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function reviewAnchorForTarget(targetType: string | null, targetId: string | null) {
-  if (!targetType || !targetId) return null
-  const normalized: Record<string, string> = {
-    source_document: 'document',
-    document: 'document',
-    change_request: 'request',
-    patient_change_request: 'request',
-    reported_state: 'reported',
-    patient_reported_state: 'reported',
-    problem: 'problem',
-    condition: 'condition',
-    medication: 'medication',
-    medication_regimen: 'medication',
-    unlinked_condition: 'unlinked-condition',
-    unlinked_medication: 'unlinked-medication',
-    follow_up: 'follow-up',
-    followup: 'follow-up',
-  }
-  const prefix = normalized[targetType] ?? targetType.replaceAll('_', '-')
-  return `review-item-${prefix}-${targetId}`
-}
 
 function AuditHistoryPanel({ entries, busy, onUndo }: { entries: AuditEntry[]; busy: string; onUndo: (entry: AuditEntry) => void }) {
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -4524,86 +4077,6 @@ function NonProblemPublishPanel({
   return <div className="cmo-card cmo-section">{content}</div>
 }
 
-function UnlinkedItemsPanel({ items }: { items: UnlinkedItems }) {
-  const total = items.conditions.length + items.medications.length
-  return (
-    <div className="cmo-card cmo-section" style={{ gridColumn: '1 / -1' }}>
-      <div className="cmo-title-row">
-        <h2 className="cmo-section-title" style={{ margin: 0 }}>Unlinked Items</h2>
-        <span className="cmo-badge" style={{ background: total ? '#fef3c7' : '#ecfdf5', color: total ? '#a16207' : '#047857' }}>{total} pending</span>
-      </div>
-      <div className="cmo-grid-2" style={{ marginTop: 12 }}>
-        <UnlinkedColumn title="Conditions" rows={items.conditions.map((item) => ({
-          id: `condition-${item.id}`,
-          title: item.display_name || 'Unnamed condition',
-          detail: `${item.icd10_code ?? 'no ICD'} · ${item.status ?? 'status unknown'}`,
-        }))} />
-        <UnlinkedColumn title="Medications" rows={items.medications.map((item) => ({
-          id: `medication-${item.id}`,
-          title: item.drug_name,
-          detail: [item.dose, item.frequency, item.intent].filter(Boolean).join(' · ') || 'No regimen detail',
-        }))} />
-      </div>
-      <div className="cmo-subtitle" style={{ marginTop: 12 }}>
-        BACKEND_NEEDED: persistent many-to-many concept-map join tables. The current endpoint exposes unlinked rows but does not persist link/unlink yet.
-      </div>
-    </div>
-  )
-}
-
-function UnlinkedColumn({ title, rows }: { title: string; rows: Array<{ id: string; title: string; detail: string }> }) {
-  return (
-    <div>
-      <div className="cmo-kpi-label" style={{ marginBottom: 8 }}>{title}</div>
-      <div className="cmo-list">
-        {rows.length === 0 ? <div className="cmo-muted">No unlinked {title.toLowerCase()}.</div> : rows.map((row) => (
-          <div className="cmo-list-item" key={row.id}>
-            <strong>{row.title}</strong>
-            <div className="cmo-subtitle">{row.detail}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function TimelinePanel({ items }: { items: MedicalTimelineItem[] }) {
-  return (
-    <div className="cmo-card cmo-section">
-      <h2 className="cmo-section-title">近期資料時間線</h2>
-      <div className="cmo-list">
-        {items.length === 0 ? <div className="cmo-muted">尚無近期資料。</div> : items.map((item) => (
-          <div className="cmo-list-item" key={item.id} style={{ borderColor: item.important ? '#fbbf24' : '#e2e8f0', background: item.important ? '#fffbeb' : '#fff' }}>
-            <div className="cmo-row">
-              <strong>{item.title}</strong>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#334155' }}>{item.kind}</span>
-                <DataSourceBadge source={item.source} />
-                <ReviewStatusBadge status={item.status} />
-              </div>
-            </div>
-            <div className="cmo-subtitle">{formatDate(item.date)} · {item.detail}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function RecordTable({ records }: { records: HealthRecord[] }) {
-  return (
-    <div className="cmo-card table-wrap">
-      <table className="cmo-table">
-        <thead><tr><th>日期</th><th>成員</th><th>類型</th><th>數值</th><th>備註</th></tr></thead>
-        <tbody>
-          {records.map((record) => (
-            <tr key={record.id}><td>{formatDate(record.recorded_at)}</td><td>{record.member_name}</td><td>{RECORD_LABELS[record.record_type] ?? record.record_type}</td><td><strong>{formatRecordValue(record)}</strong></td><td>{record.note ?? ''}</td></tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
 
 function SourceDocumentReviewPanel({
   documents,
@@ -4979,17 +4452,3 @@ function DocumentTable({ documents }: { documents: HealthDocument[] }) {
   )
 }
 
-function ImagingTable({ studies }: { studies: DicomStudy[] }) {
-  return (
-    <div className="cmo-card table-wrap">
-      <table className="cmo-table">
-        <thead><tr><th>日期</th><th>成員</th><th>Modality</th><th>描述</th><th>影像量</th></tr></thead>
-        <tbody>
-          {studies.map((study) => (
-            <tr key={study.id}><td>{formatDate(study.created_at ?? study.study_date)}</td><td>{study.member_name}</td><td>{study.modality ?? 'DICOM'}</td><td>{study.study_description ?? '未命名檢查'}</td><td>{study.series_count} series · {study.instance_count} images</td></tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}

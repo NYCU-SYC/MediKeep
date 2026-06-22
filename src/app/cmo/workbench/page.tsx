@@ -117,9 +117,18 @@ interface PatientPriorityRow {
   items: CockpitQueueItem[]
 }
 
+interface CockpitPageInfo {
+  page: number
+  per_page: number
+  total: number
+  has_next: boolean
+  has_prev: boolean
+}
+
 interface CockpitEnvelope {
   summary?: CockpitSummary
   patients?: PatientPriorityRow[]
+  page_info?: CockpitPageInfo
   buckets: CockpitBucket[]
 }
 
@@ -139,6 +148,12 @@ type QueueFilterKey =
 // where the filter UI lives.
 
 const REVIEWED_ALERTS_KEY = 'cmo:reviewed-alerts'
+
+// Patient priority queue fetch page size. The backend caps per_page at 200; the
+// queue is risk-sorted so page 1 holds the most urgent rows (fast first paint).
+// Remaining pages are loaded in the background and appended, so client-side
+// filter / sort / "顯示 N / M 位" keep operating over the full set.
+const COCKPIT_PAGE_SIZE = 200
 
 async function fetchJson<T>(url: string): Promise<T> {
   return await api.get(url) as T
@@ -422,9 +437,15 @@ function PriorityWorkQueue({
   onResolve: (row: PatientPriorityRow) => void
 }) {
   const activeLabel = QUEUE_FILTERS.find((filter) => filter.key === activeKey)?.label ?? 'All pending'
+  // Cap rendered rows so the queue stays scannable + fast at mass scale (100s of
+  // patients). Risk-sorted, so the most urgent are always in the first page.
+  const PAGE = 30
+  const [visibleCount, setVisibleCount] = useState(PAGE)
+  // Reset is handled by a `key={queueFilter}` at the call site (remounts on
+  // filter change) — avoids a setState-in-effect cascade.
   return (
     <section className="cmo-card cmo-section" style={{ marginTop: 10 }}>
-      <div className="cmo-title-row" style={{ marginBottom: 10 }}>
+      <div className="cmo-title-row" style={{ marginBottom: 10, position: 'sticky', top: 58, background: '#fff', zIndex: 5, paddingTop: 6, paddingBottom: 6 }}>
         <div>
           <h2 className="cmo-section-title" style={{ margin: 0 }}>Priority Work Queue</h2>
           <div className="cmo-subtitle">One row per patient. Expand a row for source-level review items and deep links.</div>
@@ -439,7 +460,7 @@ function PriorityWorkQueue({
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 8 }}>
-          {rows.map((row) => {
+          {rows.slice(0, visibleCount).map((row) => {
             const tone = priorityTone(row.priority)
             const latestSource = row.new_sources.length ? row.new_sources.join(' · ') : row.latest_event_type
             const selected = selectedIds.has(row.patient_id)
@@ -532,6 +553,13 @@ function PriorityWorkQueue({
               </article>
             )
           })}
+          {rows.length > visibleCount && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '10px 0' }}>
+              <span className="cmo-subtitle">顯示 {visibleCount} / {rows.length} 位（依風險排序，最急者在前）</span>
+              <button type="button" className="cmo-button" onClick={() => setVisibleCount((n) => n + PAGE)}>顯示更多</button>
+              <button type="button" className="cmo-button" onClick={() => setVisibleCount(rows.length)}>顯示全部</button>
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -702,29 +730,56 @@ export default function WorkbenchPage() {
 
   const sync = useSync()
 
+  // Bumped on every load so a stale background page-fetch can detect it has been
+  // superseded (e.g. by a sync-triggered refresh) and stop appending rows.
+  const cockpitReqId = useRef(0)
+
   const loadWorkbench = useCallback(async () => {
+    const reqId = ++cockpitReqId.current
     setLoading(true)
     setLoadError('')
+    let firstPageLoaded = false
     try {
-      const [nextStats, nextQueue, nextCockpit] = await Promise.all([
+      const [nextStats, nextQueue, firstCockpit] = await Promise.all([
         fetchJson<Stats | null>('/api/cmo/workbench/stats'),
         fetchJson<QueueEnvelope | QueueItem[]>('/api/cmo/workbench/queue'),
-        fetchJson<CockpitEnvelope>('/api/cmo/workbench/queues'),
+        fetchJson<CockpitEnvelope>(`/api/cmo/workbench/queues?page=1&per_page=${COCKPIT_PAGE_SIZE}`),
       ])
+      if (cockpitReqId.current !== reqId) return // superseded by a newer load
       setStats(nextStats)
       setQueue(unwrapQueue(nextQueue))
-      setCockpitSummary(nextCockpit.summary ?? null)
-      setPatientQueueRows(safeArray(nextCockpit.patients))
-      setCockpitBuckets(nextCockpit.buckets)
+      setCockpitSummary(firstCockpit.summary ?? null)
+      setPatientQueueRows(safeArray(firstCockpit.patients))
+      setCockpitBuckets(firstCockpit.buckets)
+      firstPageLoaded = true
+      setLoading(false) // page 1 is enough to paint; remaining pages stream in
+
+      // Background-load any remaining pages and append, so client-side filter /
+      // sort / "顯示 N / M 位" keep operating over the full risk-sorted queue.
+      // (≤ COCKPIT_PAGE_SIZE patients → single page, no extra calls.)
+      let info = firstCockpit.page_info
+      let nextPage = (info?.page ?? 1) + 1
+      while (info?.has_next && cockpitReqId.current === reqId) {
+        const more = await fetchJson<CockpitEnvelope>(
+          `/api/cmo/workbench/queues?page=${nextPage}&per_page=${COCKPIT_PAGE_SIZE}`,
+        )
+        if (cockpitReqId.current !== reqId) return
+        setPatientQueueRows((prev) => [...prev, ...safeArray(more.patients)])
+        info = more.page_info
+        nextPage += 1
+      }
     } catch (error) {
-      setStats(null)
-      setQueue([])
-      setCockpitSummary(null)
-      setPatientQueueRows([])
-      setCockpitBuckets([])
-      setLoadError(errorMessage(error))
-    } finally {
-      setLoading(false)
+      if (cockpitReqId.current !== reqId) return
+      if (!firstPageLoaded) {
+        setStats(null)
+        setQueue([])
+        setCockpitSummary(null)
+        setPatientQueueRows([])
+        setCockpitBuckets([])
+        setLoadError(errorMessage(error))
+        setLoading(false)
+      }
+      // A later page failing leaves the rows already loaded in place (usable).
     }
   }, [])
 
@@ -1068,6 +1123,7 @@ export default function WorkbenchPage() {
             </div>
           )}
           <PriorityWorkQueue
+            key={queueFilter}
             rows={filteredPatientQueueRows}
             activeKey={queueFilter}
             allRowsCount={patientQueueRows.length}

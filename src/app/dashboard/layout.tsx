@@ -8,6 +8,7 @@ import { ToastProvider } from './toast-context';
 import { api, setPatientSessionToken } from '@/lib/api';
 import { SyncProvider } from '@/lib/sync';
 import { ALL_MEMBERS, memberHref, normalizeMemberName } from '@/lib/members';
+import { Icon, HeartLogo } from './_components/Icon';
 
 // ── Desktop sidebar — 4 主 tab 置頂，其餘降為次級分組（不刪除任何頁面，全部仍可達） ──
 // 對應改版規劃 §3.1：13 項 → 4 主 tab（首頁/健康/提醒/我的）+ 漸進揭露。
@@ -67,7 +68,7 @@ function MobileNavItem({
         justifyContent: 'center', height: '68px', gap: '3px',
         color: isActive ? 'var(--primary)' : '#94a3b8',
       }}>
-        <span style={{ fontSize: '22px', lineHeight: 1 }}>{item.icon}</span>
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 22 }}><Icon name={item.icon} size={22} /></span>
         <span style={{ fontSize: '10px', fontWeight: isActive ? '700' : '500' }}>{item.name}</span>
         {isActive && (
           <div style={{
@@ -381,8 +382,8 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             <div style={{
               width: '34px', height: '34px', borderRadius: '10px', flexShrink: 0,
               background: 'linear-gradient(135deg, #007bff 0%, #0056b3 100%)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px',
-            }}>💙</div>
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+            }}><HeartLogo size={18} /></div>
             <div>
               <div style={{ fontSize: '15px', fontWeight: '800', color: '#111', lineHeight: 1.1 }}>HealthKeep</div>
               <div style={{ fontSize: '10px', color: '#bbb', marginTop: '2px' }}>{canUseFamilyUi ? '家庭健康守護者' : '個人健康檔案'}</div>
@@ -392,7 +393,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             background: '#f8f9fa', borderRadius: '10px', padding: '10px 12px',
             display: 'flex', alignItems: 'center', gap: '10px',
           }}>
-            <span style={{ fontSize: '20px' }}>{canUseFamilyUi ? '👨‍👩‍👧‍👦' : '👤'}</span>
+            <span style={{ display: 'flex', color: '#475569' }}><Icon name={canUseFamilyUi ? 'family' : '👤'} size={20} /></span>
             <div>
               <div style={{ fontSize: '12px', fontWeight: '700', color: '#333' }}>{canUseFamilyUi ? familyName : (displayName || members[0]?.name || '本人')}</div>
               <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>
@@ -415,8 +416,8 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                     href={navHref(item.href)}
                     className={`sidebar-nav-item${pathname === item.href ? ' sidebar-active' : ''}`}
                   >
-                    <span style={{ marginRight: '10px', fontSize: '15px', width: '20px', textAlign: 'center', flexShrink: 0 }}>
-                      {item.icon}
+                    <span style={{ marginRight: '10px', width: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <Icon name={item.icon} size={18} />
                     </span>
                     <span>{item.name}</span>
                   </Link>
@@ -567,7 +568,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
               transition: 'background 0.15s',
             }}
           >
-            <span>🚪</span> 登出系統
+            <Icon name="logout" size={16} /> 登出系統
           </button>
         </div>
       </aside>
@@ -589,8 +590,8 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             <div style={{
               width: '28px', height: '28px', borderRadius: '8px', flexShrink: 0,
               background: 'linear-gradient(135deg, #007bff 0%, #0056b3 100%)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px',
-            }}>💙</div>
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+            }}><HeartLogo size={16} /></div>
             <div style={{ fontSize: '15px', fontWeight: '800', color: '#111', letterSpacing: '-0.3px' }}>
               HealthKeep
             </div>

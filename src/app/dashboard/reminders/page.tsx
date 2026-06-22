@@ -143,14 +143,23 @@ export default function RemindersPage() {
   const [missingRequests, setMissingRequests] = useState<CmoMissingDataRequest[]>([]);
   const [missingReplies, setMissingReplies] = useState<Record<string, string>>({});
   const [missingReplyBusy, setMissingReplyBusy] = useState('');
+  const [cmoTasksError, setCmoTasksError] = useState(false);
   const loadCmoTasks = useCallback(() => {
     let alive = true;
+    setCmoTasksError(false);
+    // 401 redirects to login inside the api wrapper; only real (network/server)
+    // failures set the error flag so the UI can distinguish "load failed" from
+    // "no CMO tasks" instead of silently showing nothing.
+    const onErr = (err: unknown) => {
+      const status = (err as { status?: number } | null)?.status;
+      if (alive && status !== 401) setCmoTasksError(true);
+    };
     api.get('/api/patients/me/follow-ups')
       .then((r) => { if (alive) setCmoFollowUps(Array.isArray(r) ? (r as CmoFollowUp[]) : []); })
-      .catch(() => { /* 靜默：無追蹤項目或未授權 */ });
+      .catch(onErr);
     api.get('/api/patients/me/missing-data-requests')
       .then((r) => { if (alive) setMissingRequests(Array.isArray(r) ? (r as CmoMissingDataRequest[]) : []); })
-      .catch(() => { /* 靜默：無補資料任務或未授權 */ });
+      .catch(onErr);
     return () => { alive = false; };
   }, []);
   useEffect(() => loadCmoTasks(), [loadCmoTasks]);
@@ -650,6 +659,13 @@ export default function RemindersPage() {
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* CMO tasks failed to load (distinct from "no tasks") */}
+        {cmoTasksError && cmoFollowUps.length === 0 && missingRequests.length === 0 && (
+          <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px', color: '#c2410c', fontSize: '13px' }}>
+            暫時無法載入 CMO 醫療團隊的追蹤與補資料任務，請稍後重新整理。你的提醒不受影響。
           </div>
         )}
 
