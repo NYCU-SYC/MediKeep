@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { setPatientSessionToken } from '@/lib/api';
 
 type Tab = 'create' | 'join';
 
@@ -64,6 +65,7 @@ export default function SetupPage() {
         setStep1Error(await readApiError(resp, '建立失敗，請稍後再試'));
         return;
       }
+      setPatientSessionToken(null);
       setStep(2);
     } catch {
       setStep1Error('網路錯誤，請稍後再試');
@@ -77,7 +79,7 @@ export default function SetupPage() {
     e.preventDefault();
     setStep1Error('');
     const code = joinCode.trim().toUpperCase();
-    if (code.length !== 8) { setStep1Error('請輸入 8 碼的加入代碼'); return; }
+    if (code.length < 8 || code.length > 20) { setStep1Error('請輸入 8 到 20 碼的加入代碼'); return; }
     setStep1Submitting(true);
     try {
       const resp = await fetch('/api/auth/join', {
@@ -90,6 +92,7 @@ export default function SetupPage() {
         setStep1Error(await readApiError(resp, '加入失敗，請確認代碼後再試'));
         return;
       }
+      setPatientSessionToken(null);
       // Joined an existing family — skip member setup, go to dashboard
       router.replace('/dashboard');
     } catch {
@@ -239,26 +242,26 @@ export default function SetupPage() {
           {tab === 'join' && (
             <form onSubmit={handleJoin}>
               <p style={{ fontSize: '13px', color: '#666', marginBottom: '20px', lineHeight: 1.6 }}>
-                輸入家庭管理員提供的 8 碼代碼，加入共用家庭健康紀錄。加入後可看到的資料仍依帳號角色與後續授權設定為準。
+                輸入家庭管理員提供的加入代碼，加入共用家庭健康紀錄。加入後可看到的資料仍依帳號角色與後續授權設定為準。
               </p>
               <label style={{ fontSize: '13px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '6px' }}>
                 加入代碼
               </label>
               <input
-                type="text" placeholder="例：HK3B7XM2"
+                type="text" placeholder="例：NHI2605302258"
                 value={joinCode}
-                onChange={e => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
-                maxLength={8}
+                onChange={e => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20))}
+                maxLength={20}
                 style={{
                   width: '100%', padding: '12px 14px', borderRadius: '10px',
                   border: '1.5px solid #e0e0e0', fontSize: '22px',
                   fontFamily: 'monospace', outline: 'none', marginBottom: '20px',
-                  letterSpacing: '6px', textAlign: 'center', boxSizing: 'border-box',
+                  letterSpacing: joinCode.length > 8 ? '2px' : '6px', textAlign: 'center', boxSizing: 'border-box',
                 }}
               />
               {step1Error && <div style={errorBox}>{step1Error}</div>}
-              <button type="submit" disabled={step1Submitting || joinCode.length !== 8}
-                style={{ ...btnPrimary, opacity: (step1Submitting || joinCode.length !== 8) ? 0.5 : 1 }}>
+              <button type="submit" disabled={step1Submitting || joinCode.trim().length < 8 || joinCode.trim().length > 20}
+                style={{ ...btnPrimary, opacity: (step1Submitting || joinCode.trim().length < 8 || joinCode.trim().length > 20) ? 0.5 : 1 }}>
                 {step1Submitting ? '加入中...' : '加入家庭 →'}
               </button>
             </form>
