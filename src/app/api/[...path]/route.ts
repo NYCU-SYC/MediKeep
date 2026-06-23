@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getApiBaseUrl } from '@/lib/serverDeployment'
 
 export const dynamic = 'force-dynamic'
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080').replace(/\/$/, '')
+const API_BASE_URL = getApiBaseUrl()
 
 type RouteContext = {
   params: Promise<{

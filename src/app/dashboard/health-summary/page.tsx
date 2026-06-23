@@ -69,6 +69,36 @@ type RecordOut = {
   unit?: string | null;
   recorded_at: string;
 };
+type MedicationOut = {
+  id: number;
+  drug_name: string;
+  dose?: string | null;
+  frequency?: string | null;
+  intent?: string | null;
+  note?: string | null;
+  is_published?: boolean;
+  is_verified?: boolean;
+  source?: string | null;
+};
+type NhiOverview = {
+  has_data: boolean;
+  summary: {
+    total: number;
+    organised: number;
+    pending: number;
+    not_used: number;
+    latest_visit_date?: string | null;
+  };
+  sections: Array<{
+    key: string;
+    label: string;
+    total: number;
+    organised: number;
+    pending: number;
+    not_used: number;
+    latest_visit_date?: string | null;
+  }>;
+};
 
 const CLOSED_STATUSES = new Set(['done', 'completed', 'resolved', 'closed', 'deleted', 'canceled', 'withdrawn']);
 const DOC_STATUS: Record<string, { label: string; cls: string }> = {
@@ -176,6 +206,8 @@ export default function HealthSummaryPage() {
   const [missingRequests, setMissingRequests] = useState<MissingDataRequest[]>([]);
   const [docs, setDocs] = useState<DocOut[]>([]);
   const [records, setRecords] = useState<RecordOut[]>([]);
+  const [medications, setMedications] = useState<MedicationOut[]>([]);
+  const [nhiOverview, setNhiOverview] = useState<NhiOverview | null>(null);
 
   useEffect(() => {
     const requested = searchParams.get('member');
@@ -191,6 +223,8 @@ export default function HealthSummaryPage() {
       api.get('/api/patients/me/missing-data-requests'),
       api.get('/api/documents', params),
       api.get('/api/records', { limit: '20', ...(params ?? {}) }),
+      api.get('/api/medications', params),
+      api.get('/api/patients/me/nhi-imports', params),
     ]);
     const at = (i: number): unknown => (results[i].status === 'fulfilled' ? (results[i] as PromiseFulfilledResult<unknown>).value : null);
     const arr = (i: number): unknown[] => { const v = at(i); return Array.isArray(v) ? v : []; };
@@ -200,6 +234,8 @@ export default function HealthSummaryPage() {
     setMissingRequests(arr(3) as MissingDataRequest[]);
     setDocs(arr(4) as DocOut[]);
     setRecords(arr(5) as RecordOut[]);
+    setMedications(arr(6) as MedicationOut[]);
+    setNhiOverview((at(7) as NhiOverview) ?? null);
     setLoadError(results.some((r) => r.status === 'rejected'));
     setLoaded(true);
   }, [activeMember]);
@@ -223,6 +259,8 @@ export default function HealthSummaryPage() {
   const processingDocs = docs.filter((doc) => !['confirmed', 'published'].includes(doc.processing_status || doc.status || '')).slice(0, 3);
   const recentRecords = records.slice(0, 4);
   const topProblems = (summary?.top_problems ?? []).slice(0, 4);
+  const visibleMedications = medications.filter((med) => med.is_published || med.is_verified).slice(0, 4);
+  const hasNhi = Boolean(nhiOverview?.has_data);
 
   const primaryAction = (() => {
     if (activeMissing.length > 0) return { label: '完成 CMO 要求的補資料', href: href('/dashboard/reminders') };
@@ -329,6 +367,63 @@ export default function HealthSummaryPage() {
               ) : (
                 <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--hk-ink-2)' }}>
                   目前沒有 CMO 已確認的健康重點。若你有新報告，可以先上傳，整理後會更新在這裡。
+                </div>
+              )}
+            </div>
+
+            <div className="hk-card">
+              <div className="hk-ctitle">
+                用藥整理摘要
+                <span className={`hk-badge ${visibleMedications.length ? 'hk-b-cmo' : 'hk-b-blue'}`}>
+                  {visibleMedications.length ? 'CMO 已整理' : '待整理'}
+                </span>
+              </div>
+              {visibleMedications.length > 0 ? (
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {visibleMedications.map((med) => (
+                    <div key={med.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--hk-line)' }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <strong style={{ color: 'var(--hk-ink)' }}>{patientSafeText(med.drug_name, '用藥項目')}</strong>
+                        <span className={`hk-badge ${med.is_published ? 'hk-b-green' : 'hk-b-amber'}`}>
+                          {med.is_published ? '已確認可見' : 'CMO 確認中'}
+                        </span>
+                      </div>
+                      <div style={{ marginTop: 4, color: 'var(--hk-ink-2)', fontSize: 13, lineHeight: 1.55 }}>
+                        {patientSafeText([med.dose, med.frequency, med.intent].filter(Boolean).join(' · '), '用法或用途待 CMO 補充')}
+                      </div>
+                      {med.source && <div style={{ marginTop: 3, color: 'var(--hk-ink-3)', fontSize: 12 }}>來源：{med.source === 'cmo_created' ? 'CMO 整理' : '使用者或 NHI 資料'}</div>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--hk-ink-2)' }}>
+                  目前沒有 CMO 發布的用藥摘要。若 NHI 或處方資料已上傳，整理完成後會出現在這裡。
+                </div>
+              )}
+            </div>
+
+            <div className="hk-card">
+              <div className="hk-ctitle">
+                NHI 資料來源
+                <span className={`hk-badge ${hasNhi ? 'hk-b-blue' : 'hk-b-amber'}`}>
+                  {hasNhi ? `${nhiOverview?.summary.total ?? 0} 筆` : '尚無資料'}
+                </span>
+              </div>
+              {hasNhi ? (
+                <div style={{ display: 'grid', gap: 10 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8 }}>
+                    <MiniStat label="CMO 已整理" value={nhiOverview?.summary.organised ?? 0} />
+                    <MiniStat label="待整理" value={nhiOverview?.summary.pending ?? 0} />
+                    <MiniStat label="未採用" value={nhiOverview?.summary.not_used ?? 0} />
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--hk-ink-2)', lineHeight: 1.65 }}>
+                    這些是 NHI 健康存摺來源狀態。使用者端只顯示 CMO 整理後的重點；原始 NHI 內容可到 NHI 頁面查看。
+                  </div>
+                  <Link href={href('/dashboard/nhi')} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ width: 'fit-content' }}>查看 NHI 來源狀態</Link>
+                </div>
+              ) : (
+                <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--hk-ink-2)' }}>
+                  尚未看到 NHI 健康存摺資料。上傳後，CMO 會先整理成白話健康摘要，再發布給你。
                 </div>
               )}
             </div>
@@ -441,9 +536,25 @@ export default function HealthSummaryPage() {
                 正在讀取健康摘要...
               </div>
             )}
+
+            <div className="hk-card" style={{ fontSize: 12.5, lineHeight: 1.7, color: 'var(--hk-ink-3)' }}>
+              <strong style={{ color: 'var(--hk-ink)' }}>非診斷提醒</strong>
+              <div style={{ marginTop: 5 }}>
+                本頁是 CMO 根據你提供的資料與 NHI 紀錄整理出的健康提醒，不等同醫療診斷。若症狀明顯、惡化或有急症疑慮，請直接就醫。
+              </div>
+            </div>
           </aside>
         </div>
       </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div style={{ border: '1px solid var(--hk-line)', borderRadius: 12, padding: 10, background: '#fff' }}>
+      <div style={{ fontSize: 11, color: 'var(--hk-ink-3)', fontWeight: 900 }}>{label}</div>
+      <div style={{ marginTop: 4, fontSize: 20, color: 'var(--hk-ink)', fontWeight: 900 }}>{value}</div>
     </div>
   );
 }

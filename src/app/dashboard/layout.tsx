@@ -462,7 +462,8 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    setMobileMenuOpen(false);
+    const timer = window.setTimeout(() => setMobileMenuOpen(false), 0);
+    return () => window.clearTimeout(timer);
   }, [pathname, searchKey]);
 
   const switchMember = (member: string) => {
