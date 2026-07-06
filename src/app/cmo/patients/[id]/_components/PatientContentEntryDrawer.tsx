@@ -189,11 +189,14 @@ export type RedZoneDraftPatch = {
 
 type FillEventDetail = {
   text?: string
+  textByPanel?: Partial<Record<FillPanelKey, string>>
   target?: FillTarget
   patch?: FillPatch
   source?: string
   open?: boolean
   queueOnly?: boolean
+  forcePanel?: FillPanelKey
+  respectActivePanel?: boolean
 }
 
 interface FillQueueItem {
@@ -417,6 +420,41 @@ function panelForPatch(patch?: FillPatch): FillPanelKey | null {
   if (patch.reminder) return 'followup'
   if (patch.record) return 'record'
   return null
+}
+
+function labelForPanel(panel: FillPanelKey) {
+  return FILL_PANEL_OPTIONS.find((option) => option.key === panel)?.label ?? '目前分頁'
+}
+
+function defaultTargetForPanel(panel: FillPanelKey): FillTarget {
+  if (panel === 'condition') return 'condition.display_name'
+  if (panel === 'medication') return 'medication.drug_name'
+  if (panel === 'followup') return 'reminder.note'
+  if (panel === 'record') return 'record.note'
+  if (panel === 'redzone') return 'redzone.mri_note'
+  return 'problem.display_layman'
+}
+
+function targetForPanel(panel: FillPanelKey, fallback: FillTarget): FillTarget {
+  if (panel === 'source') return fallback
+  if (panel === 'problem') return fallback.startsWith('problem.') ? fallback : 'problem.display_layman'
+  if (panel === 'condition') return fallback.startsWith('condition.') ? fallback : 'condition.display_name'
+  if (panel === 'medication') return fallback.startsWith('medication.') ? fallback : 'medication.drug_name'
+  if (panel === 'followup') return fallback.startsWith('reminder.') ? fallback : 'reminder.note'
+  if (panel === 'record') return fallback.startsWith('record.') ? fallback : 'record.note'
+  if (panel === 'redzone') return fallback.startsWith('redzone.') ? fallback : 'redzone.mri_note'
+  return fallback
+}
+
+function patchForPanel(patch: FillPatch | undefined, panel: FillPanelKey): FillPatch | undefined {
+  if (!patch || panel === 'source') return patch
+  if (panel === 'problem') return patch.problem ? { problem: patch.problem } : undefined
+  if (panel === 'condition') return patch.condition ? { condition: patch.condition } : undefined
+  if (panel === 'medication') return patch.medication ? { medication: patch.medication } : undefined
+  if (panel === 'followup') return patch.reminder ? { reminder: patch.reminder } : undefined
+  if (panel === 'record') return patch.record ? { record: patch.record } : undefined
+  if (panel === 'redzone') return patch.redzone ? { redzone: patch.redzone } : undefined
+  return patch
 }
 
 let queueSequence = 0
@@ -697,15 +735,22 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
   const applyDetailDirectly = useCallback((detail: FillEventDetail) => {
     rememberUndo()
     if (detail.source) setLastSource(detail.source)
-    applyPatch(detail.patch)
-    const nextPanel = detail.target ? panelForTarget(detail.target) : panelForPatch(detail.patch)
-    if (detail.text && detail.target) {
-      setActiveTarget(detail.target)
-      applyText(detail.target, detail.text)
+    const inferredPanel = detail.target ? panelForTarget(detail.target) : panelForPatch(detail.patch)
+    const shouldStayOnActivePanel = (detail.respectActivePanel ?? isInline) && activePanel !== 'source'
+    const nextPanel = detail.forcePanel ?? (shouldStayOnActivePanel ? activePanel : inferredPanel) ?? 'source'
+    const routedPatch = detail.forcePanel || shouldStayOnActivePanel ? patchForPanel(detail.patch, nextPanel) : detail.patch
+    const routedText = detail.textByPanel?.[nextPanel] ?? detail.text
+    const fallbackTarget = detail.target ?? defaultTargetForPanel(nextPanel)
+    applyPatch(routedPatch)
+    if (routedText) {
+      const target = shouldStayOnActivePanel ? targetForPanel(nextPanel, fallbackTarget) : fallbackTarget
+      setActiveTarget(target)
+      applyText(target, routedText)
     }
-    setActivePanel(nextPanel ?? 'source')
-    notify(detail.source ? `已帶到右側：${detail.source}` : '已帶入填寫面板')
-  }, [applyPatch, applyText, notify, rememberUndo])
+    setActivePanel(nextPanel)
+    const panelLabel = shouldStayOnActivePanel || detail.forcePanel ? ` · ${labelForPanel(nextPanel)}` : ''
+    notify(detail.source ? `已帶到右側${panelLabel}：${detail.source}` : `已帶入填寫面板${panelLabel}`)
+  }, [activePanel, applyPatch, applyText, isInline, notify, rememberUndo])
 
   useEffect(() => {
     const onFill = (event: Event) => {
@@ -1064,6 +1109,7 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
               ))}
             </nav>
 
+            <div className={isInline ? 'cmo-fill-inline-body' : undefined}>
             <div className="cmo-fill-context">
               <div>
                 <div className="cmo-kpi-label">目前來源</div>
@@ -1104,7 +1150,7 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
             />
 
             {activePanel === 'source' && (
-              <section className="cmo-card cmo-section">
+              <section className={`cmo-card cmo-section ${isInline ? 'cmo-fill-source-panel' : ''}`}>
                 <div className="cmo-title-row" style={{ marginBottom: 10 }}>
                   <div>
                     <h3 className="cmo-section-title" style={{ margin: 0 }}>來源文字帶入</h3>
@@ -1149,7 +1195,7 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
                   <div className="cmo-list-item">
                     <div className="cmo-kpi-label">Step 1</div>
                     <strong>{isInline ? '點左側資料列' : '先在原始資料頁加入整理籃'}</strong>
-                    <div className="cmo-subtitle">{isInline ? '按「帶到右側」後，右側會直接切到對應表單。' : 'NHI row 可連續按「加入整理籃」，不會強制打開面板。'}</div>
+                    <div className="cmo-subtitle">{isInline ? '先點右側要填的分頁，再按左側「帶到右側」。' : 'NHI row 可連續按「加入整理籃」，不會強制打開面板。'}</div>
                   </div>
                   <div className="cmo-list-item">
                     <div className="cmo-kpi-label">Step 2</div>
@@ -1449,6 +1495,7 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
                 </div>
               </section>
             )}
+            </div>
           </aside>
   )
 

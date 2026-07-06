@@ -61,8 +61,8 @@ export function RecommendationEditor({
         <ReviewStatusBadge status={status} />
       </div>
 
-      <div className="cmo-grid-2">
-        <div className="cmo-card" style={{ background: '#f8fafc' }}>
+      <div className="cmo-grid-2" style={{ alignItems: 'start', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))' }}>
+        <div className="cmo-card cmo-section" style={{ background: '#f8fafc' }}>
           <div className="cmo-kpi-label">CMO edit</div>
           <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
             <span className="cmo-kpi-label">Title</span>
@@ -100,7 +100,7 @@ export function RecommendationEditor({
         <UserPreviewPanel form={form} published={published} />
       </div>
 
-      <div className="cmo-card" style={{ marginTop: 10, background: '#fff' }}>
+      <div className="cmo-card cmo-section" style={{ marginTop: 10, background: '#fff' }}>
         <div className="cmo-title-row" style={{ marginBottom: 8 }}>
           <div>
             <div className="cmo-kpi-label">Publish checklist</div>
@@ -119,7 +119,7 @@ export function RecommendationEditor({
         </div>
       </div>
 
-      <div className="cmo-card" style={{ marginTop: 10, background: '#f8fafc' }}>
+      <div className="cmo-card cmo-section" style={{ marginTop: 10, background: '#f8fafc' }}>
         <div className="cmo-kpi-label">Source refs</div>
         {form.source_refs.length === 0 ? (
           <div className="cmo-subtitle" style={{ marginTop: 6 }}>No linked review item yet. Use Add Recommendation on a review item or select timeline text.</div>
@@ -166,24 +166,87 @@ export function RecommendationEditor({
 }
 
 function UserPreviewPanel({ form, published }: { form: RecommendationForm; published: CmoRecommendation | null }) {
+  const hasSummary = form.health_summary.trim().length > 0
+  const hasRecommendation = form.recommendation.trim().length > 0
+  const hasNextStep = form.next_step.trim().length > 0
+  const completed = [hasSummary, hasRecommendation, hasNextStep].filter(Boolean).length
+  const previewState = hasRecommendation && hasNextStep ? 'Ready to review' : 'Draft incomplete'
+  const previewTone = hasRecommendation && hasNextStep
+    ? { background: '#ecfdf5', color: '#047857' }
+    : { background: '#fff7ed', color: '#c2410c' }
+
   return (
-    <div className="cmo-card" style={{ background: '#ffffff', borderColor: '#bae6fd' }}>
-      <div className="cmo-kpi-label">User preview</div>
-      <div style={{ marginTop: 8, padding: 12, borderRadius: 8, background: '#f0fdfa', border: '1px solid #ccfbf1' }}>
-        <div style={{ fontWeight: 850, color: '#0f172a', fontSize: 14 }}>{form.title || DEFAULT_RECOMMENDATION_TITLE}</div>
-        <div style={{ marginTop: 8, color: '#334155', fontSize: 13, lineHeight: 1.6 }}>
-          {form.health_summary || 'CMO 整理完成後，健康摘要會顯示在這裡。'}
+    <div className="cmo-card cmo-section" style={{ alignSelf: 'start', background: '#ffffff', borderColor: '#bae6fd' }}>
+      <div className="cmo-title-row" style={{ gap: 8, marginBottom: 10 }}>
+        <div>
+          <div className="cmo-kpi-label">User preview</div>
+          <div className="cmo-subtitle">使用者會看到的摘要與下一步</div>
         </div>
-        <div style={{ marginTop: 10, color: '#0f766e', fontWeight: 820, fontSize: 13, lineHeight: 1.55 }}>
-          {form.recommendation || '尚未填寫給使用者看的建議。'}
+        <span className="cmo-badge" style={previewTone}>{completed}/3 · {previewState}</span>
+      </div>
+
+      <div style={{ padding: 12, borderRadius: 8, background: '#f0fdfa', border: '1px solid #ccfbf1' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+          <div style={{ minWidth: 0, fontWeight: 850, color: '#0f172a', fontSize: 14, lineHeight: 1.35, wordBreak: 'break-word' }}>
+            {form.title || DEFAULT_RECOMMENDATION_TITLE}
+          </div>
+          <span className="cmo-badge" style={{ flex: '0 0 auto', background: '#fff', color: '#0f766e' }}>
+            Draft
+          </span>
         </div>
-        <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: '#fff', border: '1px solid #dbeafe', color: '#1e40af', fontSize: 13 }}>
-          下一步：{form.next_step || '尚未設定'}
+
+        <div style={{ display: 'grid', gap: 8, marginTop: 10, maxHeight: 340, overflow: 'auto', paddingRight: 2 }}>
+          <PreviewBlock
+            label="健康摘要"
+            value={form.health_summary}
+            placeholder="尚未整理健康摘要。"
+            tone={hasSummary ? 'normal' : 'empty'}
+          />
+          <PreviewBlock
+            label="CMO 建議"
+            value={form.recommendation}
+            placeholder="尚未填寫給使用者看的建議。"
+            tone={hasRecommendation ? 'highlight' : 'empty'}
+          />
+          <div style={{ padding: '8px 10px', borderRadius: 8, background: '#fff', border: '1px solid #dbeafe', color: hasNextStep ? '#1e40af' : '#c2410c', fontSize: 13, lineHeight: 1.5 }}>
+            <strong>下一步：</strong>{form.next_step || '尚未設定'}
+          </div>
         </div>
+
         {form.follow_up_date && <div className="cmo-subtitle" style={{ marginTop: 8 }}>追蹤：{form.follow_up_date}</div>}
       </div>
-      <div className="cmo-subtitle" style={{ marginTop: 8 }}>
-        Currently published: {published ? `${published.title} · v${published.version} · ${formatDate(published.published_at)}` : 'none'}
+
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #e2e8f0' }}>
+        <div className="cmo-kpi-label">Currently published</div>
+        <div className="cmo-subtitle" style={{ marginTop: 4, wordBreak: 'break-word' }}>
+          {published ? `${published.title} · v${published.version} · ${formatDate(published.published_at)}` : 'No published recommendation'}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PreviewBlock({
+  label,
+  value,
+  placeholder,
+  tone,
+}: {
+  label: string
+  value: string
+  placeholder: string
+  tone: 'normal' | 'highlight' | 'empty'
+}) {
+  const colors = tone === 'empty'
+    ? { background: '#fff7ed', border: '#fed7aa', text: '#9a3412' }
+    : tone === 'highlight'
+      ? { background: '#ffffff', border: '#99f6e4', text: '#0f766e' }
+      : { background: '#ffffff', border: '#dbeafe', text: '#334155' }
+  return (
+    <div style={{ padding: '8px 10px', borderRadius: 8, background: colors.background, border: `1px solid ${colors.border}` }}>
+      <div className="cmo-kpi-label" style={{ marginBottom: 4 }}>{label}</div>
+      <div style={{ color: colors.text, fontSize: 13, fontWeight: tone === 'highlight' ? 820 : 650, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {value || placeholder}
       </div>
     </div>
   )
@@ -203,7 +266,7 @@ function InternalNotePanel({
   onSave: () => void
 }) {
   return (
-    <div className="cmo-card" style={{ marginTop: 10, background: '#fff' }}>
+    <div className="cmo-card cmo-section" style={{ marginTop: 10, background: '#fff' }}>
       <div className="cmo-title-row" style={{ marginBottom: 8 }}>
         <div>
           <div className="cmo-kpi-label">Internal CMO Note</div>
@@ -233,7 +296,7 @@ function InternalNotePanel({
 
 function VersionHistoryPanel({ history }: { history: CmoRecommendation[] }) {
   return (
-    <div className="cmo-card" style={{ marginTop: 10, background: '#f8fafc' }}>
+    <div className="cmo-card cmo-section" style={{ marginTop: 10, background: '#f8fafc' }}>
       <div className="cmo-title-row" style={{ marginBottom: 8 }}>
         <div>
           <div className="cmo-kpi-label">Version history</div>
@@ -341,4 +404,3 @@ export function reviewAnchorForTarget(targetType: string | null, targetId: strin
   const prefix = normalized[targetType] ?? targetType.replaceAll('_', '-')
   return `review-item-${prefix}-${targetId}`
 }
-

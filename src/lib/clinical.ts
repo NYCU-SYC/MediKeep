@@ -3,6 +3,7 @@
 // Derives risk, cohort, follow-up status, action items from CMO queue API.
 
 export type RiskLevel = 'critical' | 'high' | 'moderate' | 'stable'
+export type WorkloadLevel = 'heavy' | 'moderate' | 'light'
 export type Trend = 'worsening' | 'stable' | 'improving'
 export type FollowUpStatus = 'overdue' | 'due_soon' | 'on_track' | 'unknown'
 
@@ -70,6 +71,8 @@ export interface AbnormalFinding {
 export interface ClinicalPatient extends QueueItem {
   riskLevel: RiskLevel
   riskScore: number      // 0–100, higher = more clinical risk
+  workloadLevel: WorkloadLevel
+  workloadScore: number  // 0–100, higher = more CMO cleanup/review work
   healthScore: number    // 0–100, inverse-weighted summary
   cohorts: string[]      // cohort ids this patient belongs to
   trend: Trend
@@ -137,20 +140,30 @@ export function deriveTrend(p: QueueItem): Trend {
   return 'improving'
 }
 
-// Risk derivation — combines tier, pending volume, unpublished problems.
-// Returns 0–100 score and discrete level for badge rendering.
+// Clinical risk derivation — patient safety first. Work volume is deliberately
+// excluded so a 100-row cleanup backlog does not masquerade as acute clinical
+// severity. Workload is computed separately by deriveWorkload().
 export function deriveRisk(p: QueueItem): { level: RiskLevel; score: number } {
   const tier = p.highest_priority_tier
   const t1 = p.tier1_drafts ?? 0
-  const cr = p.pending_change_requests ?? p.change_request_count ?? 0
   let level: RiskLevel = 'stable'
   let base = 10
   if (tier === 1 || t1 > 0) { level = 'critical'; base = 88 }
-  else if (tier === 2 || p.pending_drafts >= 5 || cr >= 3) { level = 'high'; base = 64 }
-  else if (p.pending_drafts > 0 || p.unpublished_problems > 0 || cr > 0) { level = 'moderate'; base = 38 }
+  else if (tier === 2) { level = 'high'; base = 64 }
+  else if (p.highest_problem_name || p.unpublished_problems > 0) { level = 'moderate'; base = 38 }
 
-  const additive = p.pending_drafts * 1.2 + p.unpublished_problems * 2.5 + cr * 2 + t1 * 3
+  const additive = t1 * 4 + (tier === 2 ? 4 : 0)
   const score = Math.round(Math.min(100, Math.max(0, base + additive)))
+  return { level, score }
+}
+
+export function deriveWorkload(p: QueueItem): { level: WorkloadLevel; score: number } {
+  const cr = p.pending_change_requests ?? p.change_request_count ?? 0
+  const pending = p.pending_drafts ?? 0
+  const unpublished = p.unpublished_problems ?? 0
+  const t1 = p.tier1_drafts ?? 0
+  const score = Math.round(Math.min(100, pending * 1.5 + unpublished * 4 + cr * 6 + t1 * 8))
+  const level: WorkloadLevel = score >= 60 ? 'heavy' : score >= 20 ? 'moderate' : 'light'
   return { level, score }
 }
 
@@ -172,6 +185,7 @@ function findingsFromProblem(name: string | null, severity: AbnormalFinding['sev
 export function deriveClinical(p: QueueItem): ClinicalPatient {
   const ov = p.demoOverrides
   const heuristic = deriveRisk(p)
+  const workload = deriveWorkload(p)
   const level: RiskLevel = ov?.riskLevel ?? heuristic.level
   const score: number = ov?.riskScore ?? heuristic.score
   const trend: Trend = ov?.trend ?? deriveTrend(p)
@@ -181,6 +195,8 @@ export function deriveClinical(p: QueueItem): ClinicalPatient {
     ...p,
     riskLevel: level,
     riskScore: score,
+    workloadLevel: workload.level,
+    workloadScore: workload.score,
     healthScore: Math.max(0, 100 - score),
     followUpStatus: fu,
     trend,
@@ -360,7 +376,7 @@ export function deriveActionItems(patients: ClinicalPatient[]): ActionItem[] {
         dueLabel: '48 hours',
       })
     }
-    if (p.pending_drafts > 5 && p.riskLevel === 'moderate') {
+    if (p.pending_drafts > 5) {
       items.push({
         id: `${p.user_id}-drafts`,
         priority: 'p3',
@@ -406,7 +422,7 @@ export function formatRelative(iso: string | null): string {
 export function composeAiSummary(p: ClinicalPatient): string {
   const lines: string[] = []
   const riskWord = p.riskLevel === 'critical' ? '危急' : p.riskLevel === 'high' ? '高' : p.riskLevel === 'moderate' ? '中度' : '穩定'
-  lines.push(`Triage signal: ${riskWord} (internal score ${p.riskScore}/100). For clinician review — not a diagnosis.`)
+  lines.push(`Clinical triage signal: ${riskWord} (internal score ${p.riskScore}/100). Workload: ${p.workloadScore}/100. For clinician review — not a diagnosis.`)
   if (p.primaryFinding && p.primaryFinding !== '—') {
     lines.push(`Potential area of focus: ${p.primaryFinding}. Requires clinician confirmation.`)
   }
@@ -440,21 +456,19 @@ export function riskExplanation(p: ClinicalPatient): string[] {
   } else if (tier === 2) {
     reasons.push('Tier 2 finding present — elevated baseline risk')
   }
-  if (p.pending_drafts >= 5) {
-    reasons.push(`${p.pending_drafts} pending drafts — volume above triage threshold`)
-  }
-  if ((p.pending_change_requests ?? p.change_request_count ?? 0) > 0) {
-    const count = p.pending_change_requests ?? p.change_request_count ?? 0
-    reasons.push(`${count} user change request${count > 1 ? 's' : ''} awaiting CMO review`)
-  }
-  if (p.unpublished_problems > 0) {
-    reasons.push(`${p.unpublished_problems} verified problem${p.unpublished_problems > 1 ? 's' : ''} not yet published to patient`)
-  }
   if (p.trend === 'worsening') {
     reasons.push('Worsening signal heuristic triggered (tier-1 or rising backlog)')
   }
   if (p.followUpStatus === 'overdue') {
     reasons.push('No activity > 90 days — care gap')
+  }
+  const workloadReasons: string[] = []
+  if (p.pending_drafts >= 5) workloadReasons.push(`${p.pending_drafts} pending drafts`)
+  const count = p.pending_change_requests ?? p.change_request_count ?? 0
+  if (count > 0) workloadReasons.push(`${count} user change request${count > 1 ? 's' : ''}`)
+  if (p.unpublished_problems > 0) workloadReasons.push(`${p.unpublished_problems} unpublished problem${p.unpublished_problems > 1 ? 's' : ''}`)
+  if (workloadReasons.length > 0) {
+    reasons.push(`Workload axis: ${workloadReasons.join(' · ')}`)
   }
   if (reasons.length === 0) {
     reasons.push('No elevating signals — classified as baseline')

@@ -667,7 +667,7 @@ function DetailRow({ draft, problems, fields, onFieldChange, linkedId, onLinkedC
               </button>
               <pre style={{ margin: '12px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.55, color: '#334155', maxHeight: 220, overflow: 'auto' }}>{rawText}</pre>
               <div className="cmo-subtitle" style={{ marginTop: 10 }}>
-                MVP placeholder: click-to-assign highlights and full source viewer require source-document mapping.
+                可選取原始文字加入整理籃；右側可連結 Problem、退回、稍後處理或接受這筆 Draft。
               </div>
             </aside>
 

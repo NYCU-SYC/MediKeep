@@ -29,10 +29,12 @@ export function ClinicalPublishBadge({ verified, published }: { verified?: boole
 }
 
 export function CriticalTile({ title, value, tone }: { title: string; value: string; tone: string }) {
+  const missing = /未記錄|未填|未知|not recorded/i.test(value)
   return (
-    <div className="cmo-card cmo-section" style={{ background: '#f8fafc' }}>
+    <div className="cmo-card cmo-section" style={{ background: missing ? '#fefce8' : '#f8fafc', borderColor: missing ? '#fde68a' : undefined }}>
       <div className="cmo-kpi-label">{title}</div>
-      <div style={{ marginTop: 8, color: tone, fontWeight: 820, lineHeight: 1.45 }}>{value}</div>
+      <div style={{ marginTop: 8, color: missing ? '#854d0e' : tone, fontWeight: 820, lineHeight: 1.45 }}>{value}</div>
+      {missing && <div className="cmo-subtitle" style={{ marginTop: 6, fontSize: 11 }}>未知需補，不代表正常。</div>}
     </div>
   )
 }

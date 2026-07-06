@@ -306,6 +306,7 @@ function sendNhiDraftToRedZone(draft: Draft) {
   sendToPatientContentPanel({
     source: `NHI 保命紅區 #${draft.id}`,
     open: false,
+    forcePanel: 'redzone',
     patch: { redzone },
   })
 }
@@ -317,7 +318,18 @@ function sendNhiFieldToPanel(key: string, value: unknown) {
   if (redzone) {
     sendToPatientContentPanel({
       source: `NHI 保命紅區 ${key}`,
+      target: targetForNhiField(key),
+      text,
+      textByPanel: {
+        problem: text,
+        condition: text,
+        medication: text,
+        followup: text,
+        record: `NHI ${key}: ${text}`,
+        redzone: text,
+      },
       open: false,
+      respectActivePanel: true,
       patch: { redzone: finalizeRedZonePatch(redzone) ?? redzone },
     })
     return
@@ -326,7 +338,16 @@ function sendNhiFieldToPanel(key: string, value: unknown) {
     source: `NHI ${key}`,
     target: targetForNhiField(key),
     text,
+    textByPanel: {
+      problem: text,
+      condition: text,
+      medication: text,
+      followup: text,
+      record: `NHI ${key}: ${text}`,
+      redzone: text,
+    },
     open: false,
+    respectActivePanel: true,
     patch: key.toLowerCase().includes('diagnosis')
       ? { problem: { display_layman: text }, condition: { display_name: text } }
       : undefined,
@@ -336,7 +357,18 @@ function sendNhiFieldToPanel(key: string, value: unknown) {
 function sendNhiMedicationToPanel(medication: { code: string; name: string; qty: string }) {
   sendToPatientContentPanel({
     source: 'NHI 用藥明細',
+    target: 'medication.drug_name',
+    text: medication.name,
+    textByPanel: {
+      problem: medication.name,
+      condition: medication.name,
+      medication: medication.name,
+      followup: `用藥追蹤：${medication.name}`,
+      record: `NHI drug ${medication.code}: ${medication.name} ${medication.qty}`.trim(),
+      redzone: medication.name,
+    },
     open: false,
+    respectActivePanel: true,
     patch: {
       medication: {
         drug_name: medication.name,
@@ -354,7 +386,18 @@ function sendNhiLabToPanel(row: { item: string; value: string; unit: string; ref
     : null
   sendToPatientContentPanel({
     source: redzone ? 'NHI eGFR 檢驗（保命紅區）' : 'NHI 檢驗項目',
+    target: 'record.note',
+    text: [row.item, row.value, row.unit].filter(Boolean).join(' '),
+    textByPanel: {
+      problem: row.item,
+      condition: row.item,
+      medication: row.item,
+      followup: `追蹤檢驗：${row.item}`,
+      record: [row.item, row.value, row.unit, row.ref ? `ref ${row.ref}` : ''].filter(Boolean).join(' · '),
+      redzone: [row.item, row.value, row.unit].filter(Boolean).join(' '),
+    },
     open: false,
+    respectActivePanel: true,
     patch: {
       record: {
         record_type: recordType,
@@ -371,26 +414,39 @@ function sendNhiDraftSummaryToPanel(draft: Draft) {
   const fields = draft.payload?.extracted_fields ?? {}
   const section = sectionOf(draft)
   const redzone = redZonePatchForDraft(draft)
-  if (redzone) {
-    sendNhiDraftToRedZone(draft)
-    return
-  }
   const diagnosis = firstText(fields, ['diagnosis', 'diagnosis_text', 'vaccine', 'imaging_summary', 'impression_text', 'substance', 'analyte_name', 'raw_description', 'modality'])
   const icd10 = firstText(fields, ['icd10', 'icd10_candidates'])
   const visitDate = firstText(fields, ['visit_date', 'onset_date'])
   const facility = firstText(fields, ['facility', 'hospital', 'source_doc_page'])
   const keyMedications = firstText(fields, ['key_medications', 'raw_description', 'raw_code'])
   const labLabel = firstText(fields, ['diagnosis', 'analyte_name', 'lab_total_items'])
+  const summaryText = diagnosis || labLabel || keyMedications || facility || `NHI draft #${draft.id}`
+  const medicationText = keyMedications || diagnosis || summaryText
+  const recordText = [labLabel || diagnosis, facility, visitDate, keyMedications].filter(Boolean).join(' · ') || summaryText
+  const followUpText = [diagnosis || labLabel || keyMedications, visitDate, facility].filter(Boolean).join(' · ') || summaryText
+  const textByPanel = {
+    problem: diagnosis || summaryText,
+    condition: diagnosis || summaryText,
+    medication: medicationText,
+    followup: followUpText,
+    record: recordText,
+    redzone: diagnosis || summaryText,
+  }
 
   if (section === 'med') {
     sendToPatientContentPanel({
       source: `NHI 用藥摘要 #${draft.id}`,
+      target: 'medication.drug_name',
+      text: medicationText,
+      textByPanel,
       open: false,
+      respectActivePanel: true,
       patch: {
         medication: {
           drug_name: keyMedications || diagnosis,
           note: [facility, visitDate, icd10 ? `ICD ${icd10}` : ''].filter(Boolean).join(' · '),
         },
+        ...(redzone ? { redzone } : {}),
       },
     })
     return
@@ -399,12 +455,17 @@ function sendNhiDraftSummaryToPanel(draft: Draft) {
   if (section === 'lab') {
     sendToPatientContentPanel({
       source: `NHI 檢驗摘要 #${draft.id}`,
+      target: 'record.note',
+      text: recordText,
+      textByPanel,
       open: false,
+      respectActivePanel: true,
       patch: {
         record: {
           record_type: recordTypeForLab(labLabel),
           note: [labLabel, facility, visitDate].filter(Boolean).join(' · '),
         },
+        ...(redzone ? { redzone } : {}),
       },
     })
     return
@@ -412,7 +473,11 @@ function sendNhiDraftSummaryToPanel(draft: Draft) {
 
   sendToPatientContentPanel({
     source: `NHI 摘要 #${draft.id}`,
+    target: 'problem.display_layman',
+    text: summaryText,
+    textByPanel,
     open: false,
+    respectActivePanel: true,
     patch: {
       problem: {
         display_name: diagnosis,
@@ -426,6 +491,7 @@ function sendNhiDraftSummaryToPanel(draft: Draft) {
         onset_date: visitDate ? visitDate.slice(0, 10) : '',
         note: [facility, keyMedications].filter(Boolean).join(' · '),
       },
+      ...(redzone ? { redzone } : {}),
     },
   })
 }

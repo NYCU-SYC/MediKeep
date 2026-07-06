@@ -8,15 +8,39 @@ export type SourceEvidence = {
   status: string
 }
 
+export type ProblemLink = {
+  id: number
+  problem_id: number
+  patient_id: string
+  resource_type: string
+  resource_id: string
+  resource_label?: string | null
+  resource_date?: string | null
+  triage: string
+  note?: string | null
+  linked_at?: string | null
+}
+
 export type HealthProblem = {
   problem_id: number
   title: string
   plain_language_title: string
   severity: 'high' | 'medium' | 'low' | 'insufficient'
   status: string
+  certainty?: 'confirmed' | 'suspected' | 'ruled_out' | string
+  course?: string
+  followup_note?: string
+  tracking_note?: string
   source: string
   evidence: SourceEvidence[]
   source_records: string[]
+  links?: ProblemLink[]
+  linked_diagnoses_count?: number
+  linked_meds_count?: number
+  linked_labs_observations_count?: number
+  linked_imaging_count?: number
+  linked_procedures_count?: number
+  linked_measurements_count?: number
   cmo_internal_note: string
   user_visible_explanation: string
   recommended_action: string
@@ -30,6 +54,11 @@ export type HealthProblem = {
 export type MedicationReview = {
   id: number
   medication_name: string
+  generic_name_en?: string | null
+  brand_name?: string | null
+  dose?: string | null
+  route?: string | null
+  self_pay_price?: string | null
   possible_indication: string
   frequency: string
   duration: string
@@ -70,6 +99,18 @@ export type UserFacingSummary = {
   health_summary: string
   recommendation: string
   next_step: string
+  summary_condition?: string
+  summary_exam?: string
+  summary_followup?: string
+  summary_values?: string
+  summary_advice?: string
+  attention_summary?: {
+    condition: string
+    exam: string
+    followup: string
+    values: string
+    advice: string
+  }
   follow_up_date?: string | null
   source_refs?: SourceEvidence[]
   quality_checks?: Record<string, unknown>
@@ -136,6 +177,10 @@ export type NhiRecord = {
   created_at: string | null
   reviewed_at: string | null
   source: string
+  linked_problem_ids?: number[]
+  triage_status?: 'dismissed' | 'rejected' | 'needs_data' | null
+  triage_note?: string | null
+  missing_data_request_id?: string | null
 }
 
 export type RiskSignal = {

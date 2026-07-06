@@ -2,14 +2,22 @@
 // No data fetching, no derived state — pure render.
 
 import Link from 'next/link'
-import type { ReactNode } from 'react'
-import type { RiskLevel, FollowUpStatus, EnrichedAlert, ActionItem } from '@/lib/clinical'
+import type { CSSProperties, ReactNode } from 'react'
+import type { RiskLevel, WorkloadLevel, FollowUpStatus, EnrichedAlert, ActionItem } from '@/lib/clinical'
 
 const RISK_LABELS: Record<RiskLevel, string> = {
   critical: 'Critical', high: 'High', moderate: 'Moderate', stable: 'Stable',
 }
 const FOLLOW_LABELS: Record<FollowUpStatus, string> = {
   overdue: 'Overdue', due_soon: 'Due soon', on_track: 'On track', unknown: 'Unknown',
+}
+const WORKLOAD_LABELS: Record<WorkloadLevel, string> = {
+  heavy: 'Heavy workload', moderate: 'Moderate workload', light: 'Light workload',
+}
+const WORKLOAD_STYLE: Record<WorkloadLevel, CSSProperties> = {
+  heavy: { background: '#eff6ff', color: '#1d4ed8', borderColor: '#bfdbfe' },
+  moderate: { background: '#f0f9ff', color: '#075985', borderColor: '#bae6fd' },
+  light: { background: '#f8fafc', color: '#64748b', borderColor: '#e2e8f0' },
 }
 
 export function KpiTile({ tone, label, value, delta, deltaTone, note }: {
@@ -37,6 +45,10 @@ export function KpiTile({ tone, label, value, delta, deltaTone, note }: {
 
 export function RiskPill({ level }: { level: RiskLevel }) {
   return <span className={`risk-pill ${level}`}><span className="dot" />{RISK_LABELS[level]}</span>
+}
+
+export function WorkloadPill({ level, score }: { level: WorkloadLevel; score: number }) {
+  return <span className="cmo-badge" style={{ ...WORKLOAD_STYLE[level], border: `1px solid ${WORKLOAD_STYLE[level].borderColor}` }}>{WORKLOAD_LABELS[level]} · {score}</span>
 }
 
 export function FollowUpPill({ status }: { status: FollowUpStatus }) {
@@ -100,8 +112,8 @@ export function AlertRow({ alert, detectedAtLabel, reviewed, onOpen, onMarkRevie
       </div>
       <div className="right">
         {!reviewed && (
-          <button type="button" className="cmo-button" onClick={onMarkReviewed} disabled
-            title="尚未啟用 server-side alert audit endpoint；請先開啟 snapshot 審閱。">Mark reviewed</button>
+          <button type="button" className="cmo-button" onClick={onMarkReviewed}
+            title="標記此警示為已讀（寫入稽核軌跡，可跨裝置保留）">標記已讀</button>
         )}
         <button type="button" className="cmo-button primary" onClick={onOpen}>Open snapshot</button>
       </div>

@@ -60,12 +60,20 @@ function forwardRequestHeaders(req: NextRequest) {
 function forwardResponse(resp: Response, body: string) {
   const headers = new Headers()
   headers.set('Cache-Control', 'no-store')
-  headers.set('Content-Type', resp.headers.get('content-type') || 'application/json')
   headers.set('X-HealthKeep-Api-Proxy', 'generic')
 
   const setCookie = resp.headers.get('set-cookie')
   if (setCookie) headers.set('Set-Cookie', setCookie)
 
+  if ([204, 304].includes(resp.status)) {
+    return new NextResponse(null, {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers,
+    })
+  }
+
+  headers.set('Content-Type', resp.headers.get('content-type') || 'application/json')
   return new NextResponse(body, {
     status: resp.status,
     statusText: resp.statusText,

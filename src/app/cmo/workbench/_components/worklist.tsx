@@ -9,7 +9,7 @@ import {
 } from '@/lib/clinical'
 import type { DrawerOrigin } from '@/lib/healthkeepTypes'
 import {
-  RiskPill, FollowUpPill, TrendIcon, ScoreBar,
+  RiskPill, WorkloadPill, FollowUpPill, TrendIcon, ScoreBar,
   ActiveFilterChip, DemoBadge,
 } from './atoms'
 
@@ -91,7 +91,7 @@ export function ClinicalWorklist(props: ClinicalWorklistProps) {
         <select className="cmo-select" style={{ width: 200 }}
           value={sortKey} onChange={(e) => onSortChange(e.target.value as SortKey)}
           aria-label="Sort worklist">
-          <option value="risk_desc">Sort: Risk score (high → low)</option>
+          <option value="risk_desc">Sort: Clinical risk (high → low)</option>
           <option value="health_asc">Sort: Health score (low → high)</option>
           <option value="last_activity">Sort: Latest activity</option>
           <option value="pending_desc">Sort: Pending drafts</option>
@@ -119,7 +119,8 @@ export function ClinicalWorklist(props: ClinicalWorklistProps) {
           <thead>
             <tr>
               <th>Patient</th>
-              <th>Risk</th>
+              <th>Clinical risk</th>
+              <th>Workload</th>
               <th>Health</th>
               <th>Primary finding</th>
               <th>Cohort</th>
@@ -134,7 +135,7 @@ export function ClinicalWorklist(props: ClinicalWorklistProps) {
           <tbody>
             {worklist.length === 0 ? (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'center', color: '#64748b', padding: 40 }}>
+                <td colSpan={12} style={{ textAlign: 'center', color: '#64748b', padding: 40 }}>
                   <div style={{ fontWeight: 700, color: '#334155', marginBottom: 8 }}>No patients match the current filters.</div>
                   <div style={{ marginBottom: 12, fontSize: 12 }}>Try widening risk / follow-up filters or clearing the cohort.</div>
                   {hasActiveFilter && (
@@ -164,6 +165,9 @@ export function ClinicalWorklist(props: ClinicalWorklistProps) {
                 <td>
                   <RiskPill level={p.riskLevel} />
                   <div style={{ marginTop: 4 }}><ScoreBar score={p.riskScore} level={p.riskLevel} /></div>
+                </td>
+                <td>
+                  <WorkloadPill level={p.workloadLevel} score={p.workloadScore} />
                 </td>
                 <td style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: '#0f172a' }}>{p.healthScore}</td>
                 <td>

@@ -3,8 +3,9 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useActiveMember } from '../member-context';
-import { api } from '@/lib/api';
+import { ApiError, api, setPatientSessionToken } from '@/lib/api';
 import { useToast } from '../toast-context';
+import type { FamilyMember } from '../member-context';
 import type { PatientChangeRequest } from '@/lib/healthkeepTypes';
 
 const inputStyle: React.CSSProperties = {
@@ -50,25 +51,37 @@ function summarizePayload(payload: Record<string, unknown>) {
   return entries.slice(0, 4).map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join(' · ');
 }
 
+function requestErrorMessage(error: unknown, fallback: string) {
+  return error instanceof ApiError ? error.message : fallback;
+}
+
+function parseOptionalAge(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 120 ? parsed : null;
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const { showToast } = useToast();
-  const { members, setMembers } = useActiveMember();
+  const { activeMember, members, setMembers, setActiveMember, setMembersError } = useActiveMember();
   const [changeRequests, setChangeRequests] = useState<PatientChangeRequest[]>([]);
 
   // ── Family info ──────────────────────────────────────────────────────────────
   const [familyName, setFamilyName] = useState('');
   const [joinCode, setJoinCode] = useState<string | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
+  const [regeneratingCode, setRegeneratingCode] = useState(false);
   const [savingFamily, setSavingFamily] = useState(false);
   const [familySaved, setFamilySaved] = useState(false);
 
   useEffect(() => {
-    fetch('/api/auth/family', { credentials: 'include' })
-      .then(r => r.ok ? r.json() : null)
+    api.get('/api/auth/family')
       .then(d => {
-        if (d?.join_code)    setJoinCode(d.join_code);
-        if (d?.family_name)  setFamilyName(d.family_name);
+        const info = d as { join_code?: string | null; family_name?: string | null } | null;
+        if (info?.join_code)    setJoinCode(info.join_code);
+        if (info?.family_name)  setFamilyName(info.family_name);
       })
       .catch(() => {});
   }, []);
@@ -109,14 +122,12 @@ export default function SettingsPage() {
     if (!familyName.trim()) return;
     setSavingFamily(true);
     try {
-      await fetch('/api/auth/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ family_name: familyName.trim() }),
-      });
+      await api.post('/api/auth/setup', { family_name: familyName.trim() });
       setFamilySaved(true);
       setTimeout(() => setFamilySaved(false), 2000);
+      showToast('家庭名稱已儲存', 'success');
+    } catch (error) {
+      showToast(requestErrorMessage(error, '家庭名稱儲存失敗，請稍後再試'), 'error');
     } finally {
       setSavingFamily(false);
     }
@@ -130,6 +141,20 @@ export default function SettingsPage() {
     });
   };
 
+  const regenerateCode = async () => {
+    setRegeneratingCode(true);
+    try {
+      const info = await api.post('/api/auth/family/regenerate-code') as { join_code?: string | null };
+      if (info?.join_code) setJoinCode(info.join_code);
+      setCodeCopied(false);
+      showToast('家庭加入代碼已重新產生', 'success');
+    } catch (error) {
+      showToast(requestErrorMessage(error, '重新產生代碼失敗，請稍後再試'), 'error');
+    } finally {
+      setRegeneratingCode(false);
+    }
+  };
+
   // ── Member management ────────────────────────────────────────────────────────
   const [showAddForm, setShowAddForm] = useState(false);
   const [newMember, setNewMember] = useState({ name: '', relation: '', age: '', gender: '男', color: COLORS[0] });
@@ -137,30 +162,60 @@ export default function SettingsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingMember, setEditingMember] = useState<{ id: string; name: string; relation: string; age: string; gender: string; color: string } | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [memberFormError, setMemberFormError] = useState('');
+
+  const reloadMembers = async () => {
+    const raw = await api.get('/api/members');
+    const latest = Array.isArray(raw) ? raw as FamilyMember[] : [];
+    setMembers(latest);
+    setMembersError(false);
+    return latest;
+  };
 
   const addMember = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setMemberFormError('');
+    const name = newMember.name.trim();
+    const relation = newMember.relation.trim();
+    const age = parseOptionalAge(newMember.age);
+    if (!name || !relation) {
+      setMemberFormError('請填寫稱謂與關係。');
+      return;
+    }
+    if (newMember.age.trim() && age === null) {
+      setMemberFormError('年齡請輸入 0 到 120 的整數。');
+      return;
+    }
     setAddingMember(true);
     try {
-      const resp = await fetch('/api/members', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          name: newMember.name.trim(),
-          relation: newMember.relation.trim(),
-          age: newMember.age ? parseInt(newMember.age) : null,
-          gender: newMember.gender,
-          color: newMember.color,
-          sort_order: members.length,
-        }),
-      });
-      if (resp.ok) {
-        const created = await resp.json();
-        setMembers(prev => [...prev, created]);
-        setNewMember({ name: '', relation: '', age: '', gender: '男', color: COLORS[members.length % COLORS.length] });
-        setShowAddForm(false);
+      const created = await api.post('/api/members', {
+        name,
+        relation,
+        age,
+        gender: newMember.gender,
+        color: newMember.color,
+        sort_order: members.length,
+      }) as FamilyMember;
+      let latest: FamilyMember[] = [];
+      try {
+        latest = await reloadMembers();
+      } catch {
+        setMembers(prev => prev.some(member => member.id === created.id) ? prev : [...prev, created]);
       }
+      setActiveMember(created.name);
+      setNewMember({
+        name: '',
+        relation: '',
+        age: '',
+        gender: '男',
+        color: COLORS[(latest.length || members.length + 1) % COLORS.length],
+      });
+      setShowAddForm(false);
+      showToast(`已新增 ${created.name}`, 'success');
+    } catch (error) {
+      const message = requestErrorMessage(error, '新增家庭成員失敗，請重新登入或稍後再試。');
+      setMemberFormError(message);
+      showToast(message, 'error');
     } finally {
       setAddingMember(false);
     }
@@ -169,11 +224,16 @@ export default function SettingsPage() {
   const removeMember = async (id: string, name: string) => {
     if (!confirm(`確定要移除「${name}」嗎？\n該成員的所有健康紀錄不會被刪除。`)) return;
     setDeletingId(id);
+    setMemberFormError('');
     try {
-      const resp = await fetch(`/api/members/${id}`, { method: 'DELETE', credentials: 'include' });
-      if (resp.ok || resp.status === 204) {
-        setMembers(prev => prev.filter(m => m.id !== id));
-      }
+      await api.delete(`/api/members/${id}`);
+      setMembers(prev => prev.filter(m => m.id !== id));
+      if (activeMember === name) setActiveMember('');
+      showToast(`已移除 ${name}`, 'info');
+    } catch (error) {
+      const message = requestErrorMessage(error, '移除成員失敗，請稍後再試。');
+      setMemberFormError(message);
+      showToast(message, 'error');
     } finally {
       setDeletingId(null);
     }
@@ -182,27 +242,51 @@ export default function SettingsPage() {
   const saveEdit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!editingMember) return;
+    setMemberFormError('');
+    const name = editingMember.name.trim();
+    const relation = editingMember.relation.trim();
+    const age = parseOptionalAge(editingMember.age);
+    if (!name || !relation) {
+      setMemberFormError('請填寫稱謂與關係。');
+      return;
+    }
+    if (editingMember.age.trim() && age === null) {
+      setMemberFormError('年齡請輸入 0 到 120 的整數。');
+      return;
+    }
     setSavingEdit(true);
     try {
-      const resp = await fetch(`/api/members/${editingMember.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          name: editingMember.name.trim(),
-          relation: editingMember.relation.trim(),
-          age: editingMember.age ? parseInt(editingMember.age) : null,
-          gender: editingMember.gender,
-          color: editingMember.color,
-        }),
-      });
-      if (resp.ok) {
-        const updated = await resp.json();
+      const previousName = members.find(member => member.id === editingMember.id)?.name;
+      const updated = await api.put(`/api/members/${editingMember.id}`, {
+        name,
+        relation,
+        age,
+        gender: editingMember.gender,
+        color: editingMember.color,
+      }) as FamilyMember;
+      try {
+        await reloadMembers();
+      } catch {
         setMembers(prev => prev.map(m => m.id === updated.id ? updated : m));
-        setEditingMember(null);
       }
+      if (previousName && activeMember === previousName) setActiveMember(updated.name);
+      setEditingMember(null);
+      showToast(`已更新 ${updated.name}`, 'success');
+    } catch (error) {
+      const message = requestErrorMessage(error, '儲存成員資料失敗，請稍後再試。');
+      setMemberFormError(message);
+      showToast(message, 'error');
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await api.post('/api/auth/logout');
+    } finally {
+      setPatientSessionToken(null);
+      router.replace('/');
     }
   };
 
@@ -281,6 +365,18 @@ export default function SettingsPage() {
             }}>
               {codeCopied ? '✓ 已複製' : '複製'}
             </button>
+            <button
+              onClick={regenerateCode}
+              disabled={regeneratingCode}
+              style={{
+                padding: '12px 20px', borderRadius: '10px', border: '1px solid #fecaca',
+                background: '#fff1f2', color: '#be123c',
+                fontSize: '13px', fontWeight: '700', cursor: regeneratingCode ? 'wait' : 'pointer',
+                transition: 'all 0.2s', flexShrink: 0, opacity: regeneratingCode ? 0.7 : 1,
+              }}
+            >
+              {regeneratingCode ? '產生中...' : '重新產生'}
+            </button>
           </div>
         ) : (
           <div style={{ color: '#aaa', fontSize: '13px' }}>載入中...</div>
@@ -293,6 +389,25 @@ export default function SettingsPage() {
       {/* Family members */}
       <div style={sectionCard}>
         <h3 style={sectionTitle}>家庭成員</h3>
+
+        {memberFormError && (
+          <div
+            role="alert"
+            style={{
+              background: '#fff1f2',
+              border: '1px solid #fecdd3',
+              borderRadius: '10px',
+              color: '#be123c',
+              fontSize: '13px',
+              fontWeight: 700,
+              lineHeight: 1.5,
+              marginBottom: '14px',
+              padding: '10px 12px',
+            }}
+          >
+            {memberFormError}
+          </div>
+        )}
 
         {members.length === 0 && !showAddForm && (
           <div style={{ textAlign: 'center', padding: '24px 0', color: '#aaa', fontSize: '14px' }}>
@@ -616,10 +731,7 @@ export default function SettingsPage() {
       <div style={sectionCard}>
         <h3 style={{ ...sectionTitle, color: '#f44336' }}>帳號操作</h3>
         <button
-          onClick={async () => {
-            await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
-            router.replace('/');
-          }}
+          onClick={logout}
           style={{
             padding: '10px 20px', borderRadius: '8px', border: '1px solid var(--gray-200)',
             background: '#fff', color: '#666', fontSize: '14px', fontWeight: '600', cursor: 'pointer',

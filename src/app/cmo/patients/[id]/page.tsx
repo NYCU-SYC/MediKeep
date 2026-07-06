@@ -34,6 +34,11 @@ export type RecommendationForm = {
   health_summary: string
   recommendation: string
   next_step: string
+  summary_condition: string
+  summary_exam: string
+  summary_followup: string
+  summary_values: string
+  summary_advice: string
   follow_up_date: string
   source_refs: RecommendationSourceRef[]
 }
@@ -48,6 +53,18 @@ export type CmoRecommendation = {
   health_summary: string
   recommendation: string
   next_step: string
+  summary_condition?: string
+  summary_exam?: string
+  summary_followup?: string
+  summary_values?: string
+  summary_advice?: string
+  attention_summary?: {
+    condition: string
+    exam: string
+    followup: string
+    values: string
+    advice: string
+  }
   follow_up_date?: string | null
   source_refs: RecommendationSourceRef[]
   quality_checks?: Record<string, unknown>
@@ -188,14 +205,24 @@ type ProblemForm = {
   plainTitle: string
   severity: 'high' | 'medium' | 'low' | 'insufficient'
   status: 'following' | 'underlying' | 'resolved'
+  certainty: 'confirmed' | 'suspected' | 'ruled_out'
+  course: 'acute' | 'chronic' | 'episodic' | 'preventive'
+  followupNote: string
+  trackingNote: string
   cmoNote: string
   userExplanation: string
 }
 
 type MedicationForm = {
   medicationName: string
+  brandName: string
+  genericNameEn: string
+  dose: string
   possibleIndication: string
   frequency: string
+  route: string
+  selfPayPrice: string
+  relatedProblemId: string
   cmoComment: string
 }
 
@@ -205,6 +232,11 @@ type SummaryForm = {
   health_summary: string
   recommendation: string
   next_step: string
+  summary_condition: string
+  summary_exam: string
+  summary_followup: string
+  summary_values: string
+  summary_advice: string
   follow_up_date: string
 }
 
@@ -213,14 +245,24 @@ const emptyProblemForm: ProblemForm = {
   plainTitle: '',
   severity: 'medium',
   status: 'following',
+  certainty: 'confirmed',
+  course: 'chronic',
+  followupNote: '',
+  trackingNote: '',
   cmoNote: '',
   userExplanation: '',
 }
 
 const emptyMedicationForm: MedicationForm = {
   medicationName: '',
+  brandName: '',
+  genericNameEn: '',
+  dose: '',
   possibleIndication: '',
   frequency: '',
+  route: '',
+  selfPayPrice: '',
+  relatedProblemId: '',
   cmoComment: '',
 }
 
@@ -229,11 +271,21 @@ const emptySummary: SummaryForm = {
   health_summary: '',
   recommendation: '',
   next_step: '',
+  summary_condition: '',
+  summary_exam: '',
+  summary_followup: '',
+  summary_values: '',
+  summary_advice: '',
   follow_up_date: '',
 }
 
 const severityToTier = { high: 1, medium: 2, low: 3, insufficient: 3 } as const
 const severityLabels = { high: '高', medium: '中', low: '低', insufficient: '資訊不足' } as const
+const triageLabels: Record<string, { label: string; tone: string }> = {
+  dismissed: { label: '免關聯', tone: 'slate' },
+  rejected: { label: '已退回', tone: 'red' },
+  needs_data: { label: '需補資料', tone: 'amber' },
+}
 
 export default function CmoPatientWorkspacePage() {
   const params = useParams<{ id: string }>()
@@ -327,6 +379,10 @@ export default function CmoPatientWorkspacePage() {
         display_layman: problemForm.plainTitle.trim() || problemForm.userExplanation.trim() || problemForm.title.trim(),
         tier: severityToTier[problemForm.severity],
         status: problemForm.status,
+        certainty: problemForm.certainty,
+        course: problemForm.course,
+        followup_note: problemForm.followupNote.trim() || undefined,
+        tracking_note: problemForm.trackingNote.trim() || undefined,
         cmo_note: problemForm.cmoNote.trim() || undefined,
       })
       setProblemForm(emptyProblemForm)
@@ -343,13 +399,26 @@ export default function CmoPatientWorkspacePage() {
     if (!workspace || !medicationForm.medicationName.trim()) return
     setBusy('medication')
     try {
-      await api.post(`/api/cmo/patients/${workspace.patient.patient_id}/medications`, {
+      const created = await api.post(`/api/cmo/patients/${workspace.patient.patient_id}/medications`, {
         drug_name: medicationForm.medicationName.trim(),
+        brand_name: medicationForm.brandName.trim() || undefined,
+        generic_name_en: medicationForm.genericNameEn.trim() || undefined,
+        dose: medicationForm.dose.trim() || undefined,
         intent: medicationForm.possibleIndication.trim() || '待 CMO 確認用途',
         frequency: medicationForm.frequency.trim() || undefined,
+        route: medicationForm.route.trim() || undefined,
+        self_pay_price: medicationForm.selfPayPrice.trim() || undefined,
         note: medicationForm.cmoComment.trim() || undefined,
         is_active: true,
-      })
+      }) as { id?: number }
+      const problemId = Number(medicationForm.relatedProblemId)
+      if (created.id && Number.isFinite(problemId) && problemId > 0) {
+        await api.post(`/api/cmo/problems/${problemId}/links`, {
+          resource_type: 'medication',
+          resource_id: created.id,
+          note: medicationForm.possibleIndication.trim() || undefined,
+        })
+      }
       setMedicationForm(emptyMedicationForm)
       await refreshAfterMutation('已新增用藥整理項目。')
     } catch (err) {
@@ -378,6 +447,44 @@ export default function CmoPatientWorkspacePage() {
       await refreshAfterMutation(action === 'publish' ? '已發布用藥整理到使用者端。' : '已從使用者端撤下用藥整理。')
     } catch (err) {
       setNotice(err instanceof ApiError ? err.message : '用藥操作失敗。')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const linkSelectedRecordToProblem = async (problemId: number) => {
+    if (!workspace || !selectedRecord) return
+    setBusy(`link-record-${selectedRecord.id}`)
+    try {
+      await api.post(`/api/cmo/problems/${problemId}/links`, {
+        resource_type: 'draft',
+        resource_id: selectedRecord.id,
+        note: selectedRecord.summary || selectedRecord.title,
+      })
+      await refreshAfterMutation('已將來源資料加入 Problem 容器。')
+    } catch (err) {
+      setNotice(err instanceof ApiError ? err.message : '關聯來源資料失敗。')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const triageSelectedRecord = async (triage: 'dismissed' | 'rejected' | 'needs_data') => {
+    if (!workspace || !selectedRecord) return
+    setBusy(`triage-record-${selectedRecord.id}`)
+    try {
+      await api.post(`/api/cmo/patients/${workspace.patient.patient_id}/resource-triage`, {
+        resource_type: 'draft',
+        resource_id: selectedRecord.id,
+        triage,
+        note: selectedRecord.summary || selectedRecord.title,
+        title: `補充資料：${selectedRecord.title}`,
+        reason: selectedRecord.summary || selectedRecord.diagnosis || selectedRecord.title,
+        source_excerpt: selectedRecord.raw_record || selectedRecord.summary || selectedRecord.title,
+      })
+      await refreshAfterMutation(triage === 'needs_data' ? '已建立補資料任務。' : triage === 'rejected' ? '已退回此來源資料。' : '已標記此資料免關聯。')
+    } catch (err) {
+      setNotice(err instanceof ApiError ? err.message : '來源資料標記失敗。')
     } finally {
       setBusy('')
     }
@@ -453,6 +560,7 @@ export default function CmoPatientWorkspacePage() {
           <ToneBadge label={priorityMeta[patient.priority].label} tone={priorityMeta[patient.priority].tone} />
           <Link href="/cmo/workbench" className="cmo-button">回 Queue</Link>
           <Link href={`/cmo/patients/${patient.patient_id}/nhi`} className="cmo-button">看完整 NHI</Link>
+          <button type="button" className="cmo-button" onClick={() => setShowPreview(true)}>預覽病患端</button>
         </div>
       </section>
 
@@ -483,6 +591,10 @@ export default function CmoPatientWorkspacePage() {
             filteredRecords={filteredRecords}
             selectedRecord={selectedRecord}
             setSelectedRecordId={setSelectedRecordId}
+            problems={workspace.cmo_output.problems}
+            busy={busy}
+            onLinkRecord={linkSelectedRecordToProblem}
+            onTriageRecord={triageSelectedRecord}
           />
         </section>
 
@@ -501,6 +613,7 @@ export default function CmoPatientWorkspacePage() {
             busy={busy}
             form={medicationForm}
             setForm={setMedicationForm}
+            problems={workspace.cmo_output.problems}
             onSubmit={createMedication}
             onAction={runMedicationAction}
           />
@@ -532,6 +645,10 @@ function SourceReview({
   filteredRecords,
   selectedRecord,
   setSelectedRecordId,
+  problems,
+  busy,
+  onLinkRecord,
+  onTriageRecord,
 }: {
   workspace: WorkspaceResponse
   sectionFilter: string
@@ -539,8 +656,14 @@ function SourceReview({
   filteredRecords: NhiRecord[]
   selectedRecord: NhiRecord | null
   setSelectedRecordId: (value: number) => void
+  problems: HealthProblem[]
+  busy: string
+  onLinkRecord: (problemId: number) => void
+  onTriageRecord: (triage: 'dismissed' | 'rejected' | 'needs_data') => void
 }) {
   const overview = workspace.source_review.nhi_overview
+  const [selectedProblemId, setSelectedProblemId] = useState('')
+  const activeProblemId = selectedProblemId || String(problems[0]?.problem_id ?? '')
   return (
     <div className="cmo-card cmo-section cmo-sticky-panel">
       <div className="cmo-title-row">
@@ -590,6 +713,8 @@ function SourceReview({
             <div className="cmo-title-row" style={{ gap: 8 }}>
               <strong>{record.title}</strong>
               <ToneBadge label={record.section_label} tone={record.status === 'pending' ? 'amber' : record.status === 'accepted' ? 'green' : 'slate'} />
+              {record.triage_status && <ToneBadge label={triageLabels[record.triage_status]?.label ?? record.triage_status} tone={triageLabels[record.triage_status]?.tone ?? 'slate'} />}
+              {record.linked_problem_ids && record.linked_problem_ids.length > 0 && <ToneBadge label="已關聯" tone="green" />}
             </div>
             <div className="cmo-subtitle">{formatDateOnly(record.date)} · {cleanText(record.facility, '院所未記錄')}</div>
             <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5 }}>{cleanText(record.summary || record.diagnosis, '沒有解析摘要')}</div>
@@ -605,10 +730,46 @@ function SourceReview({
           <KeyValue label="診斷" value={cleanText(selectedRecord.diagnosis)} />
           <KeyValue label="用藥" value={cleanText(selectedRecord.medication)} />
           <KeyValue label="檢查 / 處置" value={cleanText(selectedRecord.exam_or_lab || selectedRecord.procedure)} />
+          {selectedRecord.triage_status && (
+            <div className="cmo-chipbar" style={{ marginTop: 8 }}>
+              <ToneBadge label={triageLabels[selectedRecord.triage_status]?.label ?? selectedRecord.triage_status} tone={triageLabels[selectedRecord.triage_status]?.tone ?? 'slate'} />
+              {selectedRecord.triage_note && <span className="cmo-subtitle">{selectedRecord.triage_note}</span>}
+              {selectedRecord.missing_data_request_id && <span className="cmo-subtitle">補資料任務 #{selectedRecord.missing_data_request_id}</span>}
+            </div>
+          )}
           <details style={{ marginTop: 10 }}>
             <summary className="cmo-button" style={{ width: 'fit-content' }}>查看原始資料</summary>
             <pre className="cmo-source-raw" style={{ marginTop: 10 }}>{selectedRecord.raw_record || selectedRecord.summary || '沒有原始文字'}</pre>
           </details>
+          <div className="cmo-card cmo-section" style={{ marginTop: 12, background: '#fff' }}>
+            <h4 className="cmo-section-title">Problem 容器操作</h4>
+            <div className="cmo-form-grid">
+              <label>
+                <span className="cmo-kpi-label">加入 Problem</span>
+                <select className="cmo-select" value={activeProblemId} onChange={(event) => setSelectedProblemId(event.target.value)}>
+                  {problems.length === 0 ? <option value="">尚未建立 Problem</option> : problems.map((problem) => (
+                    <option key={problem.problem_id} value={problem.problem_id}>{problem.plain_language_title || problem.title}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="cmo-chipbar" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="cmo-button primary"
+                disabled={!activeProblemId || busy === `link-record-${selectedRecord.id}`}
+                onClick={() => onLinkRecord(Number(activeProblemId))}
+              >
+                加入 Problem
+              </button>
+              <button type="button" className="cmo-button" disabled={busy === `triage-record-${selectedRecord.id}`} onClick={() => onTriageRecord('dismissed')}>標記免關聯</button>
+              <button type="button" className="cmo-button" disabled={busy === `triage-record-${selectedRecord.id}`} onClick={() => onTriageRecord('rejected')}>退回</button>
+              <button type="button" className="cmo-button" disabled={busy === `triage-record-${selectedRecord.id}`} onClick={() => onTriageRecord('needs_data')}>需要補資料</button>
+            </div>
+            {selectedRecord.linked_problem_ids && selectedRecord.linked_problem_ids.length > 0 && (
+              <div className="cmo-subtitle" style={{ marginTop: 8 }}>已關聯 Problem #{selectedRecord.linked_problem_ids.join(', #')}</div>
+            )}
+          </div>
         </div>
       )}
 
@@ -658,8 +819,15 @@ function ProblemListPanel({
               </div>
               <div className="cmo-chipbar">
                 <ToneBadge label={severityLabels[problem.severity]} tone={problem.severity === 'high' ? 'red' : problem.severity === 'medium' ? 'amber' : 'slate'} />
+                <ToneBadge label={problem.certainty === 'suspected' ? '疑似' : problem.certainty === 'ruled_out' ? '已排除' : '確認'} tone={problem.certainty === 'suspected' ? 'amber' : problem.certainty === 'ruled_out' ? 'slate' : 'blue'} />
                 <ToneBadge label={problem.is_published ? '使用者可見' : problem.is_verified ? '已確認' : '待確認'} tone={problem.is_published ? 'green' : problem.is_verified ? 'blue' : 'amber'} />
               </div>
+            </div>
+            <div className="cmo-chipbar" style={{ marginTop: 8 }}>
+              <span className="cmo-badge">診斷 {problem.linked_diagnoses_count ?? 0}</span>
+              <span className="cmo-badge">用藥 {problem.linked_meds_count ?? 0}</span>
+              <span className="cmo-badge">檢查/數值 {(problem.linked_labs_observations_count ?? 0) + (problem.linked_measurements_count ?? 0)}</span>
+              <span className="cmo-badge">影像 {problem.linked_imaging_count ?? 0}</span>
             </div>
             <div className="cmo-review-two">
               <div>
@@ -703,10 +871,37 @@ function ProblemListPanel({
           <label>
             <span className="cmo-kpi-label">目前狀態</span>
             <select className="cmo-select" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as ProblemForm['status'] })}>
-              <option value="following">需要追蹤</option>
-              <option value="underlying">穩定觀察</option>
-              <option value="resolved">已處理</option>
+              <option value="following">追蹤中</option>
+              <option value="underlying">觀察中</option>
+              <option value="resolved">已解決</option>
             </select>
+          </label>
+          <label>
+            <span className="cmo-kpi-label">確定性</span>
+            <select className="cmo-select" value={form.certainty} onChange={(event) => setForm({ ...form, certainty: event.target.value as ProblemForm['certainty'] })}>
+              <option value="confirmed">確認</option>
+              <option value="suspected">疑似</option>
+              <option value="ruled_out">已排除</option>
+            </select>
+          </label>
+          <label>
+            <span className="cmo-kpi-label">病程</span>
+            <select className="cmo-select" value={form.course} onChange={(event) => setForm({ ...form, course: event.target.value as ProblemForm['course'] })}>
+              <option value="chronic">慢性</option>
+              <option value="acute">急性</option>
+              <option value="episodic">反覆/事件型</option>
+              <option value="preventive">預防追蹤</option>
+            </select>
+          </label>
+        </div>
+        <div className="cmo-form-grid">
+          <label>
+            <span className="cmo-kpi-label">回診/補資料 note</span>
+            <input className="cmo-input" value={form.followupNote} onChange={(event) => setForm({ ...form, followupNote: event.target.value })} />
+          </label>
+          <label>
+            <span className="cmo-kpi-label">追蹤 note</span>
+            <input className="cmo-input" value={form.trackingNote} onChange={(event) => setForm({ ...form, trackingNote: event.target.value })} />
           </label>
         </div>
         <label>
@@ -728,6 +923,7 @@ function MedicationPanel({
   busy,
   form,
   setForm,
+  problems,
   onSubmit,
   onAction,
 }: {
@@ -735,6 +931,7 @@ function MedicationPanel({
   busy: string
   form: MedicationForm
   setForm: (form: MedicationForm) => void
+  problems: HealthProblem[]
   onSubmit: (event: FormEvent) => void
   onAction: (medication: MedicationReview, action: 'publish' | 'unpublish') => void
 }) {
@@ -748,6 +945,9 @@ function MedicationPanel({
               <div>
                 <strong>{medication.medication_name}</strong>
                 <div className="cmo-subtitle">{cleanText(medication.frequency, '頻率未記錄')} · {cleanText(medication.possible_indication, '用途待確認')}</div>
+                <div className="cmo-subtitle" style={{ marginTop: 4 }}>
+                  {[medication.brand_name, medication.generic_name_en, medication.dose, medication.route, medication.self_pay_price ? `自費 ${medication.self_pay_price}` : ''].filter(Boolean).join(' · ') || '商品名、學名、途徑與自費價格待補'}
+                </div>
               </div>
               <ToneBadge label={medication.is_published ? '使用者可見' : medication.is_verified ? '已確認' : '待確認'} tone={medication.is_published ? 'green' : medication.is_verified ? 'blue' : 'amber'} />
             </div>
@@ -770,12 +970,41 @@ function MedicationPanel({
             <input className="cmo-input" value={form.medicationName} onChange={(event) => setForm({ ...form, medicationName: event.target.value })} />
           </label>
           <label>
+            <span className="cmo-kpi-label">商品名</span>
+            <input className="cmo-input" value={form.brandName} onChange={(event) => setForm({ ...form, brandName: event.target.value })} />
+          </label>
+          <label>
+            <span className="cmo-kpi-label">英文學名</span>
+            <input className="cmo-input" value={form.genericNameEn} onChange={(event) => setForm({ ...form, genericNameEn: event.target.value })} />
+          </label>
+          <label>
+            <span className="cmo-kpi-label">劑量</span>
+            <input className="cmo-input" value={form.dose} onChange={(event) => setForm({ ...form, dose: event.target.value })} />
+          </label>
+          <label>
             <span className="cmo-kpi-label">可能用途</span>
             <input className="cmo-input" value={form.possibleIndication} onChange={(event) => setForm({ ...form, possibleIndication: event.target.value })} />
           </label>
           <label>
             <span className="cmo-kpi-label">頻率 / 時間</span>
             <input className="cmo-input" value={form.frequency} onChange={(event) => setForm({ ...form, frequency: event.target.value })} />
+          </label>
+          <label>
+            <span className="cmo-kpi-label">途徑</span>
+            <input className="cmo-input" value={form.route} onChange={(event) => setForm({ ...form, route: event.target.value })} placeholder="口服 / 外用 / 注射" />
+          </label>
+          <label>
+            <span className="cmo-kpi-label">自費價格</span>
+            <input className="cmo-input" value={form.selfPayPrice} onChange={(event) => setForm({ ...form, selfPayPrice: event.target.value })} />
+          </label>
+          <label>
+            <span className="cmo-kpi-label">關聯 Problem</span>
+            <select className="cmo-select" value={form.relatedProblemId} onChange={(event) => setForm({ ...form, relatedProblemId: event.target.value })}>
+              <option value="">不關聯</option>
+              {problems.map((problem) => (
+                <option key={problem.problem_id} value={problem.problem_id}>{problem.plain_language_title || problem.title}</option>
+              ))}
+            </select>
           </label>
         </div>
         <label>
@@ -831,6 +1060,14 @@ function SummaryBuilder({
   onReady: () => void
   onPublish: () => void
 }) {
+  const attentionFields: Array<{ key: keyof Pick<SummaryForm, 'summary_condition' | 'summary_exam' | 'summary_followup' | 'summary_values' | 'summary_advice'>; label: string }> = [
+    { key: 'summary_condition', label: '病況' },
+    { key: 'summary_exam', label: '檢查' },
+    { key: 'summary_followup', label: '回診' },
+    { key: 'summary_values', label: '數值' },
+    { key: 'summary_advice', label: '建議' },
+  ]
+  const hasAttentionSummary = attentionFields.some((field) => form[field.key].trim())
   return (
     <div className="cmo-card cmo-section">
       <div className="cmo-title-row">
@@ -850,18 +1087,21 @@ function SummaryBuilder({
           <input className="cmo-input" value={form.follow_up_date} onChange={(event) => setForm({ ...form, follow_up_date: event.target.value })} placeholder="例如：2 週內 / 下次回診前" />
         </label>
       </div>
-      <label>
-        <span className="cmo-kpi-label">健康摘要</span>
-        <textarea className="cmo-textarea" value={form.health_summary} onChange={(event) => setForm({ ...form, health_summary: event.target.value })} />
-      </label>
-      <label>
-        <span className="cmo-kpi-label">CMO 給使用者的說明</span>
-        <textarea className="cmo-textarea" value={form.recommendation} onChange={(event) => setForm({ ...form, recommendation: event.target.value })} />
-      </label>
-      <label>
-        <span className="cmo-kpi-label">下一步建議</span>
-        <textarea className="cmo-textarea" value={form.next_step} onChange={(event) => setForm({ ...form, next_step: event.target.value })} />
-      </label>
+      <div className="cmo-form-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))' }}>
+        {attentionFields.map((field) => (
+          <label key={field.key}>
+            <span className="cmo-kpi-label">{field.label}</span>
+            <input
+              className="cmo-input"
+              maxLength={20}
+              value={form[field.key]}
+              onChange={(event) => setForm({ ...form, [field.key]: event.target.value.slice(0, 20) })}
+              placeholder="20 字內"
+            />
+            <div className="cmo-subtitle" style={{ fontSize: 11, marginTop: 4 }}>{form[field.key].length}/20</div>
+          </label>
+        ))}
+      </div>
 
       <div className="cmo-card cmo-section" style={{ background: '#f8fafc', margin: '12px 0' }}>
         <h3 className="cmo-section-title">來源提示</h3>
@@ -874,9 +1114,9 @@ function SummaryBuilder({
         <button className="cmo-button" disabled={busy === 'summary'} onClick={onSave}>儲存草稿</button>
         <button className="cmo-button" disabled={busy === 'ready-summary'} onClick={onReady}>標記待發布</button>
         <button className="cmo-button" onClick={() => setShowPreview(!showPreview)}>{showPreview ? '返回修改' : '預覽使用者端'}</button>
-        <button className="cmo-button primary" disabled={busy === 'publish-summary' || !form.recommendation.trim() || !form.next_step.trim()} onClick={onPublish}>發布給使用者</button>
+        <button className="cmo-button primary" disabled={busy === 'publish-summary' || !hasAttentionSummary} onClick={onPublish}>發布給使用者</button>
       </div>
-      {(!form.recommendation.trim() || !form.next_step.trim()) && <div className="cmo-subtitle" style={{ marginTop: 8 }}>發布需要「使用者說明」與「下一步建議」。</div>}
+      {!hasAttentionSummary && <div className="cmo-subtitle" style={{ marginTop: 8 }}>發布前至少填寫一格「需要注意」。</div>}
 
       {showPreview && <PublishPreview workspace={workspace} form={form} sourceRefs={sourceRefs} />}
     </div>
@@ -886,11 +1126,25 @@ function SummaryBuilder({
 function PublishPreview({ workspace, form, sourceRefs }: { workspace: WorkspaceResponse; form: SummaryForm; sourceRefs: Array<{ label: string; status: string }> }) {
   const visibleProblems = workspace.cmo_output.problems.filter((problem) => problem.is_published || problem.publish_to_user).slice(0, 4)
   const visibleMeds = workspace.cmo_output.medications.filter((medication) => medication.is_published).slice(0, 4)
+  const attentionRows = [
+    ['病況', form.summary_condition],
+    ['檢查', form.summary_exam],
+    ['回診', form.summary_followup],
+    ['數值', form.summary_values],
+    ['建議', form.summary_advice],
+  ] as const
   return (
     <section className="cmo-card cmo-section cmo-publish-preview">
       <div className="cmo-kpi-label">Publish Preview</div>
       <h3>{form.title || '今日健康摘要'}</h3>
-      <p>{cleanText(form.health_summary, '尚未填寫健康摘要')}</p>
+      <div className="cmo-user-preview-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(118px, 1fr))' }}>
+        {attentionRows.map(([label, value]) => (
+          <div key={label} className="cmo-list-item">
+            <div className="cmo-kpi-label">{label}</div>
+            <strong>{cleanText(value, '—')}</strong>
+          </div>
+        ))}
+      </div>
       <div className="cmo-user-preview-grid">
         <div>
           <h4>主要健康問題</h4>
@@ -912,10 +1166,6 @@ function PublishPreview({ workspace, form, sourceRefs }: { workspace: WorkspaceR
           ))}
         </div>
       </div>
-      <h4>CMO 給你的說明</h4>
-      <p>{cleanText(form.recommendation, '尚未填寫')}</p>
-      <h4>下一步</h4>
-      <p>{cleanText(form.next_step, '尚未填寫')}</p>
       <div className="cmo-card cmo-section" style={{ background: '#fff', marginTop: 12 }}>
         <h4>資料來源與提醒</h4>
         {sourceRefs.map((ref) => <div key={ref.label} className="cmo-subtitle">{ref.label} · {ref.status}</div>)}
@@ -978,12 +1228,18 @@ function ToneBadge({ label, tone }: { label: string; tone: string }) {
 
 function formFromSummary(summary: UserFacingSummary | null, workspace: WorkspaceResponse): SummaryForm {
   if (summary) {
+    const attention = summary.attention_summary
     return {
       series_id: summary.series_id,
       title: summary.title || '今日健康摘要',
       health_summary: summary.health_summary || '',
       recommendation: summary.recommendation || '',
       next_step: summary.next_step || '',
+      summary_condition: summary.summary_condition || attention?.condition || '',
+      summary_exam: summary.summary_exam || attention?.exam || '',
+      summary_followup: summary.summary_followup || attention?.followup || '',
+      summary_values: summary.summary_values || attention?.values || '',
+      summary_advice: summary.summary_advice || attention?.advice || '',
       follow_up_date: summary.follow_up_date || '',
     }
   }
@@ -998,17 +1254,33 @@ function formFromSummary(summary: UserFacingSummary | null, workspace: Workspace
         : '',
     recommendation: '',
     next_step: '',
+    summary_condition: problem ? (problem.plain_language_title || problem.title).slice(0, 20) : (risk?.label || '').slice(0, 20),
+    summary_exam: '',
+    summary_followup: '',
+    summary_values: '',
+    summary_advice: '',
     follow_up_date: '',
   }
 }
 
 function summaryPayload(form: SummaryForm, sourceRefs: Array<{ type: string; id: string; label: string; status: string }>, readyToPublish: boolean) {
+  const condition = form.summary_condition.trim()
+  const exam = form.summary_exam.trim()
+  const followup = form.summary_followup.trim()
+  const values = form.summary_values.trim()
+  const advice = form.summary_advice.trim()
+  const healthSummary = [condition && `病況：${condition}`, exam && `檢查：${exam}`, followup && `回診：${followup}`, values && `數值：${values}`, advice && `建議：${advice}`].filter(Boolean).join('；')
   return {
     series_id: form.series_id,
     title: form.title.trim() || '今日健康摘要',
-    health_summary: form.health_summary.trim(),
-    recommendation: form.recommendation.trim(),
-    next_step: form.next_step.trim(),
+    health_summary: form.health_summary.trim() || healthSummary,
+    recommendation: form.recommendation.trim() || advice || healthSummary,
+    next_step: form.next_step.trim() || followup || advice,
+    summary_condition: condition,
+    summary_exam: exam,
+    summary_followup: followup,
+    summary_values: values,
+    summary_advice: advice,
     follow_up_date: form.follow_up_date.trim() || null,
     source_refs: sourceRefs.map((ref) => ({
       source: ref.label,

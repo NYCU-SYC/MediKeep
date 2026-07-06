@@ -183,7 +183,7 @@ export default function RedZonePage() {
         <div>
           <h1 style={titleStyle}>{scopeLabel}保命紅區</h1>
           <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: 14 }}>
-            Active {data.summary.active_count} 項 · 最後整理 {fmtDate(data.summary.last_reviewed_at)}
+            急診 Tier 1 {data.summary.tier_counts.tier1} 項 · 最後整理 {fmtDate(data.summary.last_reviewed_at)}
           </p>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             {data.summary.source_badges.map((source) => <span key={source} style={badge}>{source}</span>)}
@@ -192,17 +192,21 @@ export default function RedZonePage() {
         <CopyModeButtons copy={data.copy} onCopy={copyText} />
       </header>
 
-      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 18 }}>
-        <CountCard label="Tier 1" value={data.summary.tier_counts.tier1} color="#be123c" />
-        <CountCard label="Tier 2" value={data.summary.tier_counts.tier2} color="#a16207" />
-        <CountCard label="Tier 3" value={data.summary.tier_counts.tier3} color="#475569" />
-      </section>
-
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 340px', gap: 16, alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {(['tier1', 'tier2', 'tier3'] as const).map((tierKey) => (
-            <TierSection key={tierKey} tierKey={tierKey} items={data.tiers[tierKey]} onSelect={setSelected} />
-          ))}
+          <TierSection tierKey="tier1" items={data.tiers.tier1} onSelect={setSelected} />
+          {(data.summary.tier_counts.tier2 > 0 || data.summary.tier_counts.tier3 > 0) && (
+            <section style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: 16 }}>
+              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 900, color: '#0f172a' }}>其他追蹤資料</h2>
+              <p style={{ color: '#64748b', fontSize: 13, lineHeight: 1.7 }}>
+                Tier 2 重要追蹤已移到疾病總覽；Tier 3 基本資料請到家庭與權限維護。
+              </p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => router.push(memberHref('/dashboard/problems', activeMember))} style={secondaryBtn}>疾病總覽</button>
+                <button onClick={() => router.push('/dashboard/settings')} style={secondaryBtn}>家庭與權限</button>
+              </div>
+            </section>
+          )}
         </div>
         <aside style={{ position: 'sticky', top: 16 }}>
           {selected ? (
@@ -265,14 +269,6 @@ function CopyModeButtons({ copy, onCopy }: {
         複製 Tier 1
       </button>
       <button
-        onClick={() => onCopy('all_active')}
-        disabled={!copy.all_active}
-        title={!copy.all_active ? copy.disabled_reason || '沒有 active 項目' : '複製所有 active'}
-        style={copyBtn(!copy.all_active)}
-      >
-        複製所有 Active
-      </button>
-      <button
         onClick={() => onCopy('emergency_summary')}
         disabled={!copy.emergency_summary}
         title={!copy.emergency_summary ? copy.disabled_reason || '沒有急診摘要內容' : '複製急診摘要'}
@@ -280,15 +276,6 @@ function CopyModeButtons({ copy, onCopy }: {
       >
         複製急診摘要
       </button>
-    </div>
-  );
-}
-
-function CountCard({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 14 }}>
-      <div style={{ color: '#64748b', fontSize: 12, fontWeight: 800 }}>{label}</div>
-      <div style={{ color, fontSize: 30, fontWeight: 900 }}>{value}</div>
     </div>
   );
 }

@@ -241,9 +241,72 @@ function scopeLabel(scope: string): string {
   return parts.map((part) => labels[part] ?? part).join('、');
 }
 
+function normalizeOrigin(value: string | undefined): string {
+  const raw = (value || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw).origin.replace(/\/$/, '');
+  } catch {
+    return raw.replace(/\/+$/, '');
+  }
+}
+
+const configuredEmergencyOrigin = normalizeOrigin(
+  process.env.NEXT_PUBLIC_EMERGENCY_PUBLIC_BASE_URL
+  || process.env.NEXT_PUBLIC_PUBLIC_BASE_URL
+  || process.env.NEXT_PUBLIC_FRONTEND_ORIGIN
+);
+
+function emergencyPath(token: string): string {
+  return `/emergency/${encodeURIComponent(token)}`;
+}
+
+function buildEmergencyUrl(origin: string, token: string): string {
+  return `${origin.replace(/\/+$/, '')}${emergencyPath(token)}`;
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '::1' || host === '0.0.0.0' || host.startsWith('127.');
+}
+
+function isLocalBrowserUrl(url: string): boolean {
+  try {
+    const base = typeof window !== 'undefined' ? window.location.href : 'http://localhost';
+    return isLoopbackHost(new URL(url, base).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function frontendEmergencyUrl(link: Link): string {
-  if (typeof window === 'undefined' || !link.token) return link.url;
-  return `${window.location.origin}/emergency/${encodeURIComponent(link.token)}`;
+  const backendUrl = (link.url || '').trim();
+  if (configuredEmergencyOrigin && link.token) return buildEmergencyUrl(configuredEmergencyOrigin, link.token);
+  if (backendUrl && !isLocalBrowserUrl(backendUrl)) return backendUrl;
+  if (typeof window !== 'undefined' && link.token) return buildEmergencyUrl(window.location.origin, link.token);
+  return backendUrl;
+}
+
+function qrAvailability(url: string): { canScan: boolean; title: string; body: string } {
+  if (!url) {
+    return {
+      canScan: false,
+      title: '尚未取得連結',
+      body: '請重新整理或重新產生急診連結。',
+    };
+  }
+  if (isLocalBrowserUrl(url)) {
+    return {
+      canScan: false,
+      title: '目前 QR 指向本機網址',
+      body: '手機掃描 127.0.0.1 或 localhost 會回到手機自己，因此無法開啟這台電腦上的頁面。請改用公開網址或可被手機連到的網址後再產生 QR。',
+    };
+  }
+  return {
+    canScan: true,
+    title: '給現場醫師掃描',
+    body: '掃描後醫師仍需留下姓名才會看到資料。若醫師要求原始文件或影像，請回到上方重新產生含文件/影像的新連結。',
+  };
 }
 
 export default function EmergencyLinksPage() {
@@ -365,6 +428,7 @@ export default function EmergencyLinksPage() {
         </div>
         <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 10, lineHeight: 1.6 }}>
           產生後會顯示可掃描 QR Code。HealthKeep 直接在本頁產生 QR，不會把急診連結送到第三方 QR 服務。
+          若目前是在 127.0.0.1 或 localhost 預覽，系統會先提醒你改用公開網址，避免產生手機無法開啟的 QR。
         </div>
       </section>
 
@@ -373,6 +437,7 @@ export default function EmergencyLinksPage() {
           <h2 style={h2}>有效連結 {active.length > 0 && <span style={{ color: '#15803d' }}>({active.length})</span>}</h2>
           {active.length === 0 ? <Empty>目前沒有有效連結。需要時按上方「產生連結」。</Empty> : active.map(l => {
             const url = frontendEmergencyUrl(l);
+            const qr = qrAvailability(url);
             return (
             <div key={l.id} style={card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -392,12 +457,21 @@ export default function EmergencyLinksPage() {
                 <button onClick={() => revoke(l.id)} style={{ ...smallBtn, color: '#be123c', borderColor: '#fecaca' }}>撤銷</button>
               </div>
               <div style={qrCard}>
-                <QrCode value={url} />
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 850, color: '#0f172a' }}>給現場醫師掃描</div>
-                  <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.6, marginTop: 4 }}>
-                    掃描後醫師仍需留下姓名才會看到資料。若醫師要求原始文件或影像，請回到上方重新產生含文件/影像的新連結。
+                {qr.canScan ? <QrCode value={url} /> : (
+                  <div style={{ ...qrFallback, borderColor: '#fed7aa', background: '#fff7ed', color: '#9a3412', fontWeight: 800 }}>
+                    無法產生可用 QR
                   </div>
+                )}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 850, color: qr.canScan ? '#0f172a' : '#9a3412' }}>{qr.title}</div>
+                  <div style={{ fontSize: 12, color: qr.canScan ? '#64748b' : '#9a3412', lineHeight: 1.6, marginTop: 4 }}>
+                    {qr.body}
+                  </div>
+                  {!qr.canScan && (
+                    <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.6, marginTop: 6 }}>
+                      開發環境可設定 <code>NEXT_PUBLIC_EMERGENCY_PUBLIC_BASE_URL</code> 為 ngrok、Cloudflare Tunnel 或正式網域後重新整理。
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

@@ -26,7 +26,7 @@ import {
   type ClinicalPatient,
 } from '@/lib/clinical'
 import { DRAWER_ORIGIN_LABEL, type DrawerOrigin, type Problem } from '@/lib/healthkeepTypes'
-import { RiskPill, FollowUpPill, TrendIcon, ScoreBar } from './atoms'
+import { RiskPill, WorkloadPill, FollowUpPill, TrendIcon, ScoreBar } from './atoms'
 
 function notesKey(userId: string): string { return `cmo:physician-note:${userId}` }
 function reviewKey(userId: string): string { return `cmo:patient-reviewed:${userId}` }
@@ -162,6 +162,7 @@ export function PatientSnapshot({ patient, origin, originContext, onClose }: Sna
 
           <div style={{ display: 'flex', gap: 8, margin: '12px 0', flexWrap: 'wrap' }}>
             <RiskPill level={patient.riskLevel} />
+            <WorkloadPill level={patient.workloadLevel} score={patient.workloadScore} />
             <FollowUpPill status={patient.followUpStatus} />
             <TrendIcon trend={patient.trend} />
             {patient.cohorts.slice(0, 4).map((c) => (
@@ -213,18 +214,18 @@ export function PatientSnapshot({ patient, origin, originContext, onClose }: Sna
           {/* ── 3. Risk + Health score + Why-this-risk ───────────────── */}
           <div className="cmo-grid-2" style={{ gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
             <div className="cmo-card cmo-section" style={{ padding: 12 }}>
-              <div className="cmo-kpi-label">Risk score (internal triage signal)</div>
+              <div className="cmo-kpi-label">Clinical risk score</div>
               <div style={{ fontSize: 24, fontWeight: 850, color: '#0f172a' }}>
                 {patient.riskScore}<span style={{ fontSize: 13, color: '#94a3b8' }}> / 100</span>
               </div>
               <ScoreBar score={patient.riskScore} level={patient.riskLevel} />
             </div>
             <div className="cmo-card cmo-section" style={{ padding: 12 }}>
-              <div className="cmo-kpi-label">Health score</div>
+              <div className="cmo-kpi-label">Workload score</div>
               <div style={{ fontSize: 24, fontWeight: 850, color: '#0f172a' }}>
-                {patient.healthScore}<span style={{ fontSize: 13, color: '#94a3b8' }}> / 100</span>
+                {patient.workloadScore}<span style={{ fontSize: 13, color: '#94a3b8' }}> / 100</span>
               </div>
-              <div className="cmo-subtitle">Trend: <TrendIcon trend={patient.trend} /></div>
+              <div className="cmo-subtitle">Pending drafts: {patient.pending_drafts} · Unpublished: {patient.unpublished_problems}</div>
             </div>
           </div>
 
@@ -331,7 +332,7 @@ export function PatientSnapshot({ patient, origin, originContext, onClose }: Sna
                   </div>
                 ))}
                 <div className="cmo-subtitle" style={{ marginTop: 6, fontSize: 11 }}>
-                  Document viewer pending — these IDs link to /api/source-documents/{`{id}`}/download once that endpoint is integrated.
+                  這裡顯示來源摘要；需要開啟原始檔時，請進入病患資料頁的文件或影像區。
                 </div>
               </div>
             )}

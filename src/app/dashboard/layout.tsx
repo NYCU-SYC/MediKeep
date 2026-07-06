@@ -10,16 +10,15 @@ import { SyncProvider } from '@/lib/sync';
 import { ALL_MEMBERS, memberHref, normalizeMemberName } from '@/lib/members';
 import { Icon, HeartLogo } from './_components/Icon';
 
-// ── Desktop sidebar — 4 主 tab 置頂，其餘降為次級分組（不刪除任何頁面，全部仍可達） ──
-// 對應改版規劃 §3.1：13 項 → 4 主 tab（首頁/健康/提醒/我的）+ 漸進揭露。
+// ── Desktop sidebar — primary model tabs first; legacy pages stay reachable. ──
 const menuSections = [
   {
     label: '主要',
     items: [
       { name: '首頁', icon: '🏠', href: '/dashboard' },
       { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
-      { name: '提醒', icon: '🔔', href: '/dashboard/reminders' },
-      { name: '我的', icon: '👤', href: '/dashboard/settings' },
+      { name: '疾病總覽', icon: '🏥', href: '/dashboard/problems' },
+      { name: '家庭與權限', icon: '👤', href: '/dashboard/settings' },
     ],
   },
   {
@@ -31,13 +30,13 @@ const menuSections = [
       { name: '慢性病',       icon: '🏥', href: '/dashboard/conditions' },
       { name: '藥物',         icon: '💊', href: '/dashboard/medications' },
       { name: '趨勢分析',     icon: '📈', href: '/dashboard/trends' },
-      { name: '健保存摺匯入', icon: '📑', href: '/dashboard/nhi' },
     ],
   },
   {
     label: '資料與紀錄',
     items: [
       { name: '新增紀錄', icon: '➕', href: '/dashboard/upload' },
+      { name: '健保存摺匯入', icon: '📑', href: '/dashboard/nhi' },
       { name: '影像庫',   icon: '🩻', href: '/dashboard/imaging' },
       { name: '文件庫',   icon: '📁', href: '/dashboard/documents' },
       { name: '歷史紀錄', icon: '📋', href: '/dashboard/history' },
@@ -45,12 +44,12 @@ const menuSections = [
   },
 ];
 
-// ── Mobile bottom nav: 4 primary tabs（首頁/健康/提醒/我的）──
+// ── Mobile bottom nav: 4 primary tabs（首頁/健康/疾病/家庭）──
 const mobileNavLeft = [
   { name: '首頁', icon: '🏠', href: '/dashboard' },
   { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
-  { name: '提醒', icon: '🔔', href: '/dashboard/reminders' },
-  { name: '我的', icon: '👤', href: '/dashboard/settings' },
+  { name: '疾病', icon: '🏥', href: '/dashboard/problems' },
+  { name: '家庭', icon: '👤', href: '/dashboard/settings' },
 ];
 
 // ── MobileNavItem ─────────────────────────────────────────────────────────────
@@ -541,6 +540,26 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
               </div>
             </div>
           </div>
+          <Link
+            href={navHref('/dashboard/reminders')}
+            style={{
+              marginTop: 10,
+              minHeight: 36,
+              borderRadius: 10,
+              background: '#fff',
+              border: '1px solid var(--gray-200)',
+              color: '#475569',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              fontSize: 12,
+              fontWeight: 800,
+              textDecoration: 'none',
+            }}
+          >
+            <Icon name="🔔" size={16} /> 提醒
+          </Link>
         </div>
 
         {/* Nav sections */}
@@ -793,6 +812,26 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             </>
           )}
         </div>}
+
+        <Link
+          href={navHref('/dashboard/reminders')}
+          aria-label="提醒"
+          style={{
+            flexShrink: 0,
+            width: 36,
+            height: 36,
+            borderRadius: 11,
+            background: '#f8fafc',
+            color: '#475569',
+            border: '1px solid var(--gray-200)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            WebkitTapHighlightColor: 'transparent',
+          }}
+        >
+          <Icon name="🔔" size={18} />
+        </Link>
 
         <button
           type="button"
