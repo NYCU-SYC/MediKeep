@@ -42,6 +42,7 @@ export function setCmoSessionToken(token?: string | null) {
 
 function getSessionToken(path: string) {
   if (!canUseStorage()) return null
+  if (path.startsWith('/api/auth/me')) return null
   return window.localStorage.getItem(path.startsWith('/api/cmo') ? cmoTokenKey : patientTokenKey)
 }
 
@@ -60,9 +61,27 @@ type ErrorPayload = {
   }
 }
 
+function detailMessage(detail: unknown): string | null {
+  if (!detail) return null
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const first = detail.find((item) => Boolean(detailMessage(item)))
+    return first ? detailMessage(first) : null
+  }
+  if (typeof detail === 'object') {
+    const record = detail as Record<string, unknown>
+    for (const key of ['message', 'reason', 'error', 'detail']) {
+      if (typeof record[key] === 'string' && record[key]) return record[key]
+    }
+    if (typeof record.code === 'string' && record.code) return record.code
+  }
+  return null
+}
+
 function errorMessage(payload: ErrorPayload, fallback: string) {
   if (payload?.error?.message) return payload.error.message
-  if (payload?.detail) return typeof payload.detail === 'string' ? payload.detail : fallback
+  const message = detailMessage(payload?.detail)
+  if (message) return message
   return fallback
 }
 

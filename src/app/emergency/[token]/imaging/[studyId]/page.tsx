@@ -61,7 +61,7 @@ function DicomViewer({ token, series }: { token: string; series: Series }) {
   const changeWc = (v: number) => { setWc(v); if (wcT.current) clearTimeout(wcT.current); wcT.current = setTimeout(() => { setAppliedWc(v); setLoading(true); }, 400); };
   const changeWw = (v: number) => { setWw(v); if (wwT.current) clearTimeout(wwT.current); wwT.current = setTimeout(() => { setAppliedWw(v); setLoading(true); }, 400); };
 
-  if (!inst) return <div style={{ color: '#94a3b8', padding: 40, textAlign: 'center' }}>無影像可顯示</div>;
+  if (!inst) return <div style={{ color: '#93a3af', padding: 40, textAlign: 'center' }}>無影像可顯示</div>;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: '#000' }}>
@@ -93,7 +93,7 @@ function DicomViewer({ token, series }: { token: string; series: Series }) {
       </div>
       <div style={{ background: '#111', borderTop: '1px solid #2a2a2a', padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
         {instances.length > 1 && (
-          <Row label="切片"><input type="range" min={0} max={instances.length - 1} value={idx} onChange={e => { setIdx(parseInt(e.target.value)); setLoading(true); }} style={{ flex: 1, accentColor: '#007bff' }} /><span style={num}>{idx + 1}/{instances.length}</span></Row>
+          <Row label="切片"><input type="range" min={0} max={instances.length - 1} value={idx} onChange={e => { setIdx(parseInt(e.target.value)); setLoading(true); }} style={{ flex: 1, accentColor: '#3e6b7e' }} /><span style={num}>{idx + 1}/{instances.length}</span></Row>
         )}
         <Row label="WC"><input type="range" min={-1000} max={3000} value={wc} onChange={e => changeWc(parseInt(e.target.value))} style={{ flex: 1, accentColor: '#4caf50' }} /><span style={num}>{Math.round(wc)}</span></Row>
         <Row label="WW"><input type="range" min={1} max={4000} value={ww} onChange={e => changeWw(parseInt(e.target.value))} style={{ flex: 1, accentColor: '#ff9800' }} /><span style={num}>{Math.round(ww)}</span></Row>
@@ -137,18 +137,18 @@ export default function EmergencyImagingPage() {
   if (phase === 'gate') {
     return (
       <Centered>
-        <div style={{ width: '100%', maxWidth: 360, background: '#fff', borderRadius: 16, padding: 24, border: '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: 13, color: '#be123c', fontWeight: 800 }}>HealthKeep · 急診影像</div>
-          <p style={{ fontSize: 13, color: '#475569', lineHeight: 1.6, margin: '8px 0 14px' }}>檢視影像前請留下您的姓名，<strong>存取會被記錄</strong>。</p>
-          <input value={accessor} onChange={e => setAccessor(e.target.value)} placeholder="例：王醫師" style={{ width: '100%', border: '1px solid #cbd5e1', borderRadius: 10, padding: '10px 12px', fontSize: 15 }} />
-          {error && <div style={{ color: '#be123c', fontSize: 13, marginTop: 8 }}>{error}</div>}
-          <button onClick={() => accessor.trim() && load(accessor.trim())} style={{ width: '100%', marginTop: 14, background: '#be123c', color: '#fff', border: 'none', borderRadius: 10, padding: 12, fontWeight: 850, fontSize: 15, cursor: 'pointer' }}>檢視影像</button>
+        <div style={{ width: '100%', maxWidth: 360, background: '#fff', borderRadius: 16, padding: 24, border: '1px solid #e3e9ee' }}>
+          <div style={{ fontSize: 13, color: '#a03a30', fontWeight: 800 }}>HealthKeep · 急診影像</div>
+          <p style={{ fontSize: 13, color: '#56687a', lineHeight: 1.6, margin: '8px 0 14px' }}>檢視影像前請留下您的姓名，<strong>存取會被記錄</strong>。</p>
+          <input value={accessor} onChange={e => setAccessor(e.target.value)} placeholder="例：王醫師" style={{ width: '100%', border: '1px solid #c8d4dc', borderRadius: 10, padding: '10px 12px', fontSize: 15 }} />
+          {error && <div style={{ color: '#a03a30', fontSize: 13, marginTop: 8 }}>{error}</div>}
+          <button onClick={() => accessor.trim() && load(accessor.trim())} style={{ width: '100%', marginTop: 14, background: '#a03a30', color: '#fff', border: 'none', borderRadius: 10, padding: 12, fontWeight: 850, fontSize: 15, cursor: 'pointer' }}>檢視影像</button>
         </div>
       </Centered>
     );
   }
   if (phase === 'loading') return <Centered><div style={{ color: '#aaa' }}>🩻 載入影像中…</div></Centered>;
-  if (phase === 'error') return <Centered><div style={{ fontSize: 40 }}>⚠️</div><div style={{ marginTop: 8, fontWeight: 700, color: '#0f172a' }}>{error}</div></Centered>;
+  if (phase === 'error') return <Centered><div style={{ fontSize: 40 }}>⚠️</div><div style={{ marginTop: 8, fontWeight: 700, color: '#22313f' }}>{error}</div></Centered>;
 
   const d = data!;
   const series = d.series.find(s => s.id === activeSeries) ?? d.series[0];
@@ -186,7 +186,7 @@ export default function EmergencyImagingPage() {
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
-  return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', textAlign: 'center', background: '#f1f5f9', padding: 20 }}>{children}</div>;
+  return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', textAlign: 'center', background: '#eef2f5', padding: 20 }}>{children}</div>;
 }
 
 const TB: React.CSSProperties = { padding: '4px 10px', background: '#2a2a2a', color: '#ddd', border: '1px solid #444', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 };

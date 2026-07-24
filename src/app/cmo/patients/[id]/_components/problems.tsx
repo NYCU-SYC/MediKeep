@@ -69,11 +69,11 @@ export function ProblemCard({ problem, documents, metrics, busy, onAction, onTie
         <div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
             <span className="cmo-badge" style={{ background: tier.bg, color: tier.fg }}>{tier.label}</span>
-            <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>{normalizeMemberName(problem.member_name)}</span>
-            <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#334155' }}>{statusLabel(problem.status)}</span>
-            {problem.is_suspected && <span className="cmo-badge" style={{ background: '#fef3c7', color: '#a16207' }}>疑似</span>}
-            {problem.is_verified && <span className="cmo-badge" style={{ background: '#ecfdf5', color: '#047857' }}>Verified</span>}
-            {problem.is_published && <span className="cmo-badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>Published</span>}
+            <span className="cmo-badge" style={{ background: '#f6f9fa', color: '#56687a' }}>{normalizeMemberName(problem.member_name)}</span>
+            <span className="cmo-badge" style={{ background: '#eef2f5', color: '#45596a' }}>{statusLabel(problem.status)}</span>
+            {problem.is_suspected && <span className="cmo-badge" style={{ background: '#fdf6e3', color: '#a97614' }}>疑似</span>}
+            {problem.is_verified && <span className="cmo-badge" style={{ background: '#e7f4ec', color: '#2e8b57' }}>Verified</span>}
+            {problem.is_published && <span className="cmo-badge" style={{ background: '#e7f3f5', color: '#33596a' }}>Published</span>}
             {(problem.duplicate_count ?? 1) > 1 && (
               <span className="cmo-badge" style={{ background: '#eef2ff', color: '#3730a3' }} title="此問題在來源資料中重複出現，已自動合併顯示；原始紀錄仍保留可追溯。">
                 合併 ×{problem.duplicate_count}
@@ -107,7 +107,7 @@ export function ProblemCard({ problem, documents, metrics, busy, onAction, onTie
           <VerifyPublishPanel problem={problem} busy={busy} onAction={onAction} />
         </div>
       </div>
-      {problem.cmo_note && <div className="cmo-card cmo-section" style={{ marginTop: 12, background: '#f8fafc' }}>{problem.cmo_note}</div>}
+      {problem.cmo_note && <div className="cmo-card cmo-section" style={{ marginTop: 12, background: '#f6f9fa' }}>{problem.cmo_note}</div>}
     </article>
   )
 }
@@ -123,7 +123,7 @@ export function PublishReadinessPanel({ items }: { items: ReturnType<typeof read
               <strong>{item.label}</strong>
               <div className="cmo-subtitle">{item.detail}</div>
             </div>
-            <span className="cmo-badge" style={{ background: item.done ? '#ecfdf5' : '#fff1f2', color: item.done ? '#047857' : '#be123c' }}>
+            <span className="cmo-badge" style={{ background: item.done ? '#e7f4ec' : '#faecea', color: item.done ? '#2e8b57' : '#a03a30' }}>
               {item.done ? 'Ready' : 'Needs review'}
             </span>
           </div>
@@ -149,7 +149,7 @@ export function PatientFacingPreview({ problems }: { problems: Problem[] }) {
             <div key={problem.id} className="cmo-list-item">
               <div className="cmo-row">
                 <strong>{problem.display_layman || problem.display_name}</strong>
-                <span className="cmo-badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>Patient visible</span>
+                <span className="cmo-badge" style={{ background: '#e7f3f5', color: '#33596a' }}>Patient visible</span>
               </div>
               <div className="cmo-subtitle">{normalizeMemberName(problem.member_name)} · {statusLabel(problem.status)} · {problem.icd10_code ?? '無 ICD'} · CMO notes hidden</div>
             </div>

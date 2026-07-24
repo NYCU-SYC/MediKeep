@@ -9,7 +9,7 @@ export function UnlinkedItemsPanel({ items }: { items: UnlinkedItems }) {
     <div className="cmo-card cmo-section" style={{ gridColumn: '1 / -1' }}>
       <div className="cmo-title-row">
         <h2 className="cmo-section-title" style={{ margin: 0 }}>Unlinked Items</h2>
-        <span className="cmo-badge" style={{ background: total ? '#fef3c7' : '#ecfdf5', color: total ? '#a16207' : '#047857' }}>{total} pending</span>
+        <span className="cmo-badge" style={{ background: total ? '#fdf6e3' : '#e7f4ec', color: total ? '#a97614' : '#2e8b57' }}>{total} pending</span>
       </div>
       <div className="cmo-grid-2" style={{ marginTop: 12 }}>
         <UnlinkedColumn title="Conditions" rows={items.conditions.map((item) => ({
@@ -19,8 +19,8 @@ export function UnlinkedItemsPanel({ items }: { items: UnlinkedItems }) {
         }))} />
         <UnlinkedColumn title="Medications" rows={items.medications.map((item) => ({
           id: `medication-${item.id}`,
-          title: item.drug_name,
-          detail: [item.dose, item.frequency, item.intent].filter(Boolean).join(' · ') || 'No regimen detail',
+          title: item.drug_name || item.medication_name || 'Medication',
+          detail: [item.dose, item.frequency, item.indication || item.possible_indication].filter(Boolean).join(' · ') || 'No regimen detail',
         }))} />
       </div>
       <div className="cmo-subtitle" style={{ marginTop: 12 }}>
@@ -52,11 +52,11 @@ export function TimelinePanel({ items }: { items: MedicalTimelineItem[] }) {
       <h2 className="cmo-section-title">近期資料時間線</h2>
       <div className="cmo-list">
         {items.length === 0 ? <div className="cmo-muted">尚無近期資料。</div> : items.map((item) => (
-          <div className="cmo-list-item" key={item.id} style={{ borderColor: item.important ? '#fbbf24' : '#e2e8f0', background: item.important ? '#fffbeb' : '#fff' }}>
+          <div className="cmo-list-item" key={item.id} style={{ borderColor: item.important ? '#fbbf24' : '#e3e9ee', background: item.important ? '#fdf6e3' : '#fff' }}>
             <div className="cmo-row">
               <strong>{item.title}</strong>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#334155' }}>{item.kind}</span>
+                <span className="cmo-badge" style={{ background: '#eef2f5', color: '#45596a' }}>{item.kind}</span>
                 <DataSourceBadge source={item.source} />
                 <ReviewStatusBadge status={item.status} />
               </div>

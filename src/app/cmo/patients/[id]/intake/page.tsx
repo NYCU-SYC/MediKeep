@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
+import { normalizeDateInput } from '@/lib/cmoReview'
 import PatientContentEntryLauncher, { sendToPatientContentPanel } from '../_components/PatientContentEntryDrawer'
 
 type PriorityHint = 'tier1' | 'tier2' | 'tier3'
@@ -46,9 +47,9 @@ const TYPE_LABELS: Record<string, string> = {
 }
 
 const TIER_META: Record<PriorityHint, { label: string; color: string }> = {
-  tier1: { label: 'Tier 1 · 危及生命', color: '#be123c' },
-  tier2: { label: 'Tier 2 · 重要追蹤', color: '#a16207' },
-  tier3: { label: 'Tier 3 · 一般紀錄', color: '#475569' },
+  tier1: { label: 'Tier 1 · 危及生命', color: '#a03a30' },
+  tier2: { label: 'Tier 2 · 重要追蹤', color: '#a97614' },
+  tier3: { label: 'Tier 3 · 一般紀錄', color: '#56687a' },
 }
 
 async function fetchJson<T>(url: string, fallback: T, init?: RequestInit): Promise<T> {
@@ -75,11 +76,11 @@ function overallConfidence(p: DraftPayload | null | undefined): number {
 }
 
 function confidenceLabel(pct: number): { text: string; color: string } {
-  if (pct === 0) return { text: '—', color: '#94a3b8' }
+  if (pct === 0) return { text: '—', color: '#93a3af' }
   const p = Math.round(pct * 100)
-  if (p >= 85) return { text: `${p}%`, color: '#047857' }
-  if (p >= 65) return { text: `${p}%`, color: '#a16207' }
-  return { text: `${p}%`, color: '#be123c' }
+  if (p >= 85) return { text: `${p}%`, color: '#2e8b57' }
+  if (p >= 65) return { text: `${p}%`, color: '#a97614' }
+  return { text: `${p}%`, color: '#a03a30' }
 }
 
 function fieldsToObj(p: DraftPayload | null | undefined): Record<string, string> {
@@ -109,8 +110,9 @@ function draftDisplay(draft: Draft, fields: Record<string, string> = fieldsToObj
     rawText.slice(0, 90) ||
     TYPE_LABELS[draft.draft_type] ||
     draft.draft_type
+  const rawDate = pickField(fields, ['visit_date', 'date', 'recorded_at', 'service_date', 'doc_date'])
   return {
-    date: pickField(fields, ['visit_date', 'date', 'recorded_at', 'service_date', 'doc_date']) || formatDate(draft.created_at ?? undefined),
+    date: rawDate ? formatDate(rawDate) : formatDate(draft.created_at ?? undefined),
     facility: pickField(fields, ['facility', 'hospital', 'institution', 'clinic', 'provider', 'organization', 'source']) || `Draft #${draft.id}`,
     title,
     summary: pickField(fields, ['imaging_summary', 'impression_text', 'result', 'value', 'note', 'raw_description']) || rawText.slice(0, 120),
@@ -142,7 +144,9 @@ function needsAction(d: Draft, problems: PatientProblem[]): boolean {
 
 function formatDate(s: string | undefined): string {
   if (!s) return '—'
-  return s.replace(/T.*$/, '')
+  // Normalize ROC-era dates from parsed sources so the queue sorts and reads
+  // consistently; fall back to stripping the ISO time part.
+  return normalizeDateInput(s.replace(/T.*$/, ''))
 }
 
 function targetForDraftField(key: string) {
@@ -166,7 +170,8 @@ function patchForDraft(draft: Draft, fields: Record<string, string>) {
   const labItem = fields.item || fields.lab_item || fields.test_name || ''
   const labValue = fields.value || fields.result || fields.lab_value || ''
   const unit = fields.unit || ''
-  const date = fields.visit_date || fields.date || fields.recorded_at || ''
+  // Normalize here so ROC-era source dates land in the panel's date inputs.
+  const date = normalizeDateInput(fields.visit_date || fields.date || fields.recorded_at || '')
   if (draft.draft_type === 'medication' || drugName) {
     return {
       medication: {
@@ -496,17 +501,17 @@ export default function IntakePage() {
             <span className="cmo-kbd">a</span> 接受 · <span className="cmo-kbd">r</span> 退回 · <span className="cmo-kbd">d</span> 稍後
           </div>
         </div>
-        {flash && <span className="cmo-badge" style={{ background: '#ecfdf5', color: '#047857', fontSize: 13 }}>{flash}</span>}
+        {flash && <span className="cmo-badge" style={{ background: '#e7f4ec', color: '#2e8b57', fontSize: 13 }}>{flash}</span>}
       </header>
 
       {/* Stats tiles — click to filter */}
       <div className="cmo-triage-stats">
         {([
-          ['all', '全部', counts.all, '#0f172a'],
-          ['tier1', 'T1 危急', counts.tier1, '#be123c'],
-          ['tier2', 'T2 重要', counts.tier2, '#a16207'],
-          ['tier3', 'T3 一般', counts.tier3, '#475569'],
-          ['needs_action', '需要動作', counts.needs_action, '#7c3aed'],
+          ['all', '全部', counts.all, '#22313f'],
+          ['tier1', 'T1 危急', counts.tier1, '#a03a30'],
+          ['tier2', 'T2 重要', counts.tier2, '#a97614'],
+          ['tier3', 'T3 一般', counts.tier3, '#56687a'],
+          ['needs_action', '需要動作', counts.needs_action, '#7a5fc0'],
         ] as Array<[StatFilter, string, number, string]>).map(([key, label, n, color]) => (
           <button key={key} type="button"
             className={`cmo-triage-stat ${statFilter === key ? 'active' : ''}`}
@@ -548,12 +553,12 @@ export default function IntakePage() {
           </thead>
           <tbody ref={tableRef}>
             {grouped.length === 0 && (
-              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#64748b', padding: 30 }}>沒有符合條件的 Draft。</td></tr>
+              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7c8c', padding: 30 }}>沒有符合條件的 Draft。</td></tr>
             )}
             {grouped.flatMap((g) => [
               <tr key={`grp-${g.key}`} className="cmo-tier-row">
                 <td colSpan={8}>{g.label} · {g.items.length} 筆
-                  <button type="button" style={{ marginLeft: 12, fontSize: 11, color: '#2563eb', background: 'none', border: 0, cursor: 'pointer', fontWeight: 700 }}
+                  <button type="button" style={{ marginLeft: 12, fontSize: 11, color: '#3e6b7e', background: 'none', border: 0, cursor: 'pointer', fontWeight: 700 }}
                     onClick={() => setSelected((prev) => { const n = new Set(prev); g.items.forEach((d) => n.add(d.id)); return n })}>
                     全選此組
                   </button>
@@ -571,7 +576,7 @@ export default function IntakePage() {
                 return [
                   <tr key={`row-${d.id}`}
                     className={`${isSel ? 'selected' : ''} ${isExp ? 'expanded' : ''}`}
-                    style={isFoc ? { boxShadow: 'inset 3px 0 0 #2563eb' } : undefined}
+                    style={isFoc ? { boxShadow: 'inset 3px 0 0 #3e6b7e' } : undefined}
                     onClick={(e) => {
                       // Don't toggle expand if clicking checkbox or buttons
                       const t = e.target as HTMLElement
@@ -582,19 +587,19 @@ export default function IntakePage() {
                     <td onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" checked={isSel} onChange={() => toggleOne(d.id)} />
                     </td>
-                    <td style={{ whiteSpace: 'nowrap', color: '#475569', fontVariantNumeric: 'tabular-nums' }}>
+                    <td style={{ whiteSpace: 'nowrap', color: '#56687a', fontVariantNumeric: 'tabular-nums' }}>
                       {display.date}
                     </td>
                     <td><strong style={{ fontWeight: 700 }}>{display.facility}</strong></td>
                     <td>
-                      <div style={{ color: '#0f172a', fontWeight: 650 }}>{display.title}</div>
-                      {!canAccept && <div className="cmo-subtitle" style={{ marginTop: 2, color: '#be123c' }}>Missing source fields. Expand and defer/reject; do not quick-accept.</div>}
+                      <div style={{ color: '#22313f', fontWeight: 650 }}>{display.title}</div>
+                      {!canAccept && <div className="cmo-subtitle" style={{ marginTop: 2, color: '#a03a30' }}>Missing source fields. Expand and defer/reject; do not quick-accept.</div>}
                       {display.summary && display.summary !== display.title ? <div className="cmo-subtitle" style={{ marginTop: 2 }}>{display.summary.slice(0, 80)}{display.summary.length > 80 ? '...' : ''}</div> : null}
                     </td>
-                    <td style={{ color: '#475569', fontFamily: 'ui-monospace,monospace', fontSize: 12 }}>{display.icd || '—'}</td>
+                    <td style={{ color: '#56687a', fontFamily: 'ui-monospace,monospace', fontSize: 12 }}>{display.icd || '—'}</td>
                     <td>
                       <span className={`cmo-tier-pill t${tier === 'tier1' ? '1' : tier === 'tier2' ? '2' : '3'}`}>{tier === 'tier1' ? 'T1' : tier === 'tier2' ? 'T2' : 'T3'}</span>{' '}
-                      <span style={{ color: '#64748b', fontSize: 11 }}>{TYPE_LABELS[d.draft_type] || d.draft_type}</span>
+                      <span style={{ color: '#6b7c8c', fontSize: 11 }}>{TYPE_LABELS[d.draft_type] || d.draft_type}</span>
                     </td>
                     <td style={{ color: conf.color, fontWeight: 800, fontSize: 12 }}>{conf.text}</td>
                     <td style={{ textAlign: 'right' }}>
@@ -652,20 +657,20 @@ function DetailRow({ draft, problems, fields, onFieldChange, linkedId, onLinkedC
   const conf = confidenceLabel(overallConfidence(draft.payload))
   return (
     <tr>
-      <td colSpan={8} style={{ padding: 0, background: 'transparent', borderBottom: '1px solid #fde68a' }}>
+      <td colSpan={8} style={{ padding: 0, background: 'transparent', borderBottom: '1px solid #efdfae' }}>
         <div className="cmo-detail-card">
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 0.9fr) minmax(320px, 1.35fr)', gap: 14, alignItems: 'start' }}>
-            <aside className="cmo-card cmo-section" style={{ background: '#fffbeb', borderColor: '#fde68a' }}>
+            <aside className="cmo-card cmo-section" style={{ background: '#fdf6e3', borderColor: '#efdfae' }}>
               <div className="cmo-kpi-label">Raw source / OCR preview</div>
               <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <span className="cmo-badge" style={{ background: '#fef3c7', color: '#92400e' }}>{TYPE_LABELS[draft.draft_type] || draft.draft_type}</span>
-                <span className="cmo-badge" style={{ background: '#fff7ed', color: conf.color }}>Confidence {conf.text}</span>
-                {matched.length === 0 && <span className="cmo-badge" style={{ background: '#fee2e2', color: '#991b1b' }}>NEW</span>}
+                <span className="cmo-badge" style={{ background: '#fdf6e3', color: '#92400e' }}>{TYPE_LABELS[draft.draft_type] || draft.draft_type}</span>
+                <span className="cmo-badge" style={{ background: '#fdf1e0', color: conf.color }}>Confidence {conf.text}</span>
+                {matched.length === 0 && <span className="cmo-badge" style={{ background: '#faecea', color: '#8f342b' }}>NEW</span>}
               </div>
               <button type="button" className="cmo-button primary" style={{ width: '100%', marginTop: 10 }} onClick={() => sendDraftToPanel(draft, fields)}>
                 加入整理籃
               </button>
-              <pre style={{ margin: '12px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.55, color: '#334155', maxHeight: 220, overflow: 'auto' }}>{rawText}</pre>
+              <pre style={{ margin: '12px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.55, color: '#45596a', maxHeight: 220, overflow: 'auto' }}>{rawText}</pre>
               <div className="cmo-subtitle" style={{ marginTop: 10 }}>
                 可選取原始文字加入整理籃；右側可連結 Problem、退回、稍後處理或接受這筆 Draft。
               </div>

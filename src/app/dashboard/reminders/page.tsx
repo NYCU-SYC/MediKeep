@@ -42,14 +42,14 @@ const VISIT_TYPE_INFO: Record<VisitType, { label: string; icon: string; color: s
 };
 
 const REMINDER_TYPE_INFO: Record<ReminderType, { label: string; icon: string; color: string; bg: string }> = {
-  follow_up:         { label: '回診',     icon: '🏥', color: '#2563eb', bg: '#eff6ff' },
-  health_check:      { label: '健檢',     icon: '🧾', color: '#0f766e', bg: '#ecfdf5' },
-  screening:         { label: '預防',     icon: '🛡️', color: '#7c3aed', bg: '#f5f3ff' },
-  vaccine:           { label: '疫苗',     icon: '💉', color: '#b45309', bg: '#fff7ed' },
-  medication_refill: { label: '藥物',     icon: '💊', color: '#16a34a', bg: '#f0fdf4' },
-  measurement:       { label: '量測',     icon: '📈', color: '#dc2626', bg: '#fff1f2' },
-  document_upload:   { label: '文件上傳', icon: '📎', color: '#475569', bg: '#f8fafc' },
-  custom:            { label: '自訂',     icon: '🔔', color: '#64748b', bg: '#f1f5f9' },
+  follow_up:         { label: '回診',     icon: '🏥', color: '#3e6b7e', bg: '#e7f3f5' },
+  health_check:      { label: '健檢',     icon: '🧾', color: '#3e6b7e', bg: '#e7f4ec' },
+  screening:         { label: '預防',     icon: '🛡️', color: '#7a5fc0', bg: '#f0ecfa' },
+  vaccine:           { label: '疫苗',     icon: '💉', color: '#a97614', bg: '#fdf1e0' },
+  medication_refill: { label: '藥物',     icon: '💊', color: '#2e8b57', bg: '#e7f4ec' },
+  measurement:       { label: '量測',     icon: '📈', color: '#c0453a', bg: '#faecea' },
+  document_upload:   { label: '文件上傳', icon: '📎', color: '#56687a', bg: '#f6f9fa' },
+  custom:            { label: '自訂',     icon: '🔔', color: '#6b7c8c', bg: '#eef2f5' },
 };
 
 const SOURCE_LABEL: Record<ReminderSource, string> = {
@@ -128,6 +128,9 @@ type NewAppt = {
 type CmoFollowUp = { id: number; reason: string; item: string; suggested_date: string | null; priority: string; needs_more_data: boolean; needs_cmo_recheck: boolean; status: string };
 type CmoMissingDataRequest = { id: string; title: string; reason: string; instructions?: string | null; due_date?: string | null; priority: string; status: string; response_text?: string | null; responded_at?: string | null };
 
+const CLOSED_CMO_FOLLOW_UP_STATUSES = new Set(['completed', 'resolved', 'done', 'deleted']);
+const CLOSED_MISSING_REQUEST_STATUSES = new Set(['resolved', 'canceled', 'deleted']);
+
 export default function RemindersPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -144,9 +147,20 @@ export default function RemindersPage() {
   const [missingReplies, setMissingReplies] = useState<Record<string, string>>({});
   const [missingReplyBusy, setMissingReplyBusy] = useState('');
   const [cmoTasksError, setCmoTasksError] = useState(false);
+  const visibleCmoFollowUps = useMemo(
+    () => cmoFollowUps.filter((t) => !CLOSED_CMO_FOLLOW_UP_STATUSES.has(t.status)),
+    [cmoFollowUps],
+  );
+  const visibleMissingRequests = useMemo(
+    () => missingRequests.filter((request) => !CLOSED_MISSING_REQUEST_STATUSES.has(request.status)),
+    [missingRequests],
+  );
   const loadCmoTasks = useCallback(() => {
     let alive = true;
     setCmoTasksError(false);
+    const params: Record<string, string> = {};
+    if (activeMember) params.member = activeMember;
+    const queryParams = Object.keys(params).length ? params : undefined;
     // 401 redirects to login inside the api wrapper; only real (network/server)
     // failures set the error flag so the UI can distinguish "load failed" from
     // "no CMO tasks" instead of silently showing nothing.
@@ -154,14 +168,14 @@ export default function RemindersPage() {
       const status = (err as { status?: number } | null)?.status;
       if (alive && status !== 401) setCmoTasksError(true);
     };
-    api.get('/api/patients/me/follow-ups')
+    api.get('/api/patients/me/follow-ups', queryParams)
       .then((r) => { if (alive) setCmoFollowUps(Array.isArray(r) ? (r as CmoFollowUp[]) : []); })
       .catch(onErr);
-    api.get('/api/patients/me/missing-data-requests')
+    api.get('/api/patients/me/missing-data-requests', queryParams)
       .then((r) => { if (alive) setMissingRequests(Array.isArray(r) ? (r as CmoMissingDataRequest[]) : []); })
       .catch(onErr);
     return () => { alive = false; };
-  }, []);
+  }, [activeMember]);
   useEffect(() => loadCmoTasks(), [loadCmoTasks]);
   // Start filtered to the globally-selected member, sync on header chip changes
   const [filterMember, setFilterMember] = useState(() => activeMember || '全部');
@@ -417,7 +431,7 @@ export default function RemindersPage() {
       <div ref={isHighlighted ? highlightRef : undefined} style={{
         background: '#fff', borderRadius: '14px', boxShadow: 'var(--shadow-sm)',
         borderLeft: `4px solid ${a.done ? '#ccc' : a.color}`,
-        outline: isHighlighted ? '2px solid #2563eb' : 'none',
+        outline: isHighlighted ? '2px solid #3e6b7e' : 'none',
         outlineOffset: isHighlighted ? '2px' : '0',
         opacity: a.done ? 0.85 : 1,
       }}>
@@ -450,7 +464,7 @@ export default function RemindersPage() {
               <span style={{ fontSize: '11px', background: '#f0f4f8', color: '#666', padding: '2px 8px', borderRadius: '20px' }}>
                 {a.member}
               </span>
-              <span style={{ fontSize: '10px', background: a.source === 'patient_created' ? '#ecfdf5' : '#eef2ff', color: a.source === 'patient_created' ? '#047857' : '#3730a3', padding: '2px 8px', borderRadius: '20px', fontWeight: 700 }}>
+              <span style={{ fontSize: '10px', background: a.source === 'patient_created' ? '#e7f4ec' : '#eef2ff', color: a.source === 'patient_created' ? '#2e8b57' : '#3730a3', padding: '2px 8px', borderRadius: '20px', fontWeight: 700 }}>
                 {SOURCE_LABEL[a.source] ?? a.source}
               </span>
               {a.isVerified && <span style={{ fontSize: '10px', background: '#d1fae5', color: '#065f46', padding: '2px 8px', borderRadius: '20px', fontWeight: 700 }}>CMO verified</span>}
@@ -572,7 +586,7 @@ export default function RemindersPage() {
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '28px' }}>
@@ -593,45 +607,45 @@ export default function RemindersPage() {
         </div>
 
         {/* CMO 追蹤項目（由醫療團隊建立，對應改版 §5.2 F / §6.2 流程④） */}
-        {cmoFollowUps.length > 0 && (
+        {visibleCmoFollowUps.length > 0 && (
           <div style={{ background: '#fff', borderRadius: '16px', padding: '18px 20px', boxShadow: 'var(--shadow-sm)', marginBottom: '20px', borderLeft: '4px solid var(--primary)' }}>
-            <div style={{ fontSize: '12px', fontWeight: 800, color: '#94a3b8', letterSpacing: '0.5px', marginBottom: '12px' }}>醫療團隊的追蹤項目</div>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: '#93a3af', letterSpacing: '0.5px', marginBottom: '12px' }}>醫療團隊的追蹤項目</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              {cmoFollowUps.map((t) => (
-                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start', padding: '10px 0', borderBottom: '1px solid #f1f5f9' }}>
+              {visibleCmoFollowUps.map((t) => (
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start', padding: '10px 0', borderBottom: '1px solid #eef2f5' }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a' }}>{t.item}{t.status === 'done' ? ' ✓' : ''}</div>
-                    <div style={{ fontSize: '13px', color: '#475569', marginTop: '2px' }}>{t.reason}</div>
-                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '3px' }}>建議時間：{t.suggested_date || '依醫療團隊安排'}</div>
+                    <div style={{ fontWeight: 700, fontSize: '15px', color: '#22313f' }}>{t.item}{t.status === 'done' ? ' ✓' : ''}</div>
+                    <div style={{ fontSize: '13px', color: '#56687a', marginTop: '2px' }}>{t.reason}</div>
+                    <div style={{ fontSize: '12px', color: '#93a3af', marginTop: '3px' }}>建議時間：{t.suggested_date || '依醫療團隊安排'}</div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end', flexShrink: 0 }}>
-                    {t.needs_more_data && <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '999px', background: '#eff6ff', color: '#1d4ed8' }}>需補資料</span>}
-                    {t.status === 'done' && <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '999px', background: '#f0fdf4', color: '#15803d' }}>已完成</span>}
+                    {t.needs_more_data && <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '999px', background: '#e7f3f5', color: '#33596a' }}>需補資料</span>}
+                    {t.status === 'done' && <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '999px', background: '#e7f4ec', color: '#2e8b57' }}>已完成</span>}
                   </div>
                 </div>
               ))}
             </div>
-            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '10px' }}>這些是 CMO 醫療團隊為你安排的追蹤；標示「需補資料」者，可到「上傳」補件。</div>
+            <div style={{ fontSize: '11px', color: '#93a3af', marginTop: '10px' }}>這些是 CMO 醫療團隊為你安排的追蹤；標示「需補資料」者，可到「上傳」補件。</div>
           </div>
         )}
 
-        {missingRequests.length > 0 && (
-          <div style={{ background: '#fff', borderRadius: '16px', padding: '18px 20px', boxShadow: 'var(--shadow-sm)', marginBottom: '20px', borderLeft: '4px solid #f59e0b' }}>
-            <div style={{ fontSize: '12px', fontWeight: 800, color: '#b45309', letterSpacing: '0.5px', marginBottom: '12px' }}>CMO 要你補的資料</div>
+        {visibleMissingRequests.length > 0 && (
+          <div style={{ background: '#fff', borderRadius: '16px', padding: '18px 20px', boxShadow: 'var(--shadow-sm)', marginBottom: '20px', borderLeft: '4px solid #ee9d3f' }}>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: '#a97614', letterSpacing: '0.5px', marginBottom: '12px' }}>CMO 要你補的資料</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {missingRequests.map((request) => {
+              {visibleMissingRequests.map((request) => {
                 const waiting = request.status === 'waiting_for_user' || request.status === 'open';
                 const responded = request.status === 'needs_cmo_review';
                 return (
-                  <div key={request.id} style={{ border: '1px solid #fde68a', borderRadius: '12px', padding: '14px', background: responded ? '#f0fdf4' : '#fffbeb' }}>
+                  <div key={request.id} style={{ border: '1px solid #efdfae', borderRadius: '12px', padding: '14px', background: responded ? '#e7f4ec' : '#fdf6e3' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 800, fontSize: '15px', color: '#0f172a' }}>{request.title}</div>
-                        <div style={{ fontSize: '13px', color: '#475569', marginTop: '4px' }}>為什麼需要：{request.reason}</div>
-                        {request.instructions && <div style={{ fontSize: '13px', color: '#475569', marginTop: '3px' }}>怎麼補：{request.instructions}</div>}
-                        <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>期限：{request.due_date || '依 CMO 團隊安排'}</div>
+                        <div style={{ fontWeight: 800, fontSize: '15px', color: '#22313f' }}>{request.title}</div>
+                        <div style={{ fontSize: '13px', color: '#56687a', marginTop: '4px' }}>為什麼需要：{request.reason}</div>
+                        {request.instructions && <div style={{ fontSize: '13px', color: '#56687a', marginTop: '3px' }}>怎麼補：{request.instructions}</div>}
+                        <div style={{ fontSize: '12px', color: '#93a3af', marginTop: '4px' }}>期限：{request.due_date || '依 CMO 團隊安排'}</div>
                       </div>
-                      <span style={{ fontSize: '11px', fontWeight: 800, padding: '4px 10px', borderRadius: '999px', background: responded ? '#dcfce7' : '#fff7ed', color: responded ? '#15803d' : '#c2410c', flexShrink: 0 }}>
+                      <span style={{ fontSize: '11px', fontWeight: 800, padding: '4px 10px', borderRadius: '999px', background: responded ? '#dcefe3' : '#fdf1e0', color: responded ? '#2e8b57' : '#b06a10', flexShrink: 0 }}>
                         {responded ? '已送出，等待 CMO' : '待補資料'}
                       </span>
                     </div>
@@ -645,7 +659,7 @@ export default function RemindersPage() {
                           style={{ ...inputStyle, resize: 'vertical' }}
                         />
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          <button type="button" onClick={() => router.push('/dashboard/upload')} style={{ background: '#fff', border: '1px solid var(--gray-300)', color: '#334155', borderRadius: '8px', padding: '8px 12px', fontWeight: 700, cursor: 'pointer' }}>去上傳資料</button>
+                          <button type="button" onClick={() => router.push('/dashboard/upload')} style={{ background: '#fff', border: '1px solid var(--gray-300)', color: '#45596a', borderRadius: '8px', padding: '8px 12px', fontWeight: 700, cursor: 'pointer' }}>去上傳資料</button>
                           <button type="button" disabled={missingReplyBusy === request.id} onClick={() => submitMissingReply(request)} style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 12px', fontWeight: 800, cursor: missingReplyBusy === request.id ? 'wait' : 'pointer', opacity: missingReplyBusy === request.id ? 0.72 : 1 }}>
                             {missingReplyBusy === request.id ? '送出中…' : '送出給 CMO'}
                           </button>
@@ -653,7 +667,7 @@ export default function RemindersPage() {
                       </div>
                     )}
                     {responded && request.response_text && (
-                      <div style={{ marginTop: 10, fontSize: '12px', color: '#166534' }}>你的回覆：{request.response_text}</div>
+                      <div style={{ marginTop: 10, fontSize: '12px', color: '#276f47' }}>你的回覆：{request.response_text}</div>
                     )}
                   </div>
                 );
@@ -663,8 +677,8 @@ export default function RemindersPage() {
         )}
 
         {/* CMO tasks failed to load (distinct from "no tasks") */}
-        {cmoTasksError && cmoFollowUps.length === 0 && missingRequests.length === 0 && (
-          <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px', color: '#c2410c', fontSize: '13px' }}>
+        {cmoTasksError && visibleCmoFollowUps.length === 0 && visibleMissingRequests.length === 0 && (
+          <div style={{ background: '#fdf1e0', border: '1px solid #fed7aa', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px', color: '#b06a10', fontSize: '13px' }}>
             暫時無法載入 CMO 醫療團隊的追蹤與補資料任務，請稍後重新整理。你的提醒不受影響。
           </div>
         )}

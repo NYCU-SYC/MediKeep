@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useActiveMember } from '../member-context';
-import { api } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
 import { useSync } from '@/lib/sync';
 import { useToast } from '../toast-context';
 import { memberDisplayName, normalizeMemberName, uniqueMemberNames } from '@/lib/members';
@@ -122,6 +122,15 @@ function fmtDate(iso: string): string {
   return new Date(iso + 'T00:00:00').toLocaleDateString('zh-TW', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+function isOfficialMedication(m: Medication) {
+  return m.verified || m.published;
+}
+
+function medicationErrorMessage(err: unknown, fallback: string) {
+  if (err instanceof ApiError && err.message) return err.message;
+  return fallback;
+}
+
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '10px 14px', borderRadius: '8px',
@@ -137,7 +146,7 @@ const sectionLabel: React.CSSProperties = {
 const medEvidenceStyle: React.CSSProperties = {
   marginTop: '6px',
   fontSize: '12px',
-  color: '#64748b',
+  color: '#6b7c8c',
   lineHeight: 1.45,
   wordBreak: 'break-word',
 };
@@ -184,6 +193,7 @@ export default function MedicationsPage() {
   const [showForm, setShowForm] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState<FormState>(getDefaultForm);
+  const [medActionBusy, setMedActionBusy] = useState('');
   const sync = useSync();
   const { showToast } = useToast();
   const requestedMemberParam = searchParams.get('member');
@@ -319,6 +329,7 @@ export default function MedicationsPage() {
       showToast('請先選擇這筆藥物屬於哪位家庭成員', 'error');
       return;
     }
+    setMedActionBusy('add');
     try {
       const created = await api.post('/api/medications', {
         drug_name: form.name,
@@ -338,24 +349,51 @@ export default function MedicationsPage() {
       setMeds(prev => [fromApi(created), ...prev]);
       setForm(getDefaultForm());
       setShowForm(false);
-    } catch {}
+      showToast('已儲存用藥紀錄', 'success');
+    } catch (err) {
+      showToast(medicationErrorMessage(err, '儲存失敗，請稍後再試'), 'error');
+    } finally {
+      setMedActionBusy('');
+    }
   };
 
   const toggleActive = async (id: string) => {
     const med = meds.find(m => m.id === id);
     if (!med) return;
+    if (isOfficialMedication(med)) {
+      showToast('這是醫療團隊確認的官方用藥紀錄；請用「實際狀況」回報目前是否仍在吃。', 'error');
+      return;
+    }
+    setMedActionBusy(`toggle-${id}`);
     try {
       const updated = await api.patch(`/api/medications/${id}`, { is_active: !med.active });
       setMeds(prev => prev.map(m => m.id === id ? { ...m, ...fromApi(updated), active: !med.active } : m));
-    } catch {}
+      showToast(!med.active ? '已標記為用藥中' : '已標記為已停藥', 'success');
+    } catch (err) {
+      showToast(medicationErrorMessage(err, '更新失敗，請稍後再試'), 'error');
+    } finally {
+      setMedActionBusy('');
+    }
   };
 
   const remove = async (id: string) => {
+    const med = meds.find(m => m.id === id);
+    if (!med) return;
+    if (isOfficialMedication(med)) {
+      showToast('這是醫療團隊確認的官方用藥紀錄，不能直接刪除；請改用實際用藥狀況回報。', 'error');
+      return;
+    }
     if (!confirm('確定要刪除此藥物紀錄嗎？')) return;
+    setMedActionBusy(`delete-${id}`);
     try {
       await api.delete(`/api/medications/${id}`);
       setMeds(prev => prev.filter(m => m.id !== id));
-    } catch {}
+      showToast('已刪除用藥紀錄', 'success');
+    } catch (err) {
+      showToast(medicationErrorMessage(err, '刪除失敗，請稍後再試'), 'error');
+    } finally {
+      setMedActionBusy('');
+    }
   };
 
   // ── Patient-reported usage state (two-layer model) ───────────────────────────
@@ -381,7 +419,11 @@ export default function MedicationsPage() {
     }
   };
 
-  const MedCard = ({ m }: { m: Medication }) => (
+  const MedCard = ({ m }: { m: Medication }) => {
+    const official = isOfficialMedication(m);
+    const toggleBusy = medActionBusy === `toggle-${m.id}`;
+    const deleteBusy = medActionBusy === `delete-${m.id}`;
+    return (
     <div style={{
       background: '#fff', borderRadius: '14px', padding: '16px 18px',
       boxShadow: '0 1px 6px rgba(0,0,0,0.07)',
@@ -406,8 +448,8 @@ export default function MedicationsPage() {
           )}
           <span style={{
             fontSize: '11px',
-            background: m.verified && m.published ? '#ecfdf5' : '#fef3c7',
-            color: m.verified && m.published ? '#047857' : '#92400e',
+            background: m.verified && m.published ? '#e7f4ec' : '#fdf6e3',
+            color: m.verified && m.published ? '#2e8b57' : '#92400e',
             padding: '2px 8px',
             borderRadius: '20px',
             fontWeight: 700,
@@ -451,21 +493,31 @@ export default function MedicationsPage() {
               你目前標記：{USAGE_LABELS[m.usageStatus] ?? m.usageStatus}
             </span>
             {m.verified && m.usageStatus !== 'taking' && m.active && (
-              <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+              <span style={{ fontSize: '11px', color: '#93a3af' }}>
                 醫療整理紀錄：仍列為使用中 · 已同步給醫療團隊整理
               </span>
             )}
           </div>
         )}
+        {official && (
+          <div style={{ marginTop: '6px', fontSize: '11px', color: '#6b7c8c', lineHeight: 1.45 }}>
+            官方用藥紀錄需由醫療團隊更新；你可以在右側下拉回報目前實際是否仍在使用。
+          </div>
+        )}
       </div>
       {/* Actions */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flexShrink: 0 }}>
-        <button onClick={() => toggleActive(m.id)} style={{
+        <button
+          onClick={() => toggleActive(m.id)}
+          disabled={official || toggleBusy || Boolean(medActionBusy && !toggleBusy)}
+          title={official ? '官方用藥狀態不可直接改；請用下方實際狀況回報。' : '切換自建用藥紀錄狀態'}
+          style={{
           padding: '5px 10px', borderRadius: '8px', border: '1px solid #ddd',
-          background: m.active ? '#e8f5e9' : '#fff',
-          color: m.active ? '#4caf50' : '#999',
-          fontSize: '11px', cursor: 'pointer', fontWeight: '600',
-        }}>{m.active ? '用藥中' : '已停藥'}</button>
+          background: official ? '#f6f9fa' : m.active ? '#e8f5e9' : '#fff',
+          color: official ? '#93a3af' : m.active ? '#4caf50' : '#999',
+          fontSize: '11px', cursor: official || medActionBusy ? 'not-allowed' : 'pointer', fontWeight: '600',
+          opacity: official || toggleBusy ? 0.72 : 1,
+        }}>{toggleBusy ? '儲存中…' : m.active ? '用藥中' : '已停藥'}</button>
         {/* Patient-reported usage — takes effect immediately, no CMO approval */}
         <select
           value={m.usageStatus ?? ''}
@@ -479,13 +531,20 @@ export default function MedicationsPage() {
           <option value="" disabled>更新實際狀況…</option>
           {USAGE_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
         </select>
-        <button onClick={() => remove(m.id)} style={{
+        <button
+          onClick={() => remove(m.id)}
+          disabled={official || deleteBusy || Boolean(medActionBusy && !deleteBusy)}
+          title={official ? '官方用藥紀錄不可直接刪除。' : '刪除自建用藥紀錄'}
+          style={{
           padding: '5px 10px', borderRadius: '8px', border: '1px solid #eee',
-          background: '#fff', color: '#f44336', fontSize: '11px', cursor: 'pointer',
-        }}>刪除</button>
+          background: official ? '#f6f9fa' : '#fff', color: official ? '#93a3af' : '#f44336',
+          fontSize: '11px', cursor: official || medActionBusy ? 'not-allowed' : 'pointer',
+          opacity: official || deleteBusy ? 0.72 : 1,
+        }}>{deleteBusy ? '刪除中…' : official ? '不可刪除' : '刪除'}</button>
       </div>
     </div>
-  );
+    );
+  };
 
   function MedicationEvidenceLine({ doc, fallbackId }: { doc: EvidenceDocument | null; fallbackId: string | null }) {
     if (!doc) {
@@ -505,17 +564,17 @@ export default function MedicationsPage() {
     return (
       <div style={medEvidenceStyle}>
         原始文件：
-        <a href={doc.download_url} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontWeight: 700, textDecoration: 'none', wordBreak: 'break-word' }}>
+        <a href={doc.download_url} target="_blank" rel="noreferrer" style={{ color: '#3e6b7e', fontWeight: 700, textDecoration: 'none', wordBreak: 'break-word' }}>
           查看 {evidenceTitle(doc)}
         </a>
-        {evidenceMeta(doc) && <span style={{ color: '#94a3b8' }}> · {evidenceMeta(doc)}</span>}
+        {evidenceMeta(doc) && <span style={{ color: '#93a3af' }}> · {evidenceMeta(doc)}</span>}
       </div>
     );
   }
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '28px' }}>
@@ -764,13 +823,15 @@ export default function MedicationsPage() {
             </div>
 
             <div style={{ display: 'flex', gap: '10px' }}>
-              <button type="submit" style={{
+              <button type="submit" disabled={medActionBusy === 'add'} style={{
                 background: 'var(--primary)', color: '#fff', border: 'none',
-                padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer',
-              }}>儲存</button>
-              <button type="button" onClick={() => { setShowForm(false); setForm(getDefaultForm()); }} style={{
+                padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: medActionBusy === 'add' ? 'wait' : 'pointer',
+                opacity: medActionBusy === 'add' ? 0.72 : 1,
+              }}>{medActionBusy === 'add' ? '儲存中…' : '儲存'}</button>
+              <button type="button" disabled={medActionBusy === 'add'} onClick={() => { setShowForm(false); setForm(getDefaultForm()); }} style={{
                 background: '#f8f9fa', color: '#666', border: 'none',
-                padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer',
+                padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: medActionBusy === 'add' ? 'not-allowed' : 'pointer',
+                opacity: medActionBusy === 'add' ? 0.72 : 1,
               }}>取消</button>
             </div>
           </form>

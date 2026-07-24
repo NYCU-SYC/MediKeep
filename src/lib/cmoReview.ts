@@ -8,39 +8,70 @@ export type SourceEvidence = {
   status: string
 }
 
-export type ProblemLink = {
-  id: number
-  problem_id: number
-  patient_id: string
-  resource_type: string
-  resource_id: string
-  resource_label?: string | null
-  resource_date?: string | null
-  triage: string
-  note?: string | null
+export type AttentionCells = {
+  condition: string
+  check: string
+  followup: string
+  value: string
+  advice: string
+}
+
+export type ProblemLinkResourceType =
+  | 'condition'
+  | 'medication'
+  | 'health_record'
+  | 'document'
+  | 'dicom_study'
+  | 'nhi_draft'
+  | 'follow_up'
+  | 'missing_data_request'
+
+export type ProblemSlotItem = {
+  id?: string | number
+  resource_type?: ProblemLinkResourceType | string
+  resource_id?: string
+  event_date?: string | null
   linked_at?: string | null
+  resource?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type ProblemTimelineItem = {
+  id: string
+  date?: string | null
+  event_date?: string | null
+  type: string
+  label: string
+  source_excerpt?: string | null
+  resource_id?: string | number | null
 }
 
 export type HealthProblem = {
   problem_id: number
+  member_name?: string | null
+  member_id?: string | null
   title: string
   plain_language_title: string
   severity: 'high' | 'medium' | 'low' | 'insufficient'
   status: string
-  certainty?: 'confirmed' | 'suspected' | 'ruled_out' | string
-  course?: string
-  followup_note?: string
-  tracking_note?: string
+  status_code?: 'underlying' | 'following' | 'resolved' | string
+  diagnosis_status?: 'confirmed' | 'suspected' | 'ruled_out' | 'pending_confirmation' | string
+  problem_kind?: 'active' | 'chronic' | 'resolved' | 'suspected' | 'acute' | string
+  diagnosis_description?: string | null
+  evidence_note?: string | null
+  treatment_plan?: string | null
+  follow_up_cadence?: string | null
+  follow_up_recommendation?: string | null
   source: string
   evidence: SourceEvidence[]
   source_records: string[]
-  links?: ProblemLink[]
+  related_conditions?: ConditionReview[]
+  related_medications?: MedicationReview[]
+  slots?: Record<ProblemLinkResourceType | string, ProblemSlotItem[]>
+  timeline?: ProblemTimelineItem[]
   linked_diagnoses_count?: number
   linked_meds_count?: number
-  linked_labs_observations_count?: number
-  linked_imaging_count?: number
-  linked_procedures_count?: number
-  linked_measurements_count?: number
+  linked_resources_count?: number
   cmo_internal_note: string
   user_visible_explanation: string
   recommended_action: string
@@ -51,18 +82,38 @@ export type HealthProblem = {
   created_at?: string | null
 }
 
+export type ConditionReview = {
+  id: number
+  display_name: string
+  icd10_code?: string | null
+  status?: string | null
+  member_name?: string | null
+  onset_date?: string | null
+  note?: string | null
+  linked_problem_id?: number | null
+  related_problem_id?: number | null
+  is_verified?: boolean
+  is_published?: boolean
+}
+
 export type MedicationReview = {
   id: number
+  member_name?: string | null
   medication_name: string
+  drug_name?: string
   generic_name_en?: string | null
   brand_name?: string | null
   dose?: string | null
   route?: string | null
-  self_pay_price?: string | null
   possible_indication: string
+  indication?: string | null
   frequency: string
   duration: string
   related_problem_id: number | null
+  linked_problem_id?: number | null
+  is_self_paid?: boolean
+  price_amount?: number | null
+  price_currency?: string | null
   source_record: string | null
   cmo_comment: string
   user_visible_summary: string
@@ -99,18 +150,7 @@ export type UserFacingSummary = {
   health_summary: string
   recommendation: string
   next_step: string
-  summary_condition?: string
-  summary_exam?: string
-  summary_followup?: string
-  summary_values?: string
-  summary_advice?: string
-  attention_summary?: {
-    condition: string
-    exam: string
-    followup: string
-    values: string
-    advice: string
-  }
+  attention_cells?: AttentionCells
   follow_up_date?: string | null
   source_refs?: SourceEvidence[]
   quality_checks?: Record<string, unknown>
@@ -159,6 +199,7 @@ export type NhiRecord = {
   id: number
   draft_type: string
   status: string
+  triage_status?: 'pending' | 'linked' | 'dismissed' | 'rejected' | string
   priority_hint: string
   section: string
   section_label: string
@@ -177,10 +218,6 @@ export type NhiRecord = {
   created_at: string | null
   reviewed_at: string | null
   source: string
-  linked_problem_ids?: number[]
-  triage_status?: 'dismissed' | 'rejected' | 'needs_data' | null
-  triage_note?: string | null
-  missing_data_request_id?: string | null
 }
 
 export type RiskSignal = {
@@ -192,9 +229,39 @@ export type RiskSignal = {
   summary: string
 }
 
+export type PublishReadinessIssue = {
+  code: string
+  label: string
+  detail: string
+  target_type?: string | null
+  target_id?: string | null
+  next_action?: string | null
+}
+
+export type PublishReadiness = {
+  patient_id: string
+  member_name?: string | null
+  member_scope?: string[] | null
+  blockers: PublishReadinessIssue[]
+  warnings: PublishReadinessIssue[]
+  high_risk_flags: PublishReadinessIssue[]
+  can_publish: boolean
+  requires_secondary_review: boolean
+  override_allowed: boolean
+}
+
 export type WorkspaceResponse = {
   patient: PatientReview
   state: PatientReview['state']
+  family_members?: Array<{
+    id: string
+    name: string
+    relation?: string | null
+    age?: number | null
+    gender?: string | null
+    color?: string | null
+  }>
+  active_member?: string | null
   source_review: {
     nhi_overview: {
       total: number
@@ -211,10 +278,23 @@ export type WorkspaceResponse = {
     risk_signals: RiskSignal[]
     uploads: Array<Record<string, unknown>>
     measurements: Array<Record<string, unknown>>
+    dicom_studies?: Array<Record<string, unknown>>
   }
   cmo_output: {
     problems: HealthProblem[]
+    conditions: ConditionReview[]
     medications: MedicationReview[]
+    unlinked: {
+      conditions: ConditionReview[]
+      medications: MedicationReview[]
+      health_records?: Array<Record<string, unknown>>
+      documents?: Array<Record<string, unknown>>
+      dicom_studies?: Array<Record<string, unknown>>
+      nhi_drafts?: NhiRecord[]
+      follow_ups?: Array<Record<string, unknown>>
+      missing_data_requests?: Array<Record<string, unknown>>
+    }
+    problem_links?: ProblemSlotItem[]
     timeline_summary: NHITimelineEvent[]
     follow_ups: Array<Record<string, unknown>>
     missing_info_requests: Array<Record<string, unknown>>
@@ -264,4 +344,35 @@ export function formatDateOnly(value?: string | null) {
 export function cleanText(value?: string | null, fallback = '未記錄') {
   const text = String(value ?? '').trim()
   return text || fallback
+}
+
+/**
+ * Find the first date in free text and return it as YYYY-MM-DD.
+ * Handles western dates (2025-07-21, 2025/7/21, 2025年7月21日, 20250721) and
+ * Taiwan ROC-era dates (114/07/21, 民國114年7月21日, 1140721 → +1911).
+ * ROC years 90–129 are accepted (2001–2040) to keep false positives low.
+ */
+export function extractDateFromText(text: string): string | undefined {
+  const value = String(text ?? '')
+  // `(?:^|\D)` guards the left edge instead of a lookbehind, which needs ES2018.
+  // Western year with separators or 年月日
+  let m = value.match(/(?:^|\D)((?:19|20)\d{2})\s*[-/.年]\s*(0?[1-9]|1[0-2])\s*[-/.月]\s*(0?[1-9]|[12]\d|3[01])(?!\d)/)
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+  // ROC year with separators or 年月日 (民國114年7月21日 / 114.7.21)
+  m = value.match(/(?:^|\D)(1[0-2]\d|9\d)\s*[-/.年]\s*(0?[1-9]|1[0-2])\s*[-/.月]\s*(0?[1-9]|[12]\d|3[01])(?!\d)/)
+  if (m) return `${Number(m[1]) + 1911}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+  // Compact western YYYYMMDD
+  m = value.match(/(?:^|\D)((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)/)
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`
+  // Compact ROC YYYMMDD (e.g. 1140721)
+  m = value.match(/(?:^|\D)(1[0-2]\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)/)
+  if (m) return `${Number(m[1]) + 1911}-${m[2]}-${m[3]}`
+  return undefined
+}
+
+/** Normalize a user/OCR-provided date string into YYYY-MM-DD, or return it unchanged. */
+export function normalizeDateInput(value: string): string {
+  const text = String(value ?? '').trim()
+  if (!text) return ''
+  return extractDateFromText(text) ?? text
 }

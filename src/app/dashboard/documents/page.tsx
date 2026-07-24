@@ -36,14 +36,14 @@ const DOC_TYPE_INFO: Record<string, { label: string; icon: string; color: string
 const DOC_TYPES_FILTER = ['全部', ...Object.keys(DOC_TYPE_INFO)];
 
 const STATUS_STYLE: Record<string, { bg: string; color: string; border: string }> = {
-  uploaded: { bg: '#fff7ed', color: '#9a3412', border: '#fed7aa' },
-  queued: { bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
+  uploaded: { bg: '#fdf1e0', color: '#b06a10', border: '#fed7aa' },
+  queued: { bg: '#e7f3f5', color: '#33596a', border: '#cfe3e8' },
   extracting: { bg: '#eef2ff', color: '#4338ca', border: '#c7d2fe' },
-  needs_review: { bg: '#fefce8', color: '#854d0e', border: '#fde68a' },
-  confirmed: { bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0' },
-  failed: { bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
-  rejected: { bg: '#fef2f2', color: '#991b1b', border: '#fecaca' },
-  deleted: { bg: '#f1f5f9', color: '#64748b', border: '#e2e8f0' },
+  needs_review: { bg: '#fefce8', color: '#a97614', border: '#efdfae' },
+  confirmed: { bg: '#e7f4ec', color: '#2e8b57', border: '#cfe8da' },
+  failed: { bg: '#faecea', color: '#b91c1c', border: '#f2d3cf' },
+  rejected: { bg: '#faecea', color: '#8f342b', border: '#f2d3cf' },
+  deleted: { bg: '#eef2f5', color: '#6b7c8c', border: '#e3e9ee' },
 };
 
 function statusStyle(status: string) {
@@ -214,7 +214,7 @@ export default function DocumentsPage() {
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '28px' }}>
@@ -279,7 +279,7 @@ export default function DocumentsPage() {
                 支援 PDF、HTML、JPG、PNG；上傳後會先進入待整理狀態
               </div>
               {!quickMember && members.length > 1 && (
-                <div style={{ fontSize: '12px', color: '#b45309', fontWeight: 700, marginBottom: '10px' }}>
+                <div style={{ fontSize: '12px', color: '#a97614', fontWeight: 700, marginBottom: '10px' }}>
                   先選擇這份文件屬於哪位家庭成員，再上傳。
                 </div>
               )}
@@ -340,7 +340,7 @@ export default function DocumentsPage() {
         </div>
 
         <div style={{
-          background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412',
+          background: '#fdf1e0', border: '1px solid #fed7aa', color: '#b06a10',
           borderRadius: '12px', padding: '12px 16px', marginBottom: '20px',
           fontSize: '13px', lineHeight: 1.6,
         }}>
@@ -350,7 +350,7 @@ export default function DocumentsPage() {
         {loadError && (
           <div role="alert" style={{
             display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px',
-            background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c',
+            background: '#faecea', border: '1px solid #f2d3cf', color: '#b91c1c',
             borderRadius: '12px', padding: '12px 16px', marginBottom: '20px',
             flexWrap: 'wrap',
           }}>
@@ -367,19 +367,19 @@ export default function DocumentsPage() {
         {!loading && !loadError && filteredDocs.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '10px', marginBottom: '20px' }}>
             {statusSummary.map((item) => {
-              const bg = item.tone === 'danger' ? '#fef2f2' : item.tone === 'success' ? '#f0fdf4' : '#f8fafc';
-              const border = item.tone === 'danger' ? '#fecaca' : item.tone === 'success' ? '#bbf7d0' : '#e2e8f0';
-              const color = item.tone === 'danger' ? '#b91c1c' : item.tone === 'success' ? '#15803d' : '#0f172a';
+              const bg = item.tone === 'danger' ? '#faecea' : item.tone === 'success' ? '#e7f4ec' : '#f6f9fa';
+              const border = item.tone === 'danger' ? '#f2d3cf' : item.tone === 'success' ? '#cfe8da' : '#e3e9ee';
+              const color = item.tone === 'danger' ? '#b91c1c' : item.tone === 'success' ? '#2e8b57' : '#22313f';
               return (
                 <div key={item.key} style={{
                   background: bg, border: `1px solid ${border}`, borderRadius: '12px',
                   padding: '14px', minHeight: '96px',
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px' }}>
-                    <div style={{ fontSize: '13px', color: '#475569', fontWeight: 800 }}>{item.label}</div>
+                    <div style={{ fontSize: '13px', color: '#56687a', fontWeight: 800 }}>{item.label}</div>
                     <div style={{ fontSize: '24px', color, fontWeight: 900 }}>{item.count}</div>
                   </div>
-                  <div style={{ fontSize: '12px', color: '#64748b', marginTop: '8px', lineHeight: 1.5 }}>
+                  <div style={{ fontSize: '12px', color: '#6b7c8c', marginTop: '8px', lineHeight: 1.5 }}>
                     {item.hint}
                   </div>
                 </div>
@@ -393,8 +393,8 @@ export default function DocumentsPage() {
           <div style={{ textAlign: 'center', padding: '60px', color: '#999' }}>載入中...</div>
         ) : loadError ? (
           <div style={{ textAlign: 'center', padding: '56px', background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)' }}>
-            <div style={{ fontWeight: '800', color: '#991b1b', marginBottom: '8px' }}>目前無法顯示文件庫</div>
-            <div style={{ fontSize: '13px', color: '#64748b', lineHeight: 1.6, marginBottom: '18px' }}>
+            <div style={{ fontWeight: '800', color: '#8f342b', marginBottom: '8px' }}>目前無法顯示文件庫</div>
+            <div style={{ fontSize: '13px', color: '#6b7c8c', lineHeight: 1.6, marginBottom: '18px' }}>
               請先重新載入；若仍失敗，不要把空畫面視為沒有資料。
             </div>
             <button onClick={fetchDocs} style={{
@@ -406,7 +406,7 @@ export default function DocumentsPage() {
           <div style={{ textAlign: 'center', padding: '60px', background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)' }}>
             <div style={{ fontSize: '48px', marginBottom: '12px' }}>📂</div>
             <div style={{ fontWeight: '700', color: '#333', marginBottom: '8px' }}>還沒有文件</div>
-            <div style={{ fontSize: '13px', color: '#64748b', lineHeight: 1.6, marginBottom: '14px' }}>
+            <div style={{ fontSize: '13px', color: '#6b7c8c', lineHeight: 1.6, marginBottom: '14px' }}>
               上傳藥袋、檢驗報告或健康存摺後，會在這裡看到「已收到、整理中、需補件、可作為摘要依據」。
             </div>
             <button onClick={() => router.push(fileUploadHref)} style={{

@@ -80,12 +80,12 @@ export function SelectionToolbar({ categories, onPick, zoneSelector = '[data-sel
       onMouseDown={(e) => e.preventDefault()}
       style={{
         position: 'fixed', top, left, transform: 'translate(-50%, calc(-100% - 8px))', zIndex: 60,
-        background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: 10,
+        background: '#ffffff', border: '1px solid #c8d4dc', borderRadius: 10,
         boxShadow: '0 8px 28px rgba(15,23,42,0.18)', padding: 8, maxWidth: 360,
         display: 'flex', flexWrap: 'wrap', gap: 6,
       }}
     >
-      <div style={{ width: '100%', fontSize: 11, color: '#64748b', marginBottom: 2, lineHeight: 1.4 }}>
+      <div style={{ width: '100%', fontSize: 11, color: '#6b7c8c', marginBottom: 2, lineHeight: 1.4 }}>
         加入結構化摘要{sel.source ? ` · 來源：${sel.source}` : ''}
       </div>
       {categories.map((c) => (

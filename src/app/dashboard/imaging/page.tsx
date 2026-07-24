@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useActiveMember } from '../member-context';
+import { getPatientSessionToken } from '@/lib/api';
 import { memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
 
 type SeriesOut = {
@@ -63,7 +64,13 @@ async function readApiError(res: Response, fallback: string): Promise<string> {
   const payload = await res.json().catch(() => null) as ErrorPayload | null;
   if (payload?.error?.message) return payload.error.message;
   if (typeof payload?.detail === 'string') return payload.detail;
+  if (res.status === 401) return '登入狀態已失效，請重新登入後查看影像庫';
   return fallback;
+}
+
+function authHeaders(): HeadersInit {
+  const token = getPatientSessionToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 const BADGE: React.CSSProperties = {
@@ -71,6 +78,53 @@ const BADGE: React.CSSProperties = {
   padding: '2px 8px', borderRadius: '10px', fontSize: '11px',
   fontWeight: '700', color: '#fff', flexShrink: 0,
 };
+
+function AuthenticatedThumbnail({ seriesId }: { seriesId: string }) {
+  const [thumbnail, setThumbnail] = useState({ seriesId: '', src: '', failed: false });
+
+  useEffect(() => {
+    let objectUrl = '';
+    let cancelled = false;
+
+    fetch(`/api/dicom/series/${seriesId}/thumbnail`, {
+      credentials: 'include',
+      headers: authHeaders(),
+    })
+      .then(async res => {
+        if (!res.ok) throw new Error(await readApiError(res, '無法載入縮圖'));
+        return res.blob();
+      })
+      .then(blob => {
+        if (!blob.type.startsWith('image/')) throw new Error('縮圖格式不正確');
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setThumbnail({ seriesId, src: objectUrl, failed: false });
+      })
+      .catch(() => {
+        if (!cancelled) setThumbnail({ seriesId, src: '', failed: true });
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [seriesId]);
+
+  if (thumbnail.seriesId === seriesId && thumbnail.failed) {
+    return <span style={{ color: '#c8d4dc', fontSize: '11px', fontWeight: 700 }}>無預覽</span>;
+  }
+  if (thumbnail.seriesId !== seriesId || !thumbnail.src) {
+    return <span style={{ color: '#6b7c8c', fontSize: '11px', fontWeight: 700 }}>載入</span>;
+  }
+  return (
+    <img
+      src={thumbnail.src}
+      alt=""
+      loading="lazy"
+      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+    />
+  );
+}
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -89,6 +143,7 @@ export default function ImagingPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [shareResult, setShareResult] = useState<(ShareResult & { label: string }) | null>(null);
   const [sharingId, setSharingId] = useState<string | null>(null);
+  const [error, setError] = useState('');
   const [filterMember, setFilterMember] = useState(() => activeMember || '全部');
   const requestedMemberParam = searchParams.get('member');
 
@@ -110,10 +165,14 @@ export default function ImagingPage() {
 
   const fetchStudies = useCallback(async () => {
     setLoading(true);
+    setError('');
     try {
       const params = new URLSearchParams({ limit: String(PAGE), offset: '0' });
       if (filterMember !== '全部') params.set('member', filterMember);
-      const r = await fetch(`/api/dicom/studies?${params}`, { credentials: 'include' });
+      const r = await fetch(`/api/dicom/studies?${params}`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      });
       if (r.ok) {
         const data: StudyOut[] = await r.json();
         setStudies(data);
@@ -121,7 +180,12 @@ export default function ImagingPage() {
       } else {
         setStudies([]);
         setTotal(0);
+        setError(await readApiError(r, '無法載入影像庫'));
       }
+    } catch {
+      setStudies([]);
+      setTotal(0);
+      setError('無法連線到影像庫，請稍後再試');
     } finally {
       setLoading(false);
     }
@@ -134,10 +198,15 @@ export default function ImagingPage() {
     try {
       const params = new URLSearchParams({ limit: String(PAGE), offset: String(studies.length) });
       if (filterMember !== '全部') params.set('member', filterMember);
-      const r = await fetch(`/api/dicom/studies?${params}`, { credentials: 'include' });
+      const r = await fetch(`/api/dicom/studies?${params}`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      });
       if (r.ok) {
         const data: StudyOut[] = await r.json();
         setStudies(prev => [...prev, ...data]);
+      } else {
+        setError(await readApiError(r, '無法載入更多影像'));
       }
     } finally {
       setLoadingMore(false);
@@ -156,10 +225,15 @@ export default function ImagingPage() {
 
     setSeriesLoading(s => ({ ...s, [id]: true }));
     try {
-      const r = await fetch(`/api/dicom/studies/${id}`, { credentials: 'include' });
+      const r = await fetch(`/api/dicom/studies/${id}`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      });
       if (r.ok) {
         const detail: StudyOut & { series: SeriesOut[] } = await r.json();
         setStudies(prev => prev.map(s => s.id === id ? { ...s, series: detail.series } : s));
+      } else {
+        setError(await readApiError(r, '無法載入影像序列'));
       }
     } finally {
       setSeriesLoading(s => ({ ...s, [id]: false }));
@@ -170,8 +244,16 @@ export default function ImagingPage() {
     if (!confirm(`確定要刪除「${desc}」這筆影像檢查？\n所有影像檔案將一併刪除，此操作無法復原。`)) return;
     setDeletingId(studyId);
     try {
-      await fetch(`/api/dicom/studies/${studyId}`, { method: 'DELETE', credentials: 'include' });
-      setStudies(prev => prev.filter(s => s.id !== studyId));
+      const r = await fetch(`/api/dicom/studies/${studyId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: authHeaders(),
+      });
+      if (r.ok) {
+        setStudies(prev => prev.filter(s => s.id !== studyId));
+      } else {
+        alert(await readApiError(r, '無法刪除影像檢查'));
+      }
     } finally {
       setDeletingId(null);
     }
@@ -182,7 +264,7 @@ export default function ImagingPage() {
     try {
       const r = await fetch('/api/dicom/share', {
         method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ study_id: studyId, expiry_hours: SHARE_EXPIRY_HOURS }),
       });
       if (r.ok) {
@@ -203,7 +285,7 @@ export default function ImagingPage() {
     try {
       const r = await fetch('/api/dicom/share', {
         method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ series_id: seriesId, expiry_hours: SHARE_EXPIRY_HOURS }),
       });
       if (r.ok) {
@@ -223,7 +305,7 @@ export default function ImagingPage() {
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' }}>
@@ -310,6 +392,18 @@ export default function ImagingPage() {
         {/* Studies list */}
         {loading ? (
           <div style={{ textAlign: 'center', padding: '60px', color: '#999' }}>載入中...</div>
+        ) : error ? (
+          <div style={{ textAlign: 'center', padding: '60px' }}>
+            <div style={{ fontSize: '42px', marginBottom: '16px' }}>⚠️</div>
+            <div style={{ fontWeight: '700', color: '#333', marginBottom: '8px' }}>影像庫暫時無法載入</div>
+            <p style={{ fontSize: '14px', color: '#999', marginBottom: '20px' }}>{error}</p>
+            <button onClick={fetchStudies} style={{
+              background: 'var(--primary)', color: '#fff', border: 'none',
+              padding: '12px 28px', borderRadius: '10px', fontWeight: '700', cursor: 'pointer',
+            }}>
+              重新載入
+            </button>
+          </div>
         ) : studies.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px' }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>🩻</div>
@@ -373,7 +467,7 @@ export default function ImagingPage() {
                           {study.member_name}
                         </span>
                         {studyMissing && (
-                          <span title={MISSING_STORAGE_MESSAGE} style={{ fontSize: '12px', background: '#fff7ed', color: '#b45309', padding: '2px 8px', borderRadius: '20px', border: '1px solid #fed7aa', fontWeight: 700 }}>
+                          <span title={MISSING_STORAGE_MESSAGE} style={{ fontSize: '12px', background: '#fdf1e0', color: '#a97614', padding: '2px 8px', borderRadius: '20px', border: '1px solid #fed7aa', fontWeight: 700 }}>
                             需補檔
                           </span>
                         )}
@@ -389,7 +483,7 @@ export default function ImagingPage() {
                           {study.instance_count} 張影像
                         </span>
                         {studyMissing && (
-                          <span style={{ fontSize: '12px', color: '#b45309', fontWeight: 700 }}>
+                          <span style={{ fontSize: '12px', color: '#a97614', fontWeight: 700 }}>
                             缺少 {study.missing_instance_count || study.instance_count} 個原始檔
                           </span>
                         )}
@@ -462,16 +556,8 @@ export default function ImagingPage() {
                                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                                 }}>
                                   {seriesMissing ? (
-                                    <span title={MISSING_STORAGE_MESSAGE} style={{ color: '#b45309', fontSize: '11px', fontWeight: 800 }}>缺檔</span>
-                                  ) : (
-                                    <img
-                                      src={`/api/dicom/series/${series.id}/thumbnail`}
-                                      alt=""
-                                      loading="lazy"
-                                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                      onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                                    />
-                                  )}
+                                    <span title={MISSING_STORAGE_MESSAGE} style={{ color: '#a97614', fontSize: '11px', fontWeight: 800 }}>缺檔</span>
+                                  ) : <AuthenticatedThumbnail seriesId={series.id} />}
                                 </div>
                                 <div style={{ flex: 1, minWidth: 0 }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -500,7 +586,7 @@ export default function ImagingPage() {
                                     title={seriesMissing ? MISSING_STORAGE_MESSAGE : '查看序列'}
                                     style={{
                                       padding: '6px 14px', borderRadius: '8px',
-                                      background: seriesMissing ? '#e5e7eb' : 'var(--primary)', color: seriesMissing ? '#94a3b8' : '#fff',
+                                      background: seriesMissing ? '#e5e7eb' : 'var(--primary)', color: seriesMissing ? '#93a3af' : '#fff',
                                       border: 'none', fontSize: '12px', fontWeight: '600', cursor: 'pointer',
                                     }}
                                   >

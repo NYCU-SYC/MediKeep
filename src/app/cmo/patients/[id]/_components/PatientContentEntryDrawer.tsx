@@ -3,7 +3,10 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/api'
+import { normalizeDateInput } from '@/lib/cmoReview'
 import { normalizeMemberName, uniqueMemberNames } from '@/lib/members'
+import { drugByName, searchDiagnoses, displayDrugName, type DiagnosisEntry, type DrugEntry } from '@/lib/clinicalDictionary'
+import { DiagnosisSearch, DrugSearch, QuickPick, MED_FREQUENCY_OPTIONS } from './quickpick'
 
 type ProblemStatus = 'underlying' | 'following' | 'resolved'
 type FillPanelKey = 'source' | 'problem' | 'condition' | 'medication' | 'followup' | 'record' | 'redzone'
@@ -149,6 +152,7 @@ interface Reminder {
 
 interface ProblemSnapshot {
   id: number
+  member_name?: string | null
   display_name: string
   display_layman?: string | null
   is_verified: boolean
@@ -160,6 +164,7 @@ interface PatientSnapshot {
   conditions: Array<{ id: number; member_name?: string | null; display_name?: string | null }>
   medications: Medication[]
   reminders?: Reminder[]
+  family_members?: Array<{ id: string; name?: string | null; relation?: string | null }>
 }
 
 interface ProblemBridge {
@@ -310,9 +315,8 @@ function nowInputDateTime() {
 }
 
 function normalizeDate(value: string) {
-  const match = value.match(/\d{4}[-/]\d{1,2}[-/]\d{1,2}/)
-  if (!match) return value.slice(0, 10)
-  return match[0].replace(/\//g, '-').split('-').map((part, index) => index === 0 ? part : part.padStart(2, '0')).join('-')
+  // Shared parser handles western + ROC-era (民國) dates; fall back to a 10-char slice.
+  return normalizeDateInput(value) || value.slice(0, 10)
 }
 
 function defaultProblemForm(): ProblemForm {
@@ -523,6 +527,7 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
 
   const memberOptions = useMemo(() => {
     const names = uniqueMemberNames(
+      snapshot?.family_members?.map((item) => item.name),
       ['本人'],
       snapshot?.conditions.map((item) => item.member_name),
       snapshot?.medications.map((item) => item.member_name),
@@ -537,8 +542,10 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
     ?.filter((reminder) => !reminder.is_done)
     .filter((reminder) => normalizeMemberName(reminder.member_name) === selectedMember) ?? [], [selectedMember, snapshot])
   const pendingPatientProblems = useMemo(
-    () => snapshot?.problems.filter((problem) => !problem.is_published) ?? [],
-    [snapshot],
+    () => snapshot?.problems
+      .filter((problem) => !problem.is_published)
+      .filter((problem) => normalizeMemberName(problem.member_name) === selectedMember) ?? [],
+    [selectedMember, snapshot],
   )
   const currentEntryState = useMemo<EntryState>(() => ({
     activePanel,
@@ -604,8 +611,13 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
   }, [isInline, loadSnapshot, open])
 
   useEffect(() => {
+    const familyMemberNames = uniqueMemberNames(snapshot?.family_members?.map((item) => item.name))
+    if (familyMemberNames.length > 0 && !familyMemberNames.includes(selectedMember)) {
+      setSelectedMember(familyMemberNames[0])
+      return
+    }
     if (!memberOptions.includes(selectedMember)) setSelectedMember(memberOptions[0] ?? '本人')
-  }, [memberOptions, selectedMember])
+  }, [memberOptions, selectedMember, snapshot])
 
   useEffect(() => {
     currentEntryStateRef.current = currentEntryState
@@ -781,6 +793,59 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
     setLastSource(contextLabel ?? 'selected text')
     notify('已帶入選取文字')
   }
+
+  // One diagnosis pick fills name + 白話名稱 + ICD-10 + tier + status, so the
+  // CMO never re-types the layman translation for a common chronic disease.
+  const pickDiagnosisForProblem = useCallback((entry: DiagnosisEntry) => {
+    rememberUndo()
+    setProblemForm((prev) => ({
+      ...prev,
+      display_name: entry.name_en,
+      display_layman: entry.layman,
+      icd10_code: entry.icd10,
+      tier: entry.tier,
+      status: entry.status,
+      is_suspected: false,
+    }))
+    notify(`已帶入 ${entry.name_zh} · ${entry.icd10}`)
+  }, [notify, rememberUndo])
+
+  const pickDiagnosisForCondition = useCallback((entry: DiagnosisEntry) => {
+    rememberUndo()
+    setConditionForm((prev) => ({
+      ...prev,
+      display_name: entry.name_zh,
+      icd10_code: entry.icd10,
+      status: entry.status === 'resolved' ? 'resolved' : 'active',
+    }))
+    notify(`已帶入 ${entry.name_zh} · ${entry.icd10}`)
+  }, [notify, rememberUndo])
+
+  // One drug pick fills the name and the first common dose/frequency; remaining
+  // doses are offered as chips below the field.
+  const pickDrug = useCallback((entry: DrugEntry) => {
+    rememberUndo()
+    setMedicationForm((prev) => ({
+      ...prev,
+      drug_name: displayDrugName(entry),
+      dose: entry.doses[0] ?? prev.dose,
+      frequency: entry.frequencies[0] ?? prev.frequency,
+      note: prev.note.trim() ? prev.note : `用途分類：${entry.category}`,
+    }))
+    notify(`已帶入 ${displayDrugName(entry)}`)
+  }, [notify, rememberUndo])
+
+  // Dose chips follow whichever drug is currently in the field.
+  const activeDrugEntry = useMemo(() => drugByName(medicationForm.drug_name), [medicationForm.drug_name])
+
+  // Suggest an ICD-10 + layman name from a diagnosis name that arrived via
+  // import (NHI row / draft) but has no code attached yet.
+  const problemIcdSuggestions = useMemo(() => {
+    if (problemForm.icd10_code.trim()) return []
+    const query = problemForm.display_name.trim() || problemForm.display_layman.trim()
+    if (query.length < 2) return []
+    return searchDiagnoses(query, 3)
+  }, [problemForm.display_layman, problemForm.display_name, problemForm.icd10_code])
 
   const createProblem = async () => {
     if (!problemForm.display_name.trim() && !problemForm.display_layman.trim()) {
@@ -1093,7 +1158,7 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
               </div>
             </div>
 
-            {flash && <div className="cmo-card cmo-section" style={{ margin: '12px 0', background: '#ecfdf5', borderColor: '#bbf7d0', color: '#047857' }}>{flash}</div>}
+            {flash && <div className="cmo-card cmo-section" style={{ margin: '12px 0', background: '#e7f4ec', borderColor: '#cfe8da', color: '#2e8b57' }}>{flash}</div>}
 
             <nav className="cmo-fill-tabs" aria-label="病人端內容填寫分類">
               {FILL_PANEL_OPTIONS.map((option) => (
@@ -1156,7 +1221,7 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
                     <h3 className="cmo-section-title" style={{ margin: 0 }}>來源文字帶入</h3>
                     <div className="cmo-subtitle">{isInline ? '點左側 NHI 資料列，右側會即時帶入對應分頁。' : '先連續加入多筆來源，再逐筆套用到對應分頁確認。'}</div>
                   </div>
-                  <span className="cmo-badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>{lastSource || contextLabel || 'source'}</span>
+                  <span className="cmo-badge" style={{ background: '#e7f3f5', color: '#33596a' }}>{lastSource || contextLabel || 'source'}</span>
                 </div>
                 {!isInline && <div className="cmo-fill-queue">
                   <div className="cmo-title-row" style={{ marginBottom: 8 }}>
@@ -1177,7 +1242,7 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
                         return (
                           <div key={item.id} className="cmo-list-item cmo-fill-queue-item">
                             <div>
-                              <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#334155' }}>{panelLabel}</span>
+                              <span className="cmo-badge" style={{ background: '#eef2f5', color: '#45596a' }}>{panelLabel}</span>
                               <strong>{item.summary}</strong>
                               <div className="cmo-subtitle">{item.source}</div>
                             </div>
@@ -1218,6 +1283,9 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
             {activePanel === 'problem' && (
               <section className="cmo-card cmo-section">
                 <PanelIntro title="醫師健康摘要 · Problem" subtitle="只整理病人端會看到的 Problem 摘要；建立後仍需 verify / publish。" />
+                <Field label="診斷快搜 · 選一次自動帶入白話名稱、ICD-10 與 Tier">
+                  <DiagnosisSearch onSelect={pickDiagnosisForProblem} />
+                </Field>
                 <div className="cmo-chipbar" style={{ marginBottom: 10 }}>
                   {PROBLEM_TEMPLATES.map((template) => (
                     <button key={template.label} type="button" className="cmo-chip" onClick={() => setProblemForm({ ...problemForm, ...template, is_suspected: template.status === 'following' })}>{template.label}</button>
@@ -1225,6 +1293,18 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
                 </div>
                 <Field label="Problem name"><input className="cmo-input" value={problemForm.display_name} onChange={(event) => setProblemForm({ ...problemForm, display_name: event.target.value })} /></Field>
                 <Field label="病人端白話名稱"><input className="cmo-input" value={problemForm.display_layman} onChange={(event) => setProblemForm({ ...problemForm, display_layman: event.target.value })} /></Field>
+                {problemIcdSuggestions.length > 0 && (
+                  <div style={{ marginBottom: 9 }}>
+                    <div className="cmo-kpi-label" style={{ marginBottom: 5 }}>可能對應的 ICD-10（點選補齊）</div>
+                    <div className="cmo-chipbar">
+                      {problemIcdSuggestions.map((entry) => (
+                        <button key={entry.icd10} type="button" className="cmo-chip" onClick={() => pickDiagnosisForProblem(entry)}>
+                          {entry.name_zh} · {entry.icd10}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="cmo-field-grid">
                   <Field label="ICD-10"><input className="cmo-input" value={problemForm.icd10_code} onChange={(event) => setProblemForm({ ...problemForm, icd10_code: event.target.value })} /></Field>
                   <Field label="起始日期"><input className="cmo-input" type="date" value={problemForm.onset_date} onChange={(event) => setProblemForm({ ...problemForm, onset_date: event.target.value })} /></Field>
@@ -1251,6 +1331,9 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
             {activePanel === 'condition' && (
               <section className="cmo-card cmo-section">
                 <PanelIntro title="慢性病管理 · Condition" subtitle="用於補齊疾病史或建立 Problem candidate；建立後需到 Patient POV 發布。" />
+                <Field label="診斷快搜 · 選一次自動帶入名稱與 ICD-10">
+                  <DiagnosisSearch onSelect={pickDiagnosisForCondition} />
+                </Field>
                 <Field label="疾病/病史名稱"><input className="cmo-input" value={conditionForm.display_name} onChange={(event) => setConditionForm({ ...conditionForm, display_name: event.target.value })} /></Field>
                 <div className="cmo-field-grid">
                   <Field label="ICD-10"><input className="cmo-input" value={conditionForm.icd10_code} onChange={(event) => setConditionForm({ ...conditionForm, icd10_code: event.target.value })} /></Field>
@@ -1273,6 +1356,9 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
             {activePanel === 'medication' && (
               <section className="cmo-card cmo-section">
                 <PanelIntro title="藥物追蹤 · Medication" subtitle="用 NHI / 藥袋資料帶入藥名與劑量；新增後需到 Patient POV 發布，才會進入使用者端用藥頁。" />
+                <Field label="藥物快搜 · 選一次自動帶入藥名、劑量與頻率">
+                  <DrugSearch onSelect={pickDrug} />
+                </Field>
                 <div className="cmo-chipbar" style={{ marginBottom: 10 }}>
                   {MEDICATION_TEMPLATES.map((template) => (
                     <button key={template.label} type="button" className="cmo-chip" onClick={() => setMedicationForm({ ...medicationForm, ...template })}>{template.label}</button>
@@ -1280,8 +1366,26 @@ export default function PatientContentEntryLauncher({ patientId, contextLabel, p
                 </div>
                 <Field label="藥名"><input className="cmo-input" value={medicationForm.drug_name} onChange={(event) => setMedicationForm({ ...medicationForm, drug_name: event.target.value })} /></Field>
                 <div className="cmo-field-grid">
-                  <Field label="劑量"><input className="cmo-input" value={medicationForm.dose} onChange={(event) => setMedicationForm({ ...medicationForm, dose: event.target.value })} /></Field>
-                  <Field label="頻率"><input className="cmo-input" value={medicationForm.frequency} onChange={(event) => setMedicationForm({ ...medicationForm, frequency: event.target.value })} /></Field>
+                  <Field label="劑量">
+                    <input className="cmo-input" value={medicationForm.dose} onChange={(event) => setMedicationForm({ ...medicationForm, dose: event.target.value })} />
+                    {activeDrugEntry && (
+                      <QuickPick
+                        options={activeDrugEntry.doses.map((dose) => ({ label: dose }))}
+                        value={medicationForm.dose}
+                        onPick={(next) => setMedicationForm({ ...medicationForm, dose: next })}
+                        ariaLabel="常用劑量"
+                      />
+                    )}
+                  </Field>
+                  <Field label="頻率">
+                    <input className="cmo-input" value={medicationForm.frequency} onChange={(event) => setMedicationForm({ ...medicationForm, frequency: event.target.value })} />
+                    <QuickPick
+                      options={(activeDrugEntry?.frequencies ?? MED_FREQUENCY_OPTIONS.map((option) => option.label)).map((freq) => ({ label: freq }))}
+                      value={medicationForm.frequency}
+                      onPick={(next) => setMedicationForm({ ...medicationForm, frequency: next })}
+                      ariaLabel="常用頻次"
+                    />
+                  </Field>
                   <Field label="類型">
                     <select className="cmo-select" value={medicationForm.intent} onChange={(event) => setMedicationForm({ ...medicationForm, intent: event.target.value as MedicationForm['intent'] })}>
                       <option value="chronic">慢性處方</option>
@@ -1538,8 +1642,8 @@ function PatientBridgePanel({
           <div className="cmo-subtitle">建立後先留在 CMO gate；Verify + Publish 後才會出現在使用者端醫師健康摘要。</div>
         </div>
         <span className="cmo-badge" style={{
-          background: problem.is_published ? '#eff6ff' : problem.is_verified ? '#ecfdf5' : '#fff7ed',
-          color: problem.is_published ? '#1d4ed8' : problem.is_verified ? '#047857' : '#c2410c',
+          background: problem.is_published ? '#e7f3f5' : problem.is_verified ? '#e7f4ec' : '#fdf1e0',
+          color: problem.is_published ? '#33596a' : problem.is_verified ? '#2e8b57' : '#b06a10',
         }}>
           {problem.is_published ? 'Patient visible' : problem.is_verified ? 'Verified' : 'Needs verify'}
         </span>
@@ -1641,7 +1745,7 @@ function PanelIntro({ title, subtitle }: { title: string; subtitle: string }) {
         <h3 className="cmo-section-title">{title}</h3>
         <div className="cmo-subtitle">{subtitle}</div>
       </div>
-      <span className="cmo-badge" style={{ background: '#f8fafc', color: '#334155' }}>CMO confirm</span>
+      <span className="cmo-badge" style={{ background: '#f6f9fa', color: '#45596a' }}>CMO confirm</span>
     </div>
   )
 }

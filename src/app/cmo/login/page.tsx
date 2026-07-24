@@ -39,7 +39,7 @@ export default function CmoLoginPage() {
       }
       const data = await res.json().catch(() => ({}))
       setCmoSessionToken(data.session_token)
-      router.push('/cmo/workbench')
+      router.push('/cmo/dashboard')
     } catch {
       setError('目前無法連線到 CMO 服務，請稍後再試。')
     } finally {
@@ -49,18 +49,18 @@ export default function CmoLoginPage() {
 
   return (
     <main className="cmo-shell cmo-login-grid">
-      <section style={{ position: 'relative', overflow: 'hidden', padding: '56px clamp(28px, 6vw, 72px)', background: 'linear-gradient(135deg, #111827 0%, #1f2937 58%, #0f766e 140%)', color: '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+      <section style={{ position: 'relative', overflow: 'hidden', padding: '56px clamp(28px, 6vw, 72px)', background: 'linear-gradient(135deg, #0e161d 0%, #1f2937 58%, #3e6b7e 140%)', color: '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
         <div>
           <div className="cmo-brand" style={{ minWidth: 0 }}>
             <span className="cmo-logo">H</span>
             <span>HealthKeep <span style={{ color: '#9ca3af', fontWeight: 650 }}>CMO Console</span></span>
           </div>
           <div style={{ maxWidth: 560, marginTop: 92 }}>
-            <div className="cmo-badge" style={{ background: 'rgb(255 255 255 / 0.10)', color: '#dbeafe', border: '1px solid rgb(255 255 255 / 0.16)' }}>Clinical operations</div>
+            <div className="cmo-badge" style={{ background: 'rgb(255 255 255 / 0.10)', color: '#d5e7ec', border: '1px solid rgb(255 255 255 / 0.16)' }}>Clinical operations</div>
             <h1 style={{ margin: '18px 0 0', fontSize: 42, lineHeight: 1.18, letterSpacing: 0, fontWeight: 850 }}>
               把病患資訊整理成 CMO 能快速判讀的工作流。
             </h1>
-            <p style={{ marginTop: 18, color: '#cbd5e1', fontSize: 15, lineHeight: 1.8 }}>
+            <p style={{ marginTop: 18, color: '#c8d4dc', fontSize: 15, lineHeight: 1.8 }}>
               工作台會依風險、Draft、未發布 Problem、文件與影像自動分流；進入病患頁後可直接查看紅區、交班摘要、Problem 與近期資料時間線。
             </p>
           </div>
@@ -74,7 +74,7 @@ export default function CmoLoginPage() {
           ].map(([title, body]) => (
             <div key={title} className="cmo-card cmo-section" style={{ background: 'rgb(255 255 255 / 0.07)', borderColor: 'rgb(255 255 255 / 0.14)', color: '#fff' }}>
               <div style={{ fontWeight: 800 }}>{title}</div>
-              <div style={{ marginTop: 5, color: '#cbd5e1', fontSize: 12 }}>{body}</div>
+              <div style={{ marginTop: 5, color: '#c8d4dc', fontSize: 12 }}>{body}</div>
             </div>
           ))}
         </div>
@@ -119,7 +119,7 @@ export default function CmoLoginPage() {
           </div>
 
           {error && (
-            <div className="cmo-card cmo-section" role="alert" style={{ marginTop: 14, background: '#fff1f2', borderColor: '#fecaca', color: '#be123c' }}>
+            <div className="cmo-card cmo-section" role="alert" style={{ marginTop: 14, background: '#faecea', borderColor: '#f2d3cf', color: '#a03a30' }}>
               {error}
             </div>
           )}

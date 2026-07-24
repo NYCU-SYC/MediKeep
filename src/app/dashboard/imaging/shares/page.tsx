@@ -60,7 +60,7 @@ export default function SharesPage() {
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '960px', margin: '0 auto', width: '100%' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
@@ -79,9 +79,9 @@ export default function SharesPage() {
         </div>
 
         <div style={{
-          background: '#fff7ed',
+          background: '#fdf1e0',
           border: '1px solid #fed7aa',
-          color: '#9a3412',
+          color: '#b06a10',
           borderRadius: '12px',
           padding: '12px 14px',
           fontSize: '12px',

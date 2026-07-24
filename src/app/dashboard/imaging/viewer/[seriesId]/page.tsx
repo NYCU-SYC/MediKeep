@@ -618,7 +618,7 @@ export default function DicomViewerPage() {
             <input
               type="range" min={0} max={instances.length - 1} value={currentIdx}
               onChange={e => setCurrentIdx(parseInt(e.target.value))}
-              style={{ flex: 1, accentColor: '#007bff', cursor: 'pointer' }}
+              style={{ flex: 1, accentColor: '#3e6b7e', cursor: 'pointer' }}
             />
             <span style={{ color: '#666', fontSize: '11px', width: '52px', textAlign: 'right', flexShrink: 0 }}>
               {currentIdx + 1}/{instances.length}

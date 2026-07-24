@@ -136,6 +136,7 @@ export default function UploadEntryPage() {
           if (meResp.ok) {
             const me = await meResp.json();
             if (!cancelled && me?.authenticated) {
+              setPatientSessionToken(null);
               const dest = me?.needs_binding ? '/setup' : '/dashboard';
               setStatusText(me?.needs_binding ? '請完成家庭設定...' : '歡迎回來');
               setPageState('redirecting');
@@ -296,7 +297,7 @@ export default function UploadEntryPage() {
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: '100vh',
-        background: 'linear-gradient(135deg, #007bff 0%, #0056b3 100%)',
+        background: 'linear-gradient(135deg, #3e6b7e 0%, #33596a 100%)',
         padding: '24px',
       }}
     >
@@ -375,7 +376,7 @@ export default function UploadEntryPage() {
                 <svg width="64" height="64" style={{ transform: 'rotate(-90deg)' }}>
                   <circle cx="32" cy="32" r="28" fill="none" stroke="#e9ecef" strokeWidth="4" />
                   <circle
-                    cx="32" cy="32" r="28" fill="none" stroke="#007bff" strokeWidth="4"
+                    cx="32" cy="32" r="28" fill="none" stroke="#3e6b7e" strokeWidth="4"
                     strokeLinecap="round"
                     strokeDasharray={circumference}
                     strokeDashoffset={circumference * (1 - progress)}
@@ -385,7 +386,7 @@ export default function UploadEntryPage() {
                 <div style={{
                   position: 'absolute', inset: 0,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: '20px', fontWeight: 700, color: '#007bff',
+                  fontSize: '20px', fontWeight: 700, color: '#3e6b7e',
                 }}>
                   {retryCountdown}
                 </div>

@@ -217,10 +217,10 @@ export default function HealthSummaryPage() {
   const load = useCallback(async () => {
     const params = memberQueryParams(activeMember);
     const results = await Promise.allSettled([
-      api.get('/api/patients/me/recommendations/latest'),
-      api.get('/api/patients/me/problems/summary'),
-      api.get('/api/patients/me/follow-ups'),
-      api.get('/api/patients/me/missing-data-requests'),
+      api.get('/api/patients/me/recommendations/latest', params),
+      api.get('/api/patients/me/problems/summary', params),
+      api.get('/api/patients/me/follow-ups', params),
+      api.get('/api/patients/me/missing-data-requests', params),
       api.get('/api/documents', params),
       api.get('/api/records', { limit: '20', ...(params ?? {}) }),
       api.get('/api/medications', params),
@@ -259,7 +259,7 @@ export default function HealthSummaryPage() {
   const processingDocs = docs.filter((doc) => !['confirmed', 'published'].includes(doc.processing_status || doc.status || '')).slice(0, 3);
   const recentRecords = records.slice(0, 4);
   const topProblems = (summary?.top_problems ?? []).slice(0, 4);
-  const visibleMedications = medications.filter((med) => med.is_published || med.is_verified).slice(0, 4);
+  const visibleMedications = medications.filter((med) => med.is_published).slice(0, 4);
   const hasNhi = Boolean(nhiOverview?.has_data);
 
   const primaryAction = (() => {
@@ -321,13 +321,13 @@ export default function HealthSummaryPage() {
                   <div style={{ fontSize: 14, lineHeight: 1.75, color: 'var(--hk-ink-2)' }}>
                     {patientSafeText(recommendation.health_summary || recommendation.recommendation, 'CMO 已完成一則健康摘要。')}
                   </div>
-                  <div style={{ border: '1px solid #dbeafe', background: '#eff6ff', borderRadius: 12, padding: 12 }}>
-                    <div style={{ fontSize: 12, fontWeight: 900, color: '#1d4ed8', marginBottom: 4 }}>下一步</div>
+                  <div style={{ border: '1px solid #d5e7ec', background: '#e7f3f5', borderRadius: 12, padding: 12 }}>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: '#33596a', marginBottom: 4 }}>下一步</div>
                     <div style={{ fontSize: 14, lineHeight: 1.65, color: 'var(--hk-ink)' }}>
                       {patientSafeText(recommendation.next_step || recommendation.recommendation, '依 CMO 建議完成下一步')}
                     </div>
                     {recommendation.follow_up_date && (
-                      <div style={{ marginTop: 8, fontSize: 12, color: '#1d4ed8', fontWeight: 800 }}>
+                      <div style={{ marginTop: 8, fontSize: 12, color: '#33596a', fontWeight: 800 }}>
                         建議追蹤日：{recommendation.follow_up_date}
                       </div>
                     )}

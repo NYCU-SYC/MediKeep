@@ -62,7 +62,7 @@ export function RecommendationEditor({
       </div>
 
       <div className="cmo-grid-2" style={{ alignItems: 'start', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))' }}>
-        <div className="cmo-card cmo-section" style={{ background: '#f8fafc' }}>
+        <div className="cmo-card cmo-section" style={{ background: '#f6f9fa' }}>
           <div className="cmo-kpi-label">CMO edit</div>
           <label className="cmo-field" style={{ display: 'block', marginTop: 8 }}>
             <span className="cmo-kpi-label">Title</span>
@@ -106,20 +106,20 @@ export function RecommendationEditor({
             <div className="cmo-kpi-label">Publish checklist</div>
             <div className="cmo-subtitle">All checks must pass before user-facing publish.</div>
           </div>
-          <span className="cmo-badge" style={{ background: canPublish ? '#ecfdf5' : '#fff7ed', color: canPublish ? '#047857' : '#c2410c' }}>
+          <span className="cmo-badge" style={{ background: canPublish ? '#e7f4ec' : '#fdf1e0', color: canPublish ? '#2e8b57' : '#b06a10' }}>
             {Object.values(checks).filter(Boolean).length}/{Object.values(checks).length}
           </span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 6 }}>
           {checkItems.map(([key, label]) => (
-            <span key={key} className="cmo-badge" style={{ justifyContent: 'center', background: checks[key] ? '#ecfdf5' : '#fff7ed', color: checks[key] ? '#047857' : '#c2410c' }}>
+            <span key={key} className="cmo-badge" style={{ justifyContent: 'center', background: checks[key] ? '#e7f4ec' : '#fdf1e0', color: checks[key] ? '#2e8b57' : '#b06a10' }}>
               {checks[key] ? '✓' : 'Needs'} {label}
             </span>
           ))}
         </div>
       </div>
 
-      <div className="cmo-card cmo-section" style={{ marginTop: 10, background: '#f8fafc' }}>
+      <div className="cmo-card cmo-section" style={{ marginTop: 10, background: '#f6f9fa' }}>
         <div className="cmo-kpi-label">Source refs</div>
         {form.source_refs.length === 0 ? (
           <div className="cmo-subtitle" style={{ marginTop: 6 }}>No linked review item yet. Use Add Recommendation on a review item or select timeline text.</div>
@@ -172,8 +172,8 @@ function UserPreviewPanel({ form, published }: { form: RecommendationForm; publi
   const completed = [hasSummary, hasRecommendation, hasNextStep].filter(Boolean).length
   const previewState = hasRecommendation && hasNextStep ? 'Ready to review' : 'Draft incomplete'
   const previewTone = hasRecommendation && hasNextStep
-    ? { background: '#ecfdf5', color: '#047857' }
-    : { background: '#fff7ed', color: '#c2410c' }
+    ? { background: '#e7f4ec', color: '#2e8b57' }
+    : { background: '#fdf1e0', color: '#b06a10' }
 
   return (
     <div className="cmo-card cmo-section" style={{ alignSelf: 'start', background: '#ffffff', borderColor: '#bae6fd' }}>
@@ -185,12 +185,12 @@ function UserPreviewPanel({ form, published }: { form: RecommendationForm; publi
         <span className="cmo-badge" style={previewTone}>{completed}/3 · {previewState}</span>
       </div>
 
-      <div style={{ padding: 12, borderRadius: 8, background: '#f0fdfa', border: '1px solid #ccfbf1' }}>
+      <div style={{ padding: 12, borderRadius: 8, background: '#e7f3f5', border: '1px solid #ccfbf1' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-          <div style={{ minWidth: 0, fontWeight: 850, color: '#0f172a', fontSize: 14, lineHeight: 1.35, wordBreak: 'break-word' }}>
+          <div style={{ minWidth: 0, fontWeight: 850, color: '#22313f', fontSize: 14, lineHeight: 1.35, wordBreak: 'break-word' }}>
             {form.title || DEFAULT_RECOMMENDATION_TITLE}
           </div>
-          <span className="cmo-badge" style={{ flex: '0 0 auto', background: '#fff', color: '#0f766e' }}>
+          <span className="cmo-badge" style={{ flex: '0 0 auto', background: '#fff', color: '#3e6b7e' }}>
             Draft
           </span>
         </div>
@@ -208,7 +208,7 @@ function UserPreviewPanel({ form, published }: { form: RecommendationForm; publi
             placeholder="尚未填寫給使用者看的建議。"
             tone={hasRecommendation ? 'highlight' : 'empty'}
           />
-          <div style={{ padding: '8px 10px', borderRadius: 8, background: '#fff', border: '1px solid #dbeafe', color: hasNextStep ? '#1e40af' : '#c2410c', fontSize: 13, lineHeight: 1.5 }}>
+          <div style={{ padding: '8px 10px', borderRadius: 8, background: '#fff', border: '1px solid #d5e7ec', color: hasNextStep ? '#1e40af' : '#b06a10', fontSize: 13, lineHeight: 1.5 }}>
             <strong>下一步：</strong>{form.next_step || '尚未設定'}
           </div>
         </div>
@@ -216,7 +216,7 @@ function UserPreviewPanel({ form, published }: { form: RecommendationForm; publi
         {form.follow_up_date && <div className="cmo-subtitle" style={{ marginTop: 8 }}>追蹤：{form.follow_up_date}</div>}
       </div>
 
-      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #e2e8f0' }}>
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #e3e9ee' }}>
         <div className="cmo-kpi-label">Currently published</div>
         <div className="cmo-subtitle" style={{ marginTop: 4, wordBreak: 'break-word' }}>
           {published ? `${published.title} · v${published.version} · ${formatDate(published.published_at)}` : 'No published recommendation'}
@@ -238,10 +238,10 @@ function PreviewBlock({
   tone: 'normal' | 'highlight' | 'empty'
 }) {
   const colors = tone === 'empty'
-    ? { background: '#fff7ed', border: '#fed7aa', text: '#9a3412' }
+    ? { background: '#fdf1e0', border: '#fed7aa', text: '#b06a10' }
     : tone === 'highlight'
-      ? { background: '#ffffff', border: '#99f6e4', text: '#0f766e' }
-      : { background: '#ffffff', border: '#dbeafe', text: '#334155' }
+      ? { background: '#ffffff', border: '#cfe3e8', text: '#3e6b7e' }
+      : { background: '#ffffff', border: '#d5e7ec', text: '#45596a' }
   return (
     <div style={{ padding: '8px 10px', borderRadius: 8, background: colors.background, border: `1px solid ${colors.border}` }}>
       <div className="cmo-kpi-label" style={{ marginBottom: 4 }}>{label}</div>
@@ -272,7 +272,7 @@ function InternalNotePanel({
           <div className="cmo-kpi-label">Internal CMO Note</div>
           <div className="cmo-subtitle">CMO-only audit note. This is stored separately and cannot be published to user.</div>
         </div>
-        <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>CMO only</span>
+        <span className="cmo-badge" style={{ background: '#f6f9fa', color: '#56687a' }}>CMO only</span>
       </div>
       <textarea className="cmo-textarea" rows={3} value={value} onChange={(event) => onChange(event.target.value)} placeholder="交班、判斷依據、需二次審閱原因。此內容不會進入 user-facing recommendation。" />
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
@@ -285,7 +285,7 @@ function InternalNotePanel({
           {notes.slice(0, 4).map((note) => (
             <div key={note.id} className="cmo-list-item">
               <div className="cmo-subtitle">{formatDate(note.created_at)} · CMO {note.created_by ?? ''}</div>
-              <div style={{ color: '#0f172a', fontSize: 13, lineHeight: 1.5 }}>{note.snapshot.note}</div>
+              <div style={{ color: '#22313f', fontSize: 13, lineHeight: 1.5 }}>{note.snapshot.note}</div>
             </div>
           ))}
         </div>
@@ -296,7 +296,7 @@ function InternalNotePanel({
 
 function VersionHistoryPanel({ history }: { history: CmoRecommendation[] }) {
   return (
-    <div className="cmo-card cmo-section" style={{ marginTop: 10, background: '#f8fafc' }}>
+    <div className="cmo-card cmo-section" style={{ marginTop: 10, background: '#f6f9fa' }}>
       <div className="cmo-title-row" style={{ marginBottom: 8 }}>
         <div>
           <div className="cmo-kpi-label">Version history</div>
@@ -312,8 +312,8 @@ function VersionHistoryPanel({ history }: { history: CmoRecommendation[] }) {
             <div key={row.id} className="cmo-list-item">
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 5 }}>
                 <ReviewStatusBadge status={row.status} />
-                <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>v{row.version}</span>
-                <span className="cmo-badge" style={{ background: '#f8fafc', color: '#475569' }}>{formatDate(row.created_at)}</span>
+                <span className="cmo-badge" style={{ background: '#f6f9fa', color: '#56687a' }}>v{row.version}</span>
+                <span className="cmo-badge" style={{ background: '#f6f9fa', color: '#56687a' }}>{formatDate(row.created_at)}</span>
               </div>
               <strong style={{ fontSize: 13 }}>{row.title}</strong>
               <div className="cmo-subtitle" style={{ marginTop: 4 }}>{row.recommendation.slice(0, 130)}{row.recommendation.length > 130 ? '...' : ''}</div>
@@ -360,14 +360,14 @@ function PublishConfirmationModal({
             <h2 className="cmo-section-title" style={{ margin: 0 }}>Publish Confirmation</h2>
             <div className="cmo-subtitle">Review exactly what the user will see. This action writes a version and sync event.</div>
           </div>
-          <span className="cmo-badge" style={{ background: canConfirm ? '#ecfdf5' : '#fff7ed', color: canConfirm ? '#047857' : '#c2410c' }}>
+          <span className="cmo-badge" style={{ background: canConfirm ? '#e7f4ec' : '#fdf1e0', color: canConfirm ? '#2e8b57' : '#b06a10' }}>
             {canConfirm ? 'Ready' : 'Blocked'}
           </span>
         </div>
         <UserPreviewPanel form={form} published={null} />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 6, marginTop: 10 }}>
           {Object.entries(checks).map(([key, ok]) => (
-            <span key={key} className="cmo-badge" style={{ background: ok ? '#ecfdf5' : '#fff7ed', color: ok ? '#047857' : '#c2410c' }}>
+            <span key={key} className="cmo-badge" style={{ background: ok ? '#e7f4ec' : '#fdf1e0', color: ok ? '#2e8b57' : '#b06a10' }}>
               {ok ? '✓' : 'Needs'} {key.replaceAll('_', ' ')}
             </span>
           ))}

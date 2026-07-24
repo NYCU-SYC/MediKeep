@@ -14,6 +14,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-TW" className="h-full antialiased">
+      <head>
+        {/* 改版視覺：Noto Sans TC（離線時自動退回系統字體，不影響功能） */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap"
+          rel="stylesheet"
+        />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

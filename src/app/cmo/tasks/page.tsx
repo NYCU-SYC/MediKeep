@@ -36,26 +36,42 @@ interface TasksEnvelope {
   tasks: TaskRow[]
   summary: TaskSummary
 }
+type Notice = { tone: 'ok' | 'error'; text: string }
 
 const CATEGORY_STYLE: Record<string, { bg: string; fg: string }> = {
-  補問病患: { bg: '#eff6ff', fg: '#0c447c' },
+  補問病患: { bg: '#e7f3f5', fg: '#0c447c' },
   追蹤檢查: { bg: '#eef2ff', fg: '#26215c' },
   提醒病患: { bg: '#e1f5ee', fg: '#085041' },
   團隊確認: { bg: '#faece7', fg: '#712b13' },
-  待補資料: { bg: '#fefce8', fg: '#854d0e' },
+  待補資料: { bg: '#fefce8', fg: '#a97614' },
 }
 const BUCKET_BADGE: Record<string, { label: string; bg: string; fg: string }> = {
-  overdue: { label: '逾期', bg: '#fef2f2', fg: '#be123c' },
-  due_soon: { label: '本週到期', bg: '#fff7ed', fg: '#c2410c' },
-  awaiting_cmo: { label: '待 CMO 覆核', bg: '#fefce8', fg: '#854d0e' },
-  awaiting_user: { label: '待病患回覆', bg: '#eff6ff', fg: '#0c447c' },
-  open: { label: '待處理', bg: '#f1f5f9', fg: '#475569' },
-  done: { label: '已完成', bg: '#ecfdf5', fg: '#047857' },
+  overdue: { label: '逾期', bg: '#faecea', fg: '#a03a30' },
+  due_soon: { label: '本週到期', bg: '#fdf1e0', fg: '#b06a10' },
+  awaiting_cmo: { label: '待 CMO 覆核', bg: '#fefce8', fg: '#a97614' },
+  awaiting_user: { label: '待病患回覆', bg: '#e7f3f5', fg: '#0c447c' },
+  open: { label: '待處理', bg: '#eef2f5', fg: '#56687a' },
+  done: { label: '已完成', bg: '#e7f4ec', fg: '#2e8b57' },
 }
 const CATEGORIES = ['全部', '追蹤檢查', '補問病患', '提醒病患', '團隊確認', '待補資料']
 
 async function fetchTasks(): Promise<TasksEnvelope> {
   return (await api.get('/api/cmo/tasks')) as TasksEnvelope
+}
+
+function dateAfterDays(days: number) {
+  const next = new Date()
+  next.setDate(next.getDate() + days)
+  return next.toISOString().slice(0, 10)
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message
+  return fallback
+}
+
+function cmoReviewRequired(t: TaskRow) {
+  return t.kind === 'missing_data' && t.status === 'needs_cmo_review'
 }
 
 export default function CmoTasksPage() {
@@ -65,6 +81,7 @@ export default function CmoTasksPage() {
   const [category, setCategory] = useState('全部')
   const [showDone, setShowDone] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
 
   const reload = async () => {
     try {
@@ -88,12 +105,44 @@ export default function CmoTasksPage() {
   const done = filtered.filter((t) => t.bucket === 'done')
 
   const complete = async (t: TaskRow) => {
+    if (cmoReviewRequired(t)) {
+      setNotice({ tone: 'error', text: '病患已回覆這筆補資料任務，請先進病患工作台覆核內容後再結案。' })
+      return
+    }
     setBusy(t.id)
+    setNotice(null)
     try {
       if (t.kind === 'follow_up') await api.patch(`/api/cmo/follow-ups/${t.raw_id}`, { status: 'completed' })
       else await api.patch(`/api/cmo/missing-data-requests/${t.raw_id}`, { status: 'resolved' })
+      setNotice({ tone: 'ok', text: '已更新任務狀態。' })
       await reload()
-    } catch { /* keep row; surfaced via no state change */ } finally { setBusy(null) }
+    } catch (err) {
+      setNotice({ tone: 'error', text: getErrorMessage(err, '操作失敗，任務仍保留在清單中。') })
+    } finally { setBusy(null) }
+  }
+
+  const snooze = async (t: TaskRow) => {
+    if (cmoReviewRequired(t)) {
+      setNotice({ tone: 'error', text: '病患已回覆這筆補資料任務，不能從任務中心延後；請先覆核回覆內容。' })
+      return
+    }
+    const nextDue = dateAfterDays(7)
+    setBusy(t.id)
+    setNotice(null)
+    try {
+      if (t.kind === 'follow_up') {
+        await api.patch(`/api/cmo/follow-ups/${t.raw_id}`, { suggested_date: nextDue, status: 'open' })
+      } else {
+        await api.patch(`/api/cmo/missing-data-requests/${t.raw_id}`, {
+          due_date: nextDue,
+          status: t.status === 'open' ? 'open' : 'waiting_for_user',
+        })
+      }
+      setNotice({ tone: 'ok', text: `已延後到 ${nextDue}。` })
+      await reload()
+    } catch (err) {
+      setNotice({ tone: 'error', text: getErrorMessage(err, '延後失敗，任務仍保留在原本期限。') })
+    } finally { setBusy(null) }
   }
 
   if (loading) {
@@ -105,19 +154,21 @@ export default function CmoTasksPage() {
 
   const s = data?.summary
   const kpis = [
-    { label: '逾期', value: s?.overdue ?? 0, tone: '#be123c' },
-    { label: '本週到期', value: s?.due_soon ?? 0, tone: '#854d0e' },
+    { label: '逾期', value: s?.overdue ?? 0, tone: '#a03a30' },
+    { label: '本週到期', value: s?.due_soon ?? 0, tone: '#a97614' },
     { label: '待病患回覆', value: s?.awaiting_user ?? 0, tone: '#185fa5' },
-    { label: '待 CMO 覆核', value: s?.awaiting_cmo ?? 0, tone: '#854d0e' },
-    { label: '已完成', value: s?.done ?? 0, tone: '#0f766e' },
+    { label: '待 CMO 覆核', value: s?.awaiting_cmo ?? 0, tone: '#a97614' },
+    { label: '已完成', value: s?.done ?? 0, tone: '#3e6b7e' },
   ]
 
   const renderCard = (t: TaskRow) => {
-    const cat = CATEGORY_STYLE[t.category] ?? { bg: '#f1f5f9', fg: '#475569' }
+    const cat = CATEGORY_STYLE[t.category] ?? { bg: '#eef2f5', fg: '#56687a' }
     const badge = BUCKET_BADGE[t.bucket] ?? BUCKET_BADGE.open
     const isOverdue = t.bucket === 'overdue'
+    const reviewReason = cmoReviewRequired(t) ? '病患已回覆，請先進病患工作台覆核內容。' : ''
+    const disabled = busy === t.id || Boolean(reviewReason)
     return (
-      <div key={t.id} className="cmo-card" style={{ padding: '10px 12px', marginBottom: 7, display: 'flex', gap: 10, alignItems: 'center', borderLeft: isOverdue ? '3px solid #e24b4a' : undefined, borderRadius: isOverdue ? '0 8px 8px 0' : undefined }}>
+      <div key={t.id} className="cmo-card" style={{ padding: '10px 12px', marginBottom: 7, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderLeft: isOverdue ? '3px solid #e24b4a' : undefined, borderRadius: isOverdue ? '0 8px 8px 0' : undefined }}>
         <span className="cmo-badge" style={{ background: cat.bg, color: cat.fg, flexShrink: 0 }}>{t.category}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 13.5 }}>{t.title}</div>
@@ -128,9 +179,14 @@ export default function CmoTasksPage() {
         </div>
         <span className="cmo-badge" style={{ background: badge.bg, color: badge.fg, flexShrink: 0 }}>{badge.label}</span>
         {t.bucket !== 'done' && (
-          <button type="button" className="cmo-button" disabled={busy === t.id} style={{ fontSize: 12, flexShrink: 0 }} onClick={() => complete(t)}>
-            {t.kind === 'missing_data' ? '結案' : '完成'}
-          </button>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 0 }}>
+            <button type="button" className="cmo-button" disabled={disabled} title={reviewReason || '延後 7 天'} style={{ fontSize: 12, flexShrink: 0 }} onClick={() => snooze(t)}>
+              延後 7 天
+            </button>
+            <button type="button" className="cmo-button primary" disabled={disabled} title={reviewReason || (t.kind === 'missing_data' ? '標記補資料任務為已結案' : '標記追蹤任務為已完成')} style={{ fontSize: 12, flexShrink: 0 }} onClick={() => complete(t)}>
+              {t.kind === 'missing_data' ? '結案' : '完成'}
+            </button>
+          </div>
         )}
       </div>
     )
@@ -145,7 +201,7 @@ export default function CmoTasksPage() {
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10, marginBottom: 12 }}>
         {kpis.map((k) => (
-          <div key={k.label} style={{ background: 'var(--color-background-secondary, #f8fafc)', borderRadius: 8, padding: '10px 12px' }}>
+          <div key={k.label} style={{ background: 'var(--color-background-secondary, #f6f9fa)', borderRadius: 8, padding: '10px 12px' }}>
             <div className="cmo-kpi-label">{k.label}</div>
             <div style={{ fontSize: 22, fontWeight: 800, color: k.tone, fontVariantNumeric: 'tabular-nums' }}>{k.value}</div>
           </div>
@@ -154,13 +210,31 @@ export default function CmoTasksPage() {
 
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 14 }}>
         {CATEGORIES.map((c) => (
-          <button key={c} type="button" className="cmo-button" style={{ fontSize: 12, padding: '4px 10px', background: category === c ? '#0f172a' : undefined, color: category === c ? '#fff' : undefined }} onClick={() => setCategory(c)}>{c}</button>
+          <button key={c} type="button" className="cmo-button" style={{ fontSize: 12, padding: '4px 10px', background: category === c ? '#22313f' : undefined, color: category === c ? '#fff' : undefined }} onClick={() => setCategory(c)}>{c}</button>
         ))}
       </div>
 
+      {notice && (
+        <div
+          className="cmo-card"
+          role={notice.tone === 'error' ? 'alert' : 'status'}
+          style={{
+            padding: '10px 12px',
+            marginBottom: 12,
+            borderColor: notice.tone === 'error' ? '#f2d3cf' : '#cfe8da',
+            background: notice.tone === 'error' ? '#faecea' : '#e7f4ec',
+            color: notice.tone === 'error' ? '#a03a30' : '#2e8b57',
+            fontSize: 13,
+            fontWeight: 750,
+          }}
+        >
+          {notice.text}
+        </div>
+      )}
+
       {overdue.length > 0 && (
         <>
-          <div style={{ fontWeight: 700, fontSize: 13, margin: '4px 0 8px', color: '#be123c' }}>逾期 · 優先處理（{overdue.length}）</div>
+          <div style={{ fontWeight: 700, fontSize: 13, margin: '4px 0 8px', color: '#a03a30' }}>逾期 · 優先處理（{overdue.length}）</div>
           {overdue.map(renderCard)}
         </>
       )}

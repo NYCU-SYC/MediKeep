@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { setPatientSessionToken } from '@/lib/api';
 
 export default function HomePage() {
   const [message, setMessage] = useState('正在為您準備...');
@@ -15,6 +16,7 @@ export default function HomePage() {
       .then((data) => {
         if (cancelled) return;
         if (data?.authenticated) {
+          setPatientSessionToken(null);
           if (data?.needs_binding) {
             setMessage('請完成家庭設定...');
             router.replace('/setup');
@@ -45,7 +47,7 @@ export default function HomePage() {
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: '100vh',
-        background: 'linear-gradient(135deg, #007bff 0%, #0056b3 100%)',
+        background: 'linear-gradient(135deg, #3e6b7e 0%, #33596a 100%)',
       }}
     >
       <div style={{ textAlign: 'center', color: '#fff', padding: '24px' }}>

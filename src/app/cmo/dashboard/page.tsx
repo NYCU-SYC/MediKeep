@@ -50,10 +50,10 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 const RISK_STYLE: Record<string, { bg: string; fg: string }> = {
-  Critical: { bg: '#fef2f2', fg: '#be123c' },
-  High: { bg: '#fff7ed', fg: '#c2410c' },
-  Medium: { bg: '#fefce8', fg: '#a16207' },
-  Low: { bg: '#ecfdf5', fg: '#047857' },
+  Critical: { bg: '#faecea', fg: '#a03a30' },
+  High: { bg: '#fdf1e0', fg: '#b06a10' },
+  Medium: { bg: '#fefce8', fg: '#a97614' },
+  Low: { bg: '#e7f4ec', fg: '#2e8b57' },
 }
 const RISK_LABEL_ZH: Record<string, string> = { Critical: '危急', High: '高', Medium: '中', Low: '低' }
 const RISK_ORDER = ['Critical', 'High', 'Medium', 'Low'] as const
@@ -131,11 +131,11 @@ export default function CmoDashboardPage() {
   }
 
   const kpis: Array<{ label: string; value: number; tone: string; href: string }> = [
-    { label: '病患總數', value: stats?.overview.total_patients ?? 0, tone: '#0f172a', href: '/cmo/workbench' },
-    { label: '今日新增', value: stats?.overview.new_patients_24h ?? 0, tone: '#0f766e', href: '/cmo/workbench' },
-    { label: '待處理', value: queue?.summary.all_pending ?? 0, tone: '#a16207', href: '/cmo/workbench?queue=all_pending' },
-    { label: '高風險', value: queue?.summary.critical_high ?? 0, tone: '#be123c', href: '/cmo/workbench?queue=critical_high' },
-    { label: '資料不完整', value: queue?.summary.missing_data ?? 0, tone: '#c2410c', href: '/cmo/workbench?queue=missing_data' },
+    { label: '病患總數', value: stats?.overview.total_patients ?? 0, tone: '#22313f', href: '/cmo/workbench' },
+    { label: '今日新增', value: stats?.overview.new_patients_24h ?? 0, tone: '#3e6b7e', href: '/cmo/workbench' },
+    { label: '待處理', value: queue?.summary.all_pending ?? 0, tone: '#a97614', href: '/cmo/workbench?queue=all_pending' },
+    { label: '高風險', value: queue?.summary.critical_high ?? 0, tone: '#a03a30', href: '/cmo/workbench?queue=critical_high' },
+    { label: '資料不完整', value: queue?.summary.missing_data ?? 0, tone: '#b06a10', href: '/cmo/workbench?queue=missing_data' },
     { label: '需追蹤', value: queue?.summary.follow_up_due ?? 0, tone: '#6d28d9', href: '/cmo/workbench?queue=follow_up_due' },
   ]
 
@@ -146,7 +146,7 @@ export default function CmoDashboardPage() {
           <span style={{ fontSize: 20, fontWeight: 800 }}>工作台總覽</span>
           <span className="cmo-muted" style={{ marginLeft: 10, fontSize: 13 }}>{today}</span>
         </div>
-        <span className="cmo-badge" style={{ background: '#fefce8', color: '#854d0e' }}>今日待處理 {todayPending}</span>
+        <span className="cmo-badge" style={{ background: '#fefce8', color: '#a97614' }}>今日待處理 {todayPending}</span>
       </div>
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 14 }}>
@@ -198,7 +198,7 @@ export default function CmoDashboardPage() {
                     <span className="cmo-muted">{RISK_LABEL_ZH[key]}</span>
                     <span style={{ fontVariantNumeric: 'tabular-nums' }}>{riskDist.counts[key]}</span>
                   </div>
-                  <div style={{ height: 6, background: '#f1f5f9', borderRadius: 4 }}>
+                  <div style={{ height: 6, background: '#eef2f5', borderRadius: 4 }}>
                     <div style={{ width: `${Math.round((riskDist.counts[key] / riskDist.max) * 100)}%`, height: 6, background: RISK_BAR[key], borderRadius: 4 }} />
                   </div>
                 </div>
@@ -216,8 +216,8 @@ export default function CmoDashboardPage() {
             ) : (
               <div className="cmo-list">
                 {(stats?.alerts ?? []).slice(0, 6).map((a, i) => (
-                  <Link key={`${a.user_id}-${i}`} href={`/cmo/patients/${a.user_id}`} className="cmo-row" style={{ textDecoration: 'none', alignItems: 'flex-start', gap: 8, padding: '7px 0', borderTop: i === 0 ? 'none' : '0.5px solid #e2e8f0' }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', marginTop: 5, flexShrink: 0, background: a.level === 'high' ? '#be123c' : a.level === 'medium' ? '#a16207' : '#94a3b8' }} />
+                  <Link key={`${a.user_id}-${i}`} href={`/cmo/patients/${a.user_id}`} className="cmo-row" style={{ textDecoration: 'none', alignItems: 'flex-start', gap: 8, padding: '7px 0', borderTop: i === 0 ? 'none' : '0.5px solid #e3e9ee' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', marginTop: 5, flexShrink: 0, background: a.level === 'high' ? '#a03a30' : a.level === 'medium' ? '#a97614' : '#93a3af' }} />
                     <div style={{ minWidth: 0 }}>
                       <span style={{ fontSize: 13, fontWeight: 600 }}>{a.display_name}</span>
                       <span className="cmo-subtitle" style={{ marginLeft: 6 }}>{a.message}</span>

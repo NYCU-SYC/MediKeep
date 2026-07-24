@@ -12,8 +12,14 @@ type RouteContext = {
 }
 
 const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+const GET_MAX_ATTEMPTS = 3
+const ATTEMPT_TIMEOUT_MS = 20_000
 
-function backendUnavailableResponse() {
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function backendUnavailableResponse(attempts: number) {
   return NextResponse.json(
     {
       error: {
@@ -26,6 +32,7 @@ function backendUnavailableResponse() {
       status: 502,
       headers: {
         'Cache-Control': 'no-store',
+        'X-HealthKeep-Api-Proxy-Attempts': String(attempts),
       },
     },
   )
@@ -57,10 +64,11 @@ function forwardRequestHeaders(req: NextRequest) {
   return headers
 }
 
-function forwardResponse(resp: Response, body: string) {
+function forwardResponse(resp: Response, body: ArrayBuffer | null, attempts: number) {
   const headers = new Headers()
   headers.set('Cache-Control', 'no-store')
   headers.set('X-HealthKeep-Api-Proxy', 'generic')
+  headers.set('X-HealthKeep-Api-Proxy-Attempts', String(attempts))
 
   const setCookie = resp.headers.get('set-cookie')
   if (setCookie) headers.set('Set-Cookie', setCookie)
@@ -83,25 +91,54 @@ function forwardResponse(resp: Response, body: string) {
 
 async function proxy(req: NextRequest, context: RouteContext) {
   const { path } = await context.params
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 15000)
+  const method = req.method.toUpperCase()
+  const maxAttempts = method === 'GET' ? GET_MAX_ATTEMPTS : 1
+  const requestBody = BODY_METHODS.has(method) ? await req.arrayBuffer() : undefined
 
-  try {
-    const method = req.method.toUpperCase()
-    const resp = await fetch(buildBackendUrl(req, path), {
-      method,
-      headers: forwardRequestHeaders(req),
-      body: BODY_METHODS.has(method) ? await req.text() : undefined,
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-    const body = await resp.text()
-    return forwardResponse(resp, body)
-  } catch {
-    return backendUnavailableResponse()
-  } finally {
-    clearTimeout(timer)
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS)
+
+    try {
+      const resp = await fetch(buildBackendUrl(req, path), {
+        method,
+        headers: forwardRequestHeaders(req),
+        // Forward the raw bytes (not text) so binary multipart uploads — PDFs,
+        // images, DICOM — are not corrupted by a UTF-8 decode/encode round-trip.
+        body: requestBody,
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      const body = [204, 304].includes(resp.status) ? null : await resp.arrayBuffer()
+
+      if (method === 'GET' && resp.status >= 500 && attempt < maxAttempts) {
+        console.warn('[api-proxy] transient backend response', {
+          path: path.join('/'),
+          status: resp.status,
+          attempt,
+        })
+        await sleep(250 * attempt)
+        continue
+      }
+
+      return forwardResponse(resp, body, attempt)
+    } catch (error) {
+      console.error('[api-proxy] backend request failed', {
+        path: path.join('/'),
+        method,
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      if (attempt === maxAttempts) {
+        return backendUnavailableResponse(attempt)
+      }
+      await sleep(250 * attempt)
+    } finally {
+      clearTimeout(timer)
+    }
   }
+
+  return backendUnavailableResponse(maxAttempts)
 }
 
 export async function GET(req: NextRequest, context: RouteContext) {

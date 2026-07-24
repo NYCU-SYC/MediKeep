@@ -78,9 +78,9 @@ const SECTION_ICON: Record<string, string> = {
 };
 
 const STATUS_STYLE: Record<string, { color: string; bg: string }> = {
-  organised: { color: '#047857', bg: '#ecfdf5' },
-  pending:   { color: '#a16207', bg: '#fef3c7' },
-  not_used:  { color: '#64748b', bg: '#f1f5f9' },
+  organised: { color: '#2e8b57', bg: '#e7f4ec' },
+  pending:   { color: '#a97614', bg: '#fdf6e3' },
+  not_used:  { color: '#6b7c8c', bg: '#eef2f5' },
 };
 
 function fmtDate(s: string | null): string {
@@ -174,25 +174,25 @@ export default function NhiImportPage() {
 
   if (loading) {
     return (
-      <div style={{ padding: 20 }}>
+      <div className="hk-nhi-page">
         <h1 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 12px' }}>{scopeLabel}健保存摺匯入</h1>
-        <div style={{ color: '#64748b' }}>正在載入{scopeLabel}的健保署健康存摺資料…</div>
+        <div style={{ color: '#6b7c8c' }}>正在載入{scopeLabel}的健保署健康存摺資料…</div>
       </div>
     );
   }
 
   if (!overview?.has_data) {
     return (
-      <div style={{ padding: 20 }}>
+      <div className="hk-nhi-page">
         <h1 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 8px' }}>{scopeLabel}健保存摺匯入</h1>
-        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 28, textAlign: 'center', marginTop: 12 }}>
+        <div style={{ background: '#fff', border: '1px solid #e3e9ee', borderRadius: 12, padding: 28, textAlign: 'center', marginTop: 12 }}>
           <div style={{ fontSize: 40, marginBottom: 8 }}>📑</div>
-          <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: 6 }}>{scopeLabel}目前還沒有健保存摺資料</div>
-          <div style={{ color: '#64748b', fontSize: 14, lineHeight: 1.7, maxWidth: 460, margin: '0 auto 16px' }}>
+          <div style={{ fontWeight: 700, color: '#22313f', marginBottom: 6 }}>{scopeLabel}目前還沒有健保存摺資料</div>
+          <div style={{ color: '#6b7c8c', fontSize: 14, lineHeight: 1.7, maxWidth: 460, margin: '0 auto 16px' }}>
             您可以從健保快易通 App 下載「健康存摺」HTML 檔，再上傳給醫療團隊整理。
             整理完成後，您的門診、用藥、檢驗、影像等紀錄就會顯示在這裡。
           </div>
-          <Link href={uploadHref} style={{ display: 'inline-block', padding: '10px 18px', borderRadius: 8, background: '#2563eb', color: '#fff', fontWeight: 700, fontSize: 14 }}>
+          <Link href={uploadHref} style={{ display: 'inline-block', padding: '10px 18px', borderRadius: 8, background: '#3e6b7e', color: '#fff', fontWeight: 700, fontSize: 14 }}>
             前往上傳資料
           </Link>
         </div>
@@ -201,51 +201,51 @@ export default function NhiImportPage() {
   }
 
   return (
-    <div style={{ padding: 20, maxWidth: 1000, margin: '0 auto' }}>
+    <div className="hk-nhi-page">
       <h1 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 4px' }}>{scopeLabel}健保存摺匯入</h1>
-      <div style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
+      <div style={{ color: '#6b7c8c', fontSize: 13, marginBottom: 16 }}>
         這是從{scopeLabel}的健保署健康存摺匯入的就醫紀錄，由醫療團隊協助整理後呈現。最近就醫：{fmtDate(summary?.latest_visit_date ?? null)}
       </div>
 
       {/* Summary strip */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
         {[
-          { label: '總筆數', value: summary?.total ?? 0, color: '#0f172a', bg: '#f8fafc' },
-          { label: '已整理', value: summary?.organised ?? 0, color: '#047857', bg: '#ecfdf5' },
-          { label: '待整理', value: summary?.pending ?? 0, color: '#a16207', bg: '#fef3c7' },
-          { label: '未採用', value: summary?.not_used ?? 0, color: '#64748b', bg: '#f1f5f9' },
+          { label: '總筆數', value: summary?.total ?? 0, color: '#22313f', bg: '#f6f9fa' },
+          { label: '已整理', value: summary?.organised ?? 0, color: '#2e8b57', bg: '#e7f4ec' },
+          { label: '待整理', value: summary?.pending ?? 0, color: '#a97614', bg: '#fdf6e3' },
+          { label: '未採用', value: summary?.not_used ?? 0, color: '#6b7c8c', bg: '#eef2f5' },
         ].map((c) => (
           <div key={c.label} style={{ flex: '1 1 120px', minWidth: 110, background: c.bg, borderRadius: 10, padding: '12px 14px' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>{c.label}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7c8c' }}>{c.label}</div>
             <div style={{ fontSize: 26, fontWeight: 850, color: c.color, lineHeight: 1.1 }}>{c.value}</div>
           </div>
         ))}
       </div>
 
       {/* Status legend (explains the data flow to the patient) */}
-      <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 14px', marginBottom: 18, fontSize: 12.5, color: '#1e3a8a', lineHeight: 1.7 }}>
+      <div style={{ background: '#e7f3f5', border: '1px solid #cfe3e8', borderRadius: 10, padding: '10px 14px', marginBottom: 18, fontSize: 12.5, color: '#1e3a8a', lineHeight: 1.7 }}>
         <strong>狀態說明：</strong>
         <span style={{ marginLeft: 6 }}>🟢 已整理＝醫療團隊已確認並收錄到您的健康檔案</span>
         ·<span> 🟡 待整理＝已匯入、等待醫療團隊確認</span>
         ·<span> ⚪ 未採用＝與既有紀錄重複或不需收錄</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 240px) 1fr', gap: 16, alignItems: 'start' }}>
+      <div className="hk-nhi-grid">
         {/* Section list */}
-        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+        <div className="hk-nhi-section-list">
           {sections.map((s) => {
             const active = s.key === activeSection;
             return (
               <button key={s.key} type="button" onClick={() => setActiveSection(s.key)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
-                  padding: '11px 13px', border: 0, borderLeft: active ? '3px solid #2563eb' : '3px solid transparent',
-                  background: active ? '#eff6ff' : 'transparent', cursor: 'pointer',
+                  padding: '11px 13px', border: 0, borderLeft: active ? '3px solid #3e6b7e' : '3px solid transparent',
+                  background: active ? '#e7f3f5' : 'transparent', cursor: 'pointer',
                 }}>
                 <span style={{ fontSize: 18 }}>{SECTION_ICON[s.key] ?? '📄'}</span>
                 <span style={{ flex: 1 }}>
-                  <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: '#0f172a' }}>{s.label}</span>
-                  <span style={{ display: 'block', fontSize: 11, color: '#64748b', marginTop: 1 }}>
+                  <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: '#22313f' }}>{s.label}</span>
+                  <span style={{ display: 'block', fontSize: 11, color: '#6b7c8c', marginTop: 1 }}>
                     {s.total} 筆{s.pending > 0 ? ` · ${s.pending} 待整理` : ''}
                   </span>
                 </span>
@@ -255,17 +255,17 @@ export default function NhiImportPage() {
         </div>
 
         {/* Section detail */}
-        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, minHeight: 300 }}>
+        <div className="hk-nhi-detail-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <span style={{ fontSize: 20 }}>{activeSection ? SECTION_ICON[activeSection] : '📄'}</span>
             <h2 style={{ fontSize: 17, fontWeight: 800, margin: 0 }}>{activeMeta?.label ?? ''}</h2>
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b' }}>{activeMeta?.total ?? 0} 筆紀錄</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7c8c' }}>{activeMeta?.total ?? 0} 筆紀錄</span>
           </div>
 
           {itemsLoading ? (
-            <div style={{ color: '#64748b', padding: 20, textAlign: 'center' }}>載入中…</div>
+            <div style={{ color: '#6b7c8c', padding: 20, textAlign: 'center' }}>載入中…</div>
           ) : items.length === 0 ? (
-            <div style={{ color: '#64748b', padding: 20, textAlign: 'center' }}>此分區目前沒有紀錄。</div>
+            <div style={{ color: '#6b7c8c', padding: 20, textAlign: 'center' }}>此分區目前沒有紀錄。</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {items.map((it) => {
@@ -273,10 +273,10 @@ export default function NhiImportPage() {
                 return (
                   <div key={it.id} style={{ border: '1px solid #edf1f7', borderRadius: 10, padding: '10px 12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: '#475569', fontVariantNumeric: 'tabular-nums' }}>{fmtDate(it.visit_date)}</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{it.facility || '醫療院所未記錄'}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#56687a', fontVariantNumeric: 'tabular-nums' }}>{fmtDate(it.visit_date)}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#22313f' }}>{it.facility || '醫療院所未記錄'}</span>
                       {it.member_name && (
-                        <span style={{ fontSize: 11, fontWeight: 800, padding: '2px 8px', borderRadius: 999, color: '#475569', background: '#f1f5f9' }}>
+                        <span style={{ fontSize: 11, fontWeight: 800, padding: '2px 8px', borderRadius: 999, color: '#56687a', background: '#eef2f5' }}>
                           {it.member_name}
                         </span>
                       )}
@@ -285,16 +285,16 @@ export default function NhiImportPage() {
                       </span>
                     </div>
                     {(it.diagnosis || it.icd10) && (
-                      <div style={{ marginTop: 5, fontSize: 13.5, color: '#0f172a' }}>
+                      <div style={{ marginTop: 5, fontSize: 13.5, color: '#22313f' }}>
                         {it.diagnosis || '—'}
-                        {it.icd10 && <span style={{ marginLeft: 6, fontSize: 11, color: '#94a3b8', fontFamily: 'ui-monospace, monospace' }}>{it.icd10}</span>}
+                        {it.icd10 && <span style={{ marginLeft: 6, fontSize: 11, color: '#93a3af', fontFamily: 'ui-monospace, monospace' }}>{it.icd10}</span>}
                       </div>
                     )}
                     {it.key_medications && (
-                      <div style={{ marginTop: 3, fontSize: 12, color: '#475569' }}>用藥：{it.key_medications}</div>
+                      <div style={{ marginTop: 3, fontSize: 12, color: '#56687a' }}>用藥：{it.key_medications}</div>
                     )}
                     {it.lab_total_items ? (
-                      <div style={{ marginTop: 3, fontSize: 12, color: '#475569' }}>共 {it.lab_total_items} 項檢驗</div>
+                      <div style={{ marginTop: 3, fontSize: 12, color: '#56687a' }}>共 {it.lab_total_items} 項檢驗</div>
                     ) : null}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                       <button type="button" onClick={() => setExpandedId(expandedId === it.id ? null : it.id)} style={rowBtn}>
@@ -317,7 +317,7 @@ export default function NhiImportPage() {
         </div>
       </div>
 
-      <div style={{ marginTop: 16, fontSize: 12, color: '#94a3b8', lineHeight: 1.7 }}>
+      <div style={{ marginTop: 16, fontSize: 12, color: '#93a3af', lineHeight: 1.7 }}>
         本資料為健保署健康存摺之就醫紀錄匯入，僅供您與醫療團隊整理健康檔案參考，非醫師診斷。
         實際診斷、病名、治療與用藥，仍以各醫療院所之病歷記載為準。
       </div>
@@ -327,7 +327,7 @@ export default function NhiImportPage() {
 
 function NhiItemDetail({ item }: { item: NhiItem }) {
   return (
-    <div style={{ marginTop: 12, borderTop: '1px solid #e2e8f0', paddingTop: 12 }}>
+    <div style={{ marginTop: 12, borderTop: '1px solid #e3e9ee', paddingTop: 12 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
         <LayerBox title="原始匯入資料 Raw Layer" status={item.raw_payload_preview}>
           <KV label="日期" value={item.date || item.visit_date || '未記錄'} />
@@ -376,7 +376,7 @@ function EvidenceDocumentRow({ doc, fallbackId }: { doc: EvidenceDocument | null
       <span style={evidenceLabel}>原始文件</span>
       <a href={doc.download_url} target="_blank" rel="noreferrer" style={evidenceLink}>
         查看 {evidenceTitle(doc)}
-        {evidenceMeta(doc) && <span style={{ color: '#64748b', fontWeight: 700 }}> · {evidenceMeta(doc)}</span>}
+        {evidenceMeta(doc) && <span style={{ color: '#6b7c8c', fontWeight: 700 }}> · {evidenceMeta(doc)}</span>}
       </a>
     </div>
   );
@@ -384,9 +384,9 @@ function EvidenceDocumentRow({ doc, fallbackId }: { doc: EvidenceDocument | null
 
 function LayerBox({ title, status, children }: { title: string; status: string; children: React.ReactNode }) {
   return (
-    <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, minWidth: 0 }}>
-      <div style={{ fontSize: 12, color: '#334155', fontWeight: 850 }}>{title}</div>
-      <div style={{ fontSize: 11, color: '#64748b', margin: '4px 0 8px', lineHeight: 1.45 }}>{status}</div>
+    <div style={{ background: '#f6f9fa', border: '1px solid #e3e9ee', borderRadius: 10, padding: 12, minWidth: 0 }}>
+      <div style={{ fontSize: 12, color: '#45596a', fontWeight: 850 }}>{title}</div>
+      <div style={{ fontSize: 11, color: '#6b7c8c', margin: '4px 0 8px', lineHeight: 1.45 }}>{status}</div>
       {children}
     </div>
   );
@@ -394,16 +394,16 @@ function LayerBox({ title, status, children }: { title: string; status: string; 
 
 function KV({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 11, borderTop: '1px solid #e2e8f0', paddingTop: 6, marginTop: 6 }}>
-      <span style={{ color: '#64748b', fontWeight: 800 }}>{label}</span>
-      <span style={{ color: '#0f172a', textAlign: 'right', wordBreak: 'break-word' }}>{value}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 11, borderTop: '1px solid #e3e9ee', paddingTop: 6, marginTop: 6 }}>
+      <span style={{ color: '#6b7c8c', fontWeight: 800 }}>{label}</span>
+      <span style={{ color: '#22313f', textAlign: 'right', wordBreak: 'break-word' }}>{value}</span>
     </div>
   );
 }
 
 function Pre({ data }: { data: unknown }) {
   return (
-    <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: 8, fontSize: 11, color: '#334155', margin: '8px 0 0' }}>
+    <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto', background: '#fff', border: '1px solid #e3e9ee', borderRadius: 8, padding: 8, fontSize: 11, color: '#45596a', margin: '8px 0 0' }}>
       {JSON.stringify(data, null, 2)}
     </pre>
   );
@@ -414,18 +414,18 @@ const evidenceRow: React.CSSProperties = {
   justifyContent: 'space-between',
   gap: 10,
   fontSize: 11,
-  borderTop: '1px solid #e2e8f0',
+  borderTop: '1px solid #e3e9ee',
   paddingTop: 6,
   marginTop: 6,
   alignItems: 'flex-start',
 };
-const evidenceLabel: React.CSSProperties = { color: '#64748b', fontWeight: 800, flexShrink: 0 };
-const evidenceText: React.CSSProperties = { color: '#0f172a', textAlign: 'right', wordBreak: 'break-word', lineHeight: 1.45 };
-const evidenceLink: React.CSSProperties = { color: '#2563eb', textAlign: 'right', wordBreak: 'break-word', lineHeight: 1.45, fontWeight: 850, textDecoration: 'none' };
+const evidenceLabel: React.CSSProperties = { color: '#6b7c8c', fontWeight: 800, flexShrink: 0 };
+const evidenceText: React.CSSProperties = { color: '#22313f', textAlign: 'right', wordBreak: 'break-word', lineHeight: 1.45 };
+const evidenceLink: React.CSSProperties = { color: '#3e6b7e', textAlign: 'right', wordBreak: 'break-word', lineHeight: 1.45, fontWeight: 850, textDecoration: 'none' };
 const rowBtn: React.CSSProperties = {
-  border: '1px solid #cbd5e1',
+  border: '1px solid #c8d4dc',
   background: '#fff',
-  color: '#334155',
+  color: '#45596a',
   borderRadius: 8,
   padding: '6px 9px',
   fontSize: 12,

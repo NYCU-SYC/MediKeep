@@ -25,16 +25,15 @@ type CmoSummary = {
 type CmoRecommendation = {
   id: string; series_id: string; version: number; status: string; title: string;
   health_summary: string; recommendation: string; next_step: string; follow_up_date?: string | null; published_at?: string | null;
-  summary_condition?: string; summary_exam?: string; summary_followup?: string; summary_values?: string; summary_advice?: string;
-  attention_summary?: { condition: string; exam: string; followup: string; values: string; advice: string };
+  attention_cells?: { condition: string; check: string; followup: string; value: string; advice: string };
 };
-type MedicationOut = { id: number; drug_name: string; brand_name?: string | null; generic_name_en?: string | null; dose?: string | null; frequency?: string | null; route?: string | null; is_active?: boolean; status?: string | null };
 type TReminder = { id: number | string; title: string; scheduled_date?: string | null; reminder_type?: string; type?: string; is_done?: boolean; status?: string; member_name?: string | null; member?: string | null };
 type DocOut = { id: string; doc_type: string; file_name: string; status?: string | null; processing_status?: string | null; processing_status_label?: string | null; doc_date?: string | null; created_at?: string | null };
 type ChangeRequest = { id: string; target_label?: string | null; status: string; action_url?: string | null; updated_at?: string | null; created_at?: string | null; patient_facing_note?: string | null; patient_note?: string | null };
 type MissingDataRequest = { id: string; title: string; reason: string; instructions?: string | null; due_date?: string | null; status: string; response_text?: string | null; updated_at?: string | null; created_at?: string | null };
 type CmoFollowUp = { id: number; reason: string; item: string; suggested_date?: string | null; priority?: string | null; status: string; needs_more_data?: boolean };
 type MemberOverview = { id: string; name: string; relation: string; age: number | null; gender: string | null; color: string; latest_vitals: { type: string; value1: string | null; value2: string | null; recorded_at: string | null }[]; active_meds: number; due_reminders: number; last_record_at: string | null };
+type MedicationOut = { id: number; drug_name: string; generic_name_en?: string | null; brand_name?: string | null; dose?: string | null; frequency?: string | null; indication?: string | null; linked_problem_id?: number | null; related_problem_id?: number | null; is_published?: boolean; status?: string | null; member_name?: string | null };
 
 // ── Vital types used for abnormal detection on the home ───────────────────────
 const VITAL_TYPES = [
@@ -65,6 +64,13 @@ function withinDays(iso?: string | null, days = 7): boolean {
 function todayStr(): string { const d = new Date(); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
 
 const MAX_HOME_ALERTS = 3;
+const ATTENTION_FIELDS = [
+  { key: 'condition', label: '病況' },
+  { key: 'check', label: '檢查' },
+  { key: 'followup', label: '回診' },
+  { key: 'value', label: '數值' },
+  { key: 'advice', label: '建議' },
+] as const;
 
 function patientSafeText(value?: string | null, fallback = '待醫療團隊整理的健康項目'): string {
   const text = (value ?? '').trim();
@@ -75,6 +81,11 @@ function patientSafeText(value?: string | null, fallback = '待醫療團隊整�
     .trim();
   const safe = withoutCodes || fallback;
   return safe.length > 34 ? `${safe.slice(0, 32)}…` : safe;
+}
+
+function problemTitleForPatient(p?: { display_name?: string | null; display_layman?: string | null } | null): string {
+  if (!p) return '健康摘要';
+  return patientSafeText(p.display_layman || p.display_name);
 }
 
 function reminderTitleForPatient(title?: string | null): string {
@@ -102,6 +113,7 @@ function HomeContent() {
   const [medications, setMedications] = useState<MedicationOut[]>([]);
   const [cmoSummary, setCmoSummary] = useState<CmoSummary | null>(null);
   const [cmoRecommendation, setCmoRecommendation] = useState<CmoRecommendation | null>(null);
+  const [syncCounts, setSyncCounts] = useState<Record<string, number>>({});
   const [familyOverview, setFamilyOverview] = useState<MemberOverview[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -113,12 +125,13 @@ function HomeContent() {
       api.get('/api/documents', params),                                  // 1
       api.get('/api/patients/me/change-requests', params),                // 2
       api.get('/api/records', { limit: '50', ...(params ?? {}) }),        // 3
-      api.get('/api/patients/me/problems/summary'),                       // 4
-      api.get('/api/members/overview'),                                   // 5
-      api.get('/api/patients/me/recommendations/latest'),                  // 6
-      api.get('/api/patients/me/missing-data-requests'),                   // 7
-      api.get('/api/patients/me/follow-ups'),                              // 8
-      api.get('/api/medications', params),                                  // 9
+      api.get('/api/patients/me/problems/summary', params),                // 4
+      api.get('/api/patients/me/sync-state', params),                     // 5
+      api.get('/api/members/overview'),                                   // 6
+      api.get('/api/patients/me/recommendations/latest', params),          // 7
+      api.get('/api/patients/me/missing-data-requests', params),           // 8
+      api.get('/api/patients/me/follow-ups', params),                      // 9
+      api.get('/api/medications', params),                                 // 10
     ]);
     const at = (i: number): unknown => (results[i].status === 'fulfilled' ? (results[i] as PromiseFulfilledResult<unknown>).value : null);
     const arr = (i: number): unknown[] => { const v = at(i); return Array.isArray(v) ? v : []; };
@@ -127,11 +140,12 @@ function HomeContent() {
     setChangeRequests(arr(2) as ChangeRequest[]);
     setRecords(arr(3) as RecordOut[]);
     setCmoSummary((at(4) as CmoSummary) ?? null);
-    setFamilyOverview(arr(5) as MemberOverview[]);
-    setCmoRecommendation((at(6) as CmoRecommendation | null) ?? null);
-    setMissingRequests(arr(7) as MissingDataRequest[]);
-    setCmoFollowUps(arr(8) as CmoFollowUp[]);
-    setMedications(arr(9) as MedicationOut[]);
+    setSyncCounts((at(5) as { counts?: Record<string, number> } | null)?.counts ?? {});
+    setFamilyOverview(arr(6) as MemberOverview[]);
+    setCmoRecommendation((at(7) as CmoRecommendation | null) ?? null);
+    setMissingRequests(arr(8) as MissingDataRequest[]);
+    setCmoFollowUps(arr(9) as CmoFollowUp[]);
+    setMedications(arr(10) as MedicationOut[]);
     setLoadError(results.slice(0, 5).some((r) => r.status === 'rejected'));
     setLoaded(true);
   }, [activeMember]);
@@ -172,10 +186,16 @@ function HomeContent() {
     .filter((task) => task.status && !['done', 'completed', 'resolved', 'closed', 'deleted', 'canceled'].includes(task.status))
     .sort((a, b) => (a.suggested_date || '9999').localeCompare(b.suggested_date || '9999'));
   const processingDocs = docs.filter((d) => docStatus(d) !== 'confirmed').slice(0, 3);
+  const publishedLinkedMeds = medications
+    .filter((med) => med.is_published && (med.linked_problem_id || med.related_problem_id) && med.status !== 'deleted')
+    .slice(0, 4);
 
   const hasHigh = abnormalVitals.some((v) => v.flag.level === 'high');
+  const topRec = cmoSummary?.top_problems?.find((p) => !isJunkProblemName(p.display_layman || p.display_name)) ?? null;
   const cmoRecommendationAt = cmoRecommendation?.published_at || cmoSummary?.last_verified_at;
   const cmoUpdatedRecently = withinDays(cmoRecommendationAt, 7);
+  const attentionCells = cmoRecommendation?.attention_cells ?? { condition: '', check: '', followup: '', value: '', advice: '' };
+  const hasAttentionCells = ATTENTION_FIELDS.some((field) => Boolean(attentionCells[field.key]?.trim()));
 
   // 今日健康狀態 一句話（情緒定錨）
   const statusLine = (() => {
@@ -187,10 +207,10 @@ function HomeContent() {
     return { text: '今天一切穩定，沒有新的高風險提醒', tone: 'green' as const, emoji: '👍' };
   })();
   const heroStyle: React.CSSProperties = statusLine.tone === 'red'
-    ? { background: 'linear-gradient(135deg,#fef2f2,#fff)', borderColor: '#fecaca' }
+    ? { background: 'linear-gradient(135deg,#faecea,#fff)', borderColor: '#f2d3cf' }
     : statusLine.tone === 'amber'
-    ? { background: 'linear-gradient(135deg,#fffbeb,#fff)', borderColor: '#fde68a' }
-    : { background: 'linear-gradient(135deg,#ecfeff,#f0fdf4)', borderColor: '#cffafe' };
+    ? { background: 'linear-gradient(135deg,#fdf6e3,#fff)', borderColor: '#efdfae' }
+    : { background: 'linear-gradient(135deg,#ecfeff,#e7f4ec)', borderColor: '#cffafe' };
 
   const scopeLabel = memberDisplayName(activeMember, members.length > 1 ? '全家總覽' : '本人');
   const switchTo = (name: string) => { router.replace(memberHref('/dashboard', name)); };
@@ -234,17 +254,6 @@ function HomeContent() {
   ].filter((item) => !isJunkProblemName(item.title));
   const visibleHomeAlerts = homeAlerts.slice(0, MAX_HOME_ALERTS);
   const hiddenAlertCount = Math.max(0, homeAlerts.length - visibleHomeAlerts.length);
-  const attention = cmoRecommendation?.attention_summary;
-  const attentionRows = [
-    { key: 'condition', label: '病況', value: cmoRecommendation?.summary_condition || attention?.condition || '' },
-    { key: 'exam', label: '檢查', value: cmoRecommendation?.summary_exam || attention?.exam || '' },
-    { key: 'followup', label: '回診', value: cmoRecommendation?.summary_followup || attention?.followup || '' },
-    { key: 'values', label: '數值', value: cmoRecommendation?.summary_values || attention?.values || '' },
-    { key: 'advice', label: '建議', value: cmoRecommendation?.summary_advice || attention?.advice || '' },
-  ];
-  const hasPublishedAttention = Boolean(cmoRecommendation && attentionRows.some((row) => row.value.trim()));
-  const latestVitals = VITAL_TYPES.map((vt) => ({ key: vt.key, label: vt.label, record: latestByType[vt.key], format: vt.format })).filter((item) => item.record).slice(0, 5);
-  const activeMedications = medications.filter((m) => m.status !== 'deleted' && m.is_active !== false).slice(0, 5);
 
   if (loadError && !loaded) {
     return (
@@ -270,7 +279,7 @@ function HomeContent() {
           {familyOverview.map((m) => {
             const abn = m.latest_vitals.map((v) => vitalFlag(v.type, v.value1, v.value2)).some(isAbnormal);
             return (
-              <button key={m.id} onClick={() => switchTo(m.name)} style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, background: '#fff', border: `1.5px solid ${abn ? '#fecaca' : 'var(--hk-line)'}`, borderRadius: 12, padding: '8px 12px', cursor: 'pointer' }}>
+              <button key={m.id} onClick={() => switchTo(m.name)} style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, background: '#fff', border: `1.5px solid ${abn ? '#f2d3cf' : 'var(--hk-line)'}`, borderRadius: 12, padding: '8px 12px', cursor: 'pointer' }}>
                 <span style={{ width: 28, height: 28, borderRadius: 14, background: m.color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12 }}>{m.name.slice(0, 1)}</span>
                 <span style={{ fontWeight: 700, fontSize: 13 }}>{m.name}</span>
                 <span className={`hk-badge ${abn ? 'hk-b-red' : 'hk-b-green'}`}>{abn ? '留意' : '正常'}</span>
@@ -293,84 +302,116 @@ function HomeContent() {
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
               <span className={`hk-badge ${visibleHomeAlerts.length ? 'hk-b-amber' : 'hk-b-green'}`}>{visibleHomeAlerts.length ? `${visibleHomeAlerts.length} 件重要事` : '無高風險提醒'}</span>
-              <span className={`hk-badge ${processingDocs.length ? 'hk-b-amber' : 'hk-b-blue'}`}>{processingDocs.length ? `${processingDocs.length} 份資料整理中` : '資料狀態穩定'}</span>
-              <span className="hk-badge hk-b-cmo">{cmoRecommendation ? 'CMO 有已發布建議' : '等待 CMO 更新'}</span>
+              <span className={`hk-badge ${processingDocs.length ? 'hk-b-amber' : 'hk-b-blue'}`}>{processingDocs.length ? `${processingDocs.length} 份資料整理中` : Object.keys(syncCounts).length ? '同步已更新' : '資料狀態穩定'}</span>
+              <span className="hk-badge hk-b-cmo">{cmoRecommendation || topRec ? 'CMO 有已確認建議' : '等待 CMO 更新'}</span>
             </div>
           </div>
 
-          <div className="hk-card">
-            <div className="hk-ctitle">需要注意
-              <span className="hk-badge hk-b-cmo">{cmoRecommendation ? 'CMO 已發布' : '等待整理'}</span>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(118px, 1fr))', gap: 10 }}>
-              {attentionRows.map((row) => (
-                <div key={row.key} style={{ border: '1px solid var(--hk-line)', borderRadius: 12, padding: 12, minHeight: 84, background: '#fff' }}>
-                  <div style={{ fontSize: 12, color: 'var(--hk-ink-3)', fontWeight: 850, marginBottom: 8 }}>{row.label}</div>
-                  <div style={{ fontSize: 16, lineHeight: 1.45, color: hasPublishedAttention ? 'var(--hk-ink)' : 'var(--hk-ink-3)', fontWeight: 850, wordBreak: 'break-word' }}>{hasPublishedAttention ? patientSafeText(row.value, '—') : '待 CMO 整理'}</div>
-                </div>
-              ))}
-            </div>
-            {!hasPublishedAttention && (
-              <div style={{ marginTop: 10, color: 'var(--hk-ink-2)', fontSize: 13, lineHeight: 1.6 }}>
-                這五格只顯示 CMO 已發布的「需要注意」摘要；目前尚未發布新的摘要。
-              </div>
-            )}
-            <Link href={href('/dashboard/problems')} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ marginTop: 12 }}>查看疾病總覽</Link>
-          </div>
-
-          {(pendingMissingRequests.length > 0 || visibleHomeAlerts.length > 0) && (
+          {/* ② 重要提醒（僅有才出現，不製造焦慮） */}
+          {visibleHomeAlerts.length > 0 && (
             <div className="hk-card">
-              <div className="hk-ctitle">補資料與提醒
-                <span className="hk-badge hk-b-amber">{pendingMissingRequests.length + visibleHomeAlerts.length} 件</span>
+              <div className="hk-ctitle">重要提醒
+                <span className="hk-badge hk-b-amber">前 {visibleHomeAlerts.length} 項</span>
               </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {pendingMissingRequests.slice(0, 4).map((request) => (
-                  <button key={request.id} className="hk-badge hk-b-amber" style={{ cursor: 'pointer', border: 'none' }} onClick={() => router.push(href('/dashboard/reminders', { highlight: `missing-${request.id}` }))}>
-                    {requestTitleForPatient(request.title)}
-                  </button>
-                ))}
-                {visibleHomeAlerts.slice(0, 4).map((item) => (
-                  <button key={item.id} className={`hk-badge ${item.badgeCls}`} style={{ cursor: 'pointer', border: 'none' }} onClick={item.onClick}>
-                    {item.title}
-                  </button>
-                ))}
-              </div>
+              {visibleHomeAlerts.map((item) => (
+                <AlertRow key={item.id} color={item.color} title={item.title} badge={item.badge} badgeCls={item.badgeCls} desc={item.desc} onClick={item.onClick} />
+              ))}
               {hiddenAlertCount > 0 && (
                 <Link href={href('/dashboard/reminders')} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ marginTop: 10 }}>
-                  另外 {hiddenAlertCount} 項到提醒頁查看
+                  另外 {hiddenAlertCount} 項移到提醒頁查看
                 </Link>
               )}
             </div>
           )}
+
+          {/* ③ F1 需要注意 */}
+          <div className="hk-card">
+            <div className="hk-ctitle">需要注意
+              {cmoRecommendation?.published_at && <span className="hk-badge hk-b-cmo">{relativeTime(cmoRecommendation.published_at)}</span>}
+            </div>
+            {cmoRecommendation || topRec ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(96px,1fr))', gap: 8 }}>
+                  {ATTENTION_FIELDS.map((field) => (
+                    <div key={field.key} style={{ border: '1px solid var(--hk-line)', borderRadius: 8, padding: '10px 9px', minHeight: 62, background: '#fff' }}>
+                      <div style={{ fontSize: 11, color: 'var(--hk-ink-3)', fontWeight: 800 }}>{field.label}</div>
+                      <div style={{ marginTop: 6, fontSize: 14, color: 'var(--hk-ink)', fontWeight: 850, wordBreak: 'break-word' }}>
+                        {hasAttentionCells ? (attentionCells[field.key] || '—') : field.key === 'condition' ? problemTitleForPatient(topRec) : '—'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.55, color: 'var(--hk-ink-2)' }}>
+                  {cmoRecommendation
+                    ? patientSafeText(cmoRecommendation.recommendation, cmoRecommendation.health_summary || 'CMO 已完成一則健康建議。')
+                    : `${problemTitleForPatient(topRec)} 已由 CMO 整理。`}
+                </div>
+                {pendingMissingRequests.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                    {pendingMissingRequests.slice(0, 4).map((request) => (
+                      <button
+                        key={request.id}
+                        type="button"
+                        className="hk-badge hk-b-amber"
+                        style={{ border: 'none', cursor: 'pointer' }}
+                        onClick={() => router.push(href('/dashboard/reminders', { highlight: `missing-${request.id}` }))}
+                      >
+                        補資料：{requestTitleForPatient(request.title)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <Link href={href('/dashboard/health-summary')} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ marginTop: 10 }}>查看健康摘要 →</Link>
+              </>
+            ) : (
+              <div style={{ fontSize: 13, color: 'var(--hk-ink-3)', padding: '6px 0' }}>
+                CMO 團隊整理完成後，建議會顯示在這裡。
+              </div>
+            )}
+          </div>
         </main>
 
         <aside className="hk-home-side">
           <div className="hk-card">
-            <div className="hk-ctitle">生命徵象</div>
-            {latestVitals.length > 0 ? latestVitals.map((item) => (
-              <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--hk-line)' }}>
-                <span style={{ fontSize: 13, color: 'var(--hk-ink-2)', fontWeight: 750 }}>{item.label}</span>
-                <span style={{ fontSize: 13, color: 'var(--hk-ink)', fontWeight: 850 }}>{item.format(item.record as RecordOut)}</span>
-              </div>
-            )) : (
-              <div style={{ fontSize: 13, color: 'var(--hk-ink-3)' }}>尚無近期生命徵象</div>
+            <div className="hk-ctitle">最新生命徵象</div>
+            {VITAL_TYPES.map((vt) => {
+              const latest = latestByType[vt.key];
+              if (!latest) return null;
+              const flag = vitalFlag(vt.key, latest.value1, latest.value2);
+              return (
+                <AlertRow
+                  key={vt.key}
+                  color={isAbnormal(flag) ? 'var(--hk-amber)' : 'var(--hk-green)'}
+                  title={`${vt.label} ${vt.format(latest)}`}
+                  badge={flag.label}
+                  badgeCls={isAbnormal(flag) ? 'hk-b-amber' : 'hk-b-green'}
+                  desc={latest.recorded_at ? `紀錄於 ${relativeTime(latest.recorded_at)}` : '最近一次量測'}
+                  onClick={() => router.push(href('/dashboard/trends'))}
+                />
+              );
+            })}
+            {Object.keys(latestByType).length === 0 && (
+              <div style={{ fontSize: 13, color: 'var(--hk-ink-3)' }}>尚未有生命徵象紀錄。</div>
             )}
-            <Link href={href('/dashboard/trends')} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ marginTop: 10 }}>查看趨勢</Link>
           </div>
 
           <div className="hk-card">
-            <div className="hk-ctitle">用藥</div>
-            {activeMedications.length > 0 ? activeMedications.map((med) => (
-              <div key={med.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--hk-line)' }}>
-                <div style={{ fontSize: 13, color: 'var(--hk-ink)', fontWeight: 850 }}>{med.brand_name || med.drug_name}</div>
-                <div style={{ fontSize: 12, color: 'var(--hk-ink-2)', marginTop: 2 }}>
-                  {[med.generic_name_en, med.dose, med.frequency, med.route].filter(Boolean).join(' · ') || '明細待整理'}
-                </div>
-              </div>
-            )) : (
-              <div style={{ fontSize: 13, color: 'var(--hk-ink-3)' }}>尚無已發布用藥</div>
-            )}
-            <Link href={href('/dashboard/medications')} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ marginTop: 10 }}>查看用藥</Link>
+            <div className="hk-ctitle">Problem 用藥整理
+              <span className="hk-badge hk-b-blue">{publishedLinkedMeds.length} 項</span>
+            </div>
+            {publishedLinkedMeds.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--hk-ink-3)' }}>目前沒有已發布且已掛 Problem 的用藥。</div>
+            ) : publishedLinkedMeds.map((med) => (
+              <AlertRow
+                key={med.id}
+                color="var(--hk-blue)"
+                title={patientSafeText(med.drug_name || med.generic_name_en || med.brand_name, '用藥')}
+                badge={med.frequency || med.dose || '用藥'}
+                badgeCls="hk-b-blue"
+                desc={patientSafeText(med.indication, '已由 CMO 掛到疾病總覽')}
+                onClick={() => router.push(href('/dashboard/conditions'))}
+              />
+            ))}
           </div>
 
           {activeCmoFollowUps.length > 0 && (
@@ -393,11 +434,12 @@ function HomeContent() {
             </div>
           )}
 
-          <div className="hk-card" style={{ borderColor: '#fecaca', background: 'linear-gradient(135deg,#ffffff,#fef2f2)' }}>
+          {/* 急診保命連結（核心安全功能：產生 24h QR 給現場醫師唯讀） */}
+          <div className="hk-card" style={{ borderColor: '#f2d3cf', background: 'linear-gradient(135deg,#ffffff,#faecea)' }}>
             <div className="hk-ctitle">急診保命連結</div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
               <div style={{ fontSize: 13, color: 'var(--hk-ink-2)', lineHeight: 1.5 }}>產生 24 小時 QR，讓現場醫師唯讀看到保命資料（過敏／用藥／腎功能等）。</div>
-              <Link href={href('/dashboard/emergency')} className="hk-btn hk-btn-sm" style={{ flexShrink: 0, whiteSpace: 'nowrap', background: '#dc2626', color: '#fff' }}>產生連結</Link>
+              <Link href={href('/dashboard/emergency')} className="hk-btn hk-btn-sm" style={{ flexShrink: 0, whiteSpace: 'nowrap', background: '#c0453a', color: '#fff' }}>產生連結</Link>
             </div>
           </div>
         </aside>
@@ -439,7 +481,7 @@ export default function DashboardPage() {
     return (
       <div className="page-wrap" style={{ flex: 1, overflowY: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
         <div style={{ textAlign: 'center', maxWidth: 400 }}>
-          <div style={{ width: 96, height: 96, borderRadius: '50%', background: 'linear-gradient(135deg,#fee2e2,#fecaca)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 44, margin: '0 auto 28px' }}>⚠️</div>
+          <div style={{ width: 96, height: 96, borderRadius: '50%', background: 'linear-gradient(135deg,#faecea,#f2d3cf)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 44, margin: '0 auto 28px' }}>⚠️</div>
           <h2 style={{ fontSize: 24, fontWeight: 800, color: 'var(--hk-ink)', marginBottom: 12 }}>暫時無法載入資料</h2>
           <p style={{ fontSize: 15, color: 'var(--hk-ink-2)', lineHeight: 1.8, marginBottom: 36 }}>連線發生問題，您的資料仍安全保存。請稍後重試。</p>
           <button onClick={() => window.location.reload()} className="hk-btn hk-btn-primary" style={{ width: 'auto', padding: '14px 36px' }}>重新載入</button>
@@ -452,7 +494,7 @@ export default function DashboardPage() {
     return (
       <div className="page-wrap" style={{ flex: 1, overflowY: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
         <div style={{ textAlign: 'center', maxWidth: 400 }}>
-          <div style={{ width: 96, height: 96, borderRadius: '50%', background: 'linear-gradient(135deg,#dbeafe,#bfdbfe)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 44, margin: '0 auto 28px' }}>👨‍👩‍👧‍👦</div>
+          <div style={{ width: 96, height: 96, borderRadius: '50%', background: 'linear-gradient(135deg,#d5e7ec,#cfe3e8)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 44, margin: '0 auto 28px' }}>👨‍👩‍👧‍👦</div>
           <h2 style={{ fontSize: 24, fontWeight: 800, color: 'var(--hk-ink)', marginBottom: 12 }}>還沒有家庭成員</h2>
           <p style={{ fontSize: 15, color: 'var(--hk-ink-2)', lineHeight: 1.8, marginBottom: 36 }}>先新增家庭成員，就可以開始記錄每個人的健康資料</p>
           <button onClick={() => router.push('/dashboard/settings')} className="hk-btn hk-btn-primary" style={{ width: 'auto', padding: '14px 36px' }}>+ 新增第一位成員</button>

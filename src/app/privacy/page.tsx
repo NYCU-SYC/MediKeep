@@ -72,7 +72,7 @@ export default function PrivacyPage() {
       </section>
 
       <div style={{
-        marginTop: '48px', padding: '20px', background: '#f4f7f9',
+        marginTop: '48px', padding: '20px', background: '#f2f5f7',
         borderRadius: '12px', fontSize: '13px', color: '#888',
       }}>
         本隱私權政策適用於 HealthKeep 應用程式的所有功能與服務。

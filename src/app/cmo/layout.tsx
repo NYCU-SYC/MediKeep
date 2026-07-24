@@ -50,8 +50,11 @@ export default function CmoLayout({ children }: { children: ReactNode }) {
 
   if (isLogin) return <>{children}</>
 
-  const isWorkbench = pathname === '/cmo/workbench'
+  const isDashboard = pathname === '/cmo/dashboard'
   const isPatient = pathname.startsWith('/cmo/patients')
+  // Patient workspaces are opened from the queue, so keep the queue tab highlighted there.
+  const isQueue = pathname === '/cmo/workbench' || isPatient
+  const isTasks = pathname === '/cmo/tasks'
 
   if (!cmo) {
     return (
@@ -70,7 +73,7 @@ export default function CmoLayout({ children }: { children: ReactNode }) {
   return (
     <div className="cmo-shell">
       <nav className="cmo-topbar">
-        <Link href="/cmo/workbench" className="cmo-brand" aria-label="HealthKeep CMO Console">
+        <Link href="/cmo/dashboard" className="cmo-brand" aria-label="HealthKeep CMO Console">
           <span className="cmo-logo">H</span>
           <span>
             HealthKeep
@@ -79,11 +82,14 @@ export default function CmoLayout({ children }: { children: ReactNode }) {
         </Link>
 
         <div className="cmo-nav" aria-label="CMO navigation">
-          <Link className={`cmo-nav-link ${isWorkbench ? 'active' : ''}`} href="/cmo/workbench">
-            工作台
+          <Link className={`cmo-nav-link ${isDashboard ? 'active' : ''}`} href="/cmo/dashboard">
+            工作台總覽
           </Link>
-          <Link className={`cmo-nav-link ${isPatient ? 'active' : ''}`} href="/cmo/workbench#patients">
-            病患清單
+          <Link className={`cmo-nav-link ${isQueue ? 'active' : ''}`} href="/cmo/workbench">
+            病患佇列
+          </Link>
+          <Link className={`cmo-nav-link ${isTasks ? 'active' : ''}`} href="/cmo/tasks">
+            追蹤待辦
           </Link>
         </div>
 

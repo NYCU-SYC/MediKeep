@@ -1,0 +1,12 @@
+.env
+.env.*
+.git
+.next
+node_modules
+*.log
+*.tsbuildinfo
+.DS_Store
+._*
+output
+.codex-screenshots
+.playwright-cli

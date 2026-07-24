@@ -5,12 +5,15 @@ import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import PatientContentEntryLauncher, { sendToPatientContentPanel } from '../_components/PatientContentEntryDrawer'
 import type { RedZoneDraftPatch } from '../_components/PatientContentEntryDrawer'
+import { RowActionsMenu, type RowActionGroup } from '../_components/RowActionsMenu'
 
 type SectionKey =
   | 'outpatient' | 'inpatient' | 'med' | 'surgery'
   | 'imaging' | 'lab' | 'vaccine' | 'covid'
   | 'tcm' | 'dental'
 type DraftStatus = 'pending' | 'accepted' | 'rejected'
+type TriageStatus = 'pending' | 'linked' | 'dismissed' | 'rejected'
+type SourceTriageAction = 'link_to_problem' | 'dismiss' | 'reject' | 'request_missing_data'
 
 interface DraftPayload {
   extracted_fields?: Record<string, unknown>
@@ -39,8 +42,19 @@ interface Draft {
   member_name?: string | null
   payload: DraftPayload | null
   status: DraftStatus
+  triage_status?: TriageStatus | null
   priority_hint?: 'tier1' | 'tier2' | 'tier3' | null
   created_at?: string | null
+}
+
+interface ProblemOption {
+  problem_id: number
+  title: string
+  plain_language_title?: string
+  member_name?: string | null
+  status?: string
+  diagnosis_status?: string
+  icd10_code?: string | null
 }
 
 const SECTIONS: Array<{ key: SectionKey; label: string; subtitle: string; icon: string }> = [
@@ -57,9 +71,53 @@ const SECTIONS: Array<{ key: SectionKey; label: string; subtitle: string; icon: 
 ]
 
 const STATUS_META: Record<DraftStatus, { label: string; color: string; bg: string }> = {
-  pending:  { label: '待審',  color: '#a16207', bg: '#fef3c7' },
-  accepted: { label: '已核',  color: '#047857', bg: '#ecfdf5' },
-  rejected: { label: '已退',  color: '#be123c', bg: '#fff1f2' },
+  pending:  { label: '待審',  color: '#a97614', bg: '#fdf6e3' },
+  accepted: { label: '已核',  color: '#2e8b57', bg: '#e7f4ec' },
+  rejected: { label: '已退',  color: '#a03a30', bg: '#faecea' },
+}
+
+const TRIAGE_META: Record<TriageStatus, { label: string; color: string; bg: string }> = {
+  pending: { label: '待整理', color: '#a97614', bg: '#fdf6e3' },
+  linked: { label: '已入 Problem', color: '#2e8b57', bg: '#e7f4ec' },
+  dismissed: { label: '免關聯', color: '#56687a', bg: '#f6f9fa' },
+  rejected: { label: '已退回', color: '#a03a30', bg: '#faecea' },
+}
+
+/**
+ * One status chip instead of two stacked ones. Triage state is what the CMO
+ * acts on, so it wins; the legacy accept/reject state only shows when it adds
+ * information the triage state doesn't already carry.
+ */
+function rowStatusMeta(status: DraftStatus, triage: TriageStatus) {
+  if (triage !== 'pending') return TRIAGE_META[triage]
+  if (status === 'accepted') return { label: '已核 · 待整理', color: '#a97614', bg: '#fdf6e3' }
+  if (status === 'rejected') return STATUS_META.rejected
+  return { label: '待整理', color: '#a97614', bg: '#fdf6e3' }
+}
+
+function normalizeIcd(value: string | null | undefined) {
+  return String(value ?? '').trim().toUpperCase()
+}
+
+/**
+ * Find an existing Problem whose ICD-10 matches this source row, so the CMO can
+ * link with one click instead of opening the dropdown. Falls back to a
+ * category match (first 3 chars, e.g. E11.9 ↔ E11.65) which is how ICD-10
+ * groups the same disease.
+ */
+function suggestedProblemForDraft(icd: string, problems: ProblemOption[]): { problem: ProblemOption; exact: boolean } | null {
+  const code = normalizeIcd(icd)
+  if (!code) return null
+  const exact = problems.find((problem) => normalizeIcd(problem.icd10_code) === code)
+  if (exact) return { problem: exact, exact: true }
+  const category = code.split('.')[0]
+  if (category.length < 3) return null
+  const loose = problems.find((problem) => normalizeIcd(problem.icd10_code).split('.')[0] === category)
+  return loose ? { problem: loose, exact: false } : null
+}
+
+function problemLabel(problem: ProblemOption) {
+  return problem.plain_language_title || problem.title
 }
 
 async function fetchJson<T>(url: string, fallback: T, init?: RequestInit): Promise<T> {
@@ -502,6 +560,8 @@ export default function NhiSectionsPage() {
   const searchParams = useSearchParams()
   const targetDraftId = Number(searchParams.get('draft') ?? 0) || null
   const [drafts, setDrafts] = useState<Draft[]>([])
+  const [problemOptions, setProblemOptions] = useState<ProblemOption[]>([])
+  const [bulkProblemId, setBulkProblemId] = useState('')
   const [patientName, setPatientName] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -509,20 +569,24 @@ export default function NhiSectionsPage() {
   const [statusFilter, setStatusFilter] = useState<DraftStatus | 'all'>('all')
   const [memberFilter, setMemberFilter] = useState('全部')
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  // Undefined = untouched (an ICD match may seed it); '' = explicitly cleared.
+  const [linkTargets, setLinkTargets] = useState<Record<number, string | undefined>>({})
   const [expanded, setExpanded] = useState<number | null>(null)
   const [flash, setFlash] = useState('')
 
   const loadAll = useCallback(async () => {
     // Fetch all statuses, then keep NHI parser drafts plus contract-demo raw review drafts.
-    const [pending, accepted, rejected, patient] = await Promise.all([
+    const [pending, accepted, rejected, patient, workspace] = await Promise.all([
       fetchJson<Draft[]>(`/api/cmo/patients/${id}/drafts?status=pending`, []),
       fetchJson<Draft[]>(`/api/cmo/patients/${id}/drafts?status=accepted`, []),
       fetchJson<Draft[]>(`/api/cmo/patients/${id}/drafts?status=rejected`, []),
       fetchJson<{ user?: { display_name: string } } | null>(`/api/cmo/patients/${id}`, null),
+      fetchJson<{ cmo_output?: { problems?: ProblemOption[] } } | null>(`/api/cmo/review/patients/${id}/workspace`, null),
     ])
     const all = [...pending, ...accepted, ...rejected]
       .filter(isNhiDraft)
     setDrafts(all)
+    setProblemOptions(workspace?.cmo_output?.problems ?? [])
     setPatientName(patient?.user?.display_name ?? '')
     setLoading(false)
   }, [id])
@@ -582,7 +646,7 @@ export default function NhiSectionsPage() {
   }, [memberDrafts, activeSection, statusFilter])
 
   const pendingInSection = useMemo(
-    () => visible.filter((d) => d.status === 'pending').map((d) => d.id),
+    () => visible.filter((d) => (d.triage_status ?? 'pending') === 'pending').map((d) => d.id),
     [visible]
   )
 
@@ -600,6 +664,76 @@ export default function NhiSectionsPage() {
   const flashFor = (msg: string) => {
     setFlash(msg)
     window.setTimeout(() => setFlash(''), 1600)
+  }
+
+  const selectedDraftRows = useMemo(
+    () => drafts.filter((draft) => selected.has(draft.id)),
+    [drafts, selected]
+  )
+
+  const selectedMemberName = useMemo(() => {
+    const names = Array.from(new Set(selectedDraftRows.map(memberLabel)))
+    return names.length === 1 ? names[0] : ''
+  }, [selectedDraftRows])
+
+  const problemOptionsForMember = useCallback((memberName: string) => {
+    return problemOptions.filter((problem) => !problem.member_name || problem.member_name === memberName || (memberName === '本人' && problem.member_name === 'self'))
+  }, [problemOptions])
+
+  const runSourceTriage = async (
+    action: SourceTriageAction,
+    ids: number[],
+    options: { problemId?: number; memberName?: string } = {},
+  ) => {
+    if (ids.length === 0 || busy) return
+    const memberName = options.memberName || selectedMemberName
+    if (!memberName) {
+      flashFor('請先只選同一位成員的來源列')
+      return
+    }
+    if (action === 'link_to_problem' && !options.problemId) {
+      flashFor('請先選擇要加入的 Problem')
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/cmo/patients/${id}/source-triage/batch`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey(`nhi-source-${action}`) },
+        body: JSON.stringify({
+          action,
+          member_name: memberName,
+          ...(options.problemId ? { problem_id: options.problemId } : {}),
+          ...(action === 'request_missing_data' ? {
+            title: '請補充 NHI 來源資料',
+            reason: '醫療團隊需要補齊這筆來源，才能完成健康整理。',
+          } : {}),
+          ...(action === 'reject' ? { blocked_reason: 'manual_review' } : {}),
+          items: ids.map((draftId) => ({ resource_type: 'nhi_draft', resource_id: draftId })),
+        }),
+      })
+      const out = await res.json().catch(() => ({})) as { detail?: string | { message?: string }; updated?: unknown[] }
+      if (!res.ok) {
+        const detail = typeof out.detail === 'string' ? out.detail : out.detail?.message
+        flashFor(detail || '來源整理失敗，資料沒有被更新')
+        return
+      }
+      const count = out.updated?.length ?? ids.length
+      const label: Record<SourceTriageAction, string> = {
+        link_to_problem: '已加入 Problem',
+        dismiss: '已標記免關聯',
+        reject: '已退回來源',
+        request_missing_data: '已建立補資料請求',
+      }
+      flashFor(`${label[action]} ${count} 筆`)
+      setSelected((prev) => {
+        const next = new Set(prev)
+        ids.forEach((draftId) => next.delete(draftId))
+        return next
+      })
+      await loadAll()
+    } finally { setBusy(false) }
   }
 
   const runBulk = async (action: 'accept' | 'reject') => {
@@ -694,7 +828,7 @@ export default function NhiSectionsPage() {
           )}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {flash && <span className="cmo-badge" style={{ background: '#ecfdf5', color: '#047857', fontSize: 13 }}>{flash}</span>}
+          {flash && <span className="cmo-badge" style={{ background: '#e7f4ec', color: '#2e8b57', fontSize: 13 }}>{flash}</span>}
           <Link className="cmo-button" href={`/cmo/patients/${id}/intake`}>切換 Triage 模式</Link>
         </div>
       </header>
@@ -756,11 +890,11 @@ export default function NhiSectionsPage() {
           </div>
 
           {currentStats.total === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+            <div style={{ padding: 40, textAlign: 'center', color: '#6b7c8c' }}>
               此區塊目前沒有可審資料。若 Workbench 顯示待審 draft，請切換其他區塊；若全部區塊皆為 0，代表尚未完成 NHI 匯入或 parser 尚未標記 section。
             </div>
           ) : visible.length === 0 ? (
-            <div style={{ padding: 30, textAlign: 'center', color: '#64748b' }}>
+            <div style={{ padding: 30, textAlign: 'center', color: '#6b7c8c' }}>
               此狀態下沒有紀錄。
             </div>
           ) : (
@@ -769,14 +903,14 @@ export default function NhiSectionsPage() {
                 <table className="cmo-triage-table">
                   <thead>
                     <tr>
-                      <th style={{ width: 36 }}></th>
-                      <th style={{ width: 80 }}>成員</th>
-                      <th>日期</th>
-                      <th>機構</th>
+                      <th style={{ width: 34 }}></th>
+                      <th style={{ width: 62 }}>成員</th>
+                      <th style={{ width: 94 }}>日期</th>
+                      <th style={{ width: 92 }}>機構</th>
                       <th>{activeSection === 'vaccine' ? '疫苗' : activeSection === 'lab' ? '檢查項目' : '診斷 / 內容'}</th>
-                      <th>ICD</th>
-                      <th>狀態</th>
-                      <th style={{ width: 190, textAlign: 'right' }}>動作</th>
+                      <th style={{ width: 66 }}>ICD</th>
+                      <th style={{ width: 82 }}>狀態</th>
+                      <th style={{ width: 236, textAlign: 'right' }}>動作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -784,7 +918,6 @@ export default function NhiSectionsPage() {
                       const f = d.payload?.extracted_fields ?? {}
                       const isSel = selected.has(d.id)
                       const isExp = expanded === d.id
-                      const sMeta = STATUS_META[d.status]
                       const rowDate = firstText(f, ['visit_date', 'onset_date']) || d.created_at || ''
                       const facility = firstText(f, ['facility', 'hospital'])
                       const sourceLabel = facility || (f.source_doc_page ? `source p.${toText(f.source_doc_page)}` : d.payload?.model_meta?.run_id || '—')
@@ -792,6 +925,65 @@ export default function NhiSectionsPage() {
                       const icd = firstText(f, ['icd10', 'icd10_candidates'])
                       const secondary = firstText(f, ['key_medications', 'value_numeric', 'unit', 'severity', 'reaction', 'days_supply'])
                       const redzoneCandidate = redZonePatchForDraft(d)
+                      const triageStatus = d.triage_status ?? 'pending'
+                      const memberProblems = problemOptionsForMember(memberLabel(d))
+                      const suggestion = suggestedProblemForDraft(icd, memberProblems)
+                      // An explicit pick (including clearing back to "選 Problem…") always
+                      // wins; otherwise the ICD match seeds the dropdown.
+                      const usingSuggestion = Boolean(suggestion) && linkTargets[d.id] === undefined
+                      const selectedProblemId = linkTargets[d.id] ?? (suggestion ? String(suggestion.problem.problem_id) : '')
+                      const rowStatus = rowStatusMeta(d.status, triageStatus)
+                      // Secondary + destructive + legacy actions live behind "⋯" so the
+                      // column keeps its labels readable instead of crushing them.
+                      const rowMenuGroups: RowActionGroup[] = [
+                        {
+                          actions: [
+                            ...(triageStatus === 'pending' && usingSuggestion && suggestion ? [{
+                              key: 'clear-suggestion',
+                              label: '清除自動配對',
+                              hint: `目前建議：${problemLabel(suggestion.problem)}`,
+                              onSelect: () => setLinkTargets((prev) => ({ ...prev, [d.id]: '' })),
+                            }] : []),
+                            ...(redzoneCandidate ? [{
+                              key: 'redzone',
+                              label: '帶到保命紅區',
+                              hint: '過敏／植入物等紅區資料',
+                              onSelect: () => sendNhiDraftToRedZone(d),
+                            }] : []),
+                            ...(triageStatus === 'pending' ? [
+                              {
+                                key: 'dismiss',
+                                label: '免關聯',
+                                hint: '這筆不需要進 Problem',
+                                disabled: busy,
+                                onSelect: () => { void runSourceTriage('dismiss', [d.id], { memberName: memberLabel(d) }) },
+                              },
+                              {
+                                key: 'missing',
+                                label: '需要補資料',
+                                hint: '向使用者發出補件請求',
+                                disabled: busy,
+                                onSelect: () => { void runSourceTriage('request_missing_data', [d.id], { memberName: memberLabel(d) }) },
+                              },
+                              {
+                                key: 'reject',
+                                label: '退回',
+                                hint: '來源有誤或無法採用',
+                                tone: 'danger' as const,
+                                disabled: busy,
+                                onSelect: () => { void runSourceTriage('reject', [d.id], { memberName: memberLabel(d) }) },
+                              },
+                            ] : []),
+                          ],
+                        },
+                        {
+                          title: 'Legacy 流程',
+                          actions: d.status === 'pending' ? [
+                            { key: 'legacy-accept', label: 'Legacy 接受', disabled: busy, onSelect: () => runSingle('accept', d.id) },
+                            { key: 'legacy-reject', label: 'Legacy 退回', tone: 'danger' as const, disabled: busy, onSelect: () => runSingle('reject', d.id) },
+                          ] : [],
+                        },
+                      ]
                       return [
                         <tr id={`nhi-draft-${d.id}`} key={`r-${d.id}`}
                           className={`${isSel ? 'selected' : ''} ${isExp ? 'expanded' : ''}`}
@@ -802,59 +994,73 @@ export default function NhiSectionsPage() {
                           }}>
                           <td onClick={(e) => e.stopPropagation()}>
                             <input type="checkbox" checked={isSel}
-                              disabled={d.status !== 'pending'}
+                              disabled={triageStatus !== 'pending'}
                               onChange={() => toggleOne(d.id)} />
                           </td>
                           <td><span className="cmo-badge">{memberLabel(d)}</span></td>
-                          <td style={{ whiteSpace: 'nowrap', color: '#475569', fontVariantNumeric: 'tabular-nums' }}>
+                          <td style={{ whiteSpace: 'nowrap', color: '#56687a', fontVariantNumeric: 'tabular-nums' }}>
                             {formatDate(rowDate)}
                           </td>
-                          <td><strong style={{ fontWeight: 700 }}>{sourceLabel}</strong></td>
+                          <td className="cmo-nhi-facility">{sourceLabel}</td>
                           <td>
-                            <div style={{ color: '#0f172a', fontWeight: 650 }}>
-                              {contentLabel.slice(0, 80)}
-                            </div>
-                            {f.lab_total_items ? <div className="cmo-subtitle" style={{ marginTop: 2 }}>共 {toText(f.lab_total_items)} 項檢驗</div> : null}
-                            {f.key_medications ? <div className="cmo-subtitle" style={{ marginTop: 2 }}>{toText(f.key_medications).slice(0, 60)}</div> : null}
-                            {secondary && !f.key_medications && !f.lab_total_items ? <div className="cmo-subtitle" style={{ marginTop: 2 }}>{secondary.slice(0, 60)}</div> : null}
+                            <div className="cmo-nhi-title">{contentLabel}</div>
+                            {/* One secondary line only — long drug lists used to push rows to
+                                three lines and break the visual rhythm. Full text is in the
+                                expanded detail row. */}
+                            {f.lab_total_items ? <div className="cmo-nhi-sub">共 {toText(f.lab_total_items)} 項檢驗</div> : null}
+                            {f.key_medications ? <div className="cmo-nhi-sub">{toText(f.key_medications)}</div> : null}
+                            {secondary && !f.key_medications && !f.lab_total_items ? <div className="cmo-nhi-sub">{secondary}</div> : null}
                           </td>
-                          <td style={{ color: '#475569', fontFamily: 'ui-monospace,monospace', fontSize: 12 }}>{icd || '—'}</td>
+                          <td className="cmo-nhi-icd">{icd || '—'}</td>
                           <td>
-                            <span className="cmo-badge" style={{ background: sMeta.bg, color: sMeta.color }}>{sMeta.label}</span>
+                            <span className="cmo-badge" style={{ background: rowStatus.bg, color: rowStatus.color, whiteSpace: 'nowrap' }}>{rowStatus.label}</span>
                           </td>
-                          <td style={{ textAlign: 'right' }}>
-                            <div className="cmo-quickact always-visible" style={{ justifyContent: 'flex-end' }}>
+                          <td>
+                            {/* Same control group on every row so the column stays aligned.
+                                A matching ICD pre-selects the Problem; the CMO only confirms. */}
+                            <div className="cmo-rowact">
+                              {triageStatus === 'pending' && (
+                                <div className={`cmo-rowact-link${usingSuggestion ? ' suggested' : ''}`}>
+                                  <select
+                                    className="cmo-select"
+                                    value={selectedProblemId}
+                                    aria-label="選擇要加入的 Problem"
+                                    title={usingSuggestion && suggestion ? `ICD ${icd} ${suggestion.exact ? '完全符合' : '屬同一類'}，已自動帶入` : '選擇要加入的 Problem'}
+                                    onClick={(event) => event.stopPropagation()}
+                                    onChange={(event) => setLinkTargets((prev) => ({ ...prev, [d.id]: event.target.value }))}
+                                  >
+                                    <option value="">選 Problem…</option>
+                                    {memberProblems.map((problem) => (
+                                      <option key={problem.problem_id} value={problem.problem_id}>
+                                        {problemLabel(problem)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    className="cmo-iconbtn primary"
+                                    disabled={busy || !selectedProblemId}
+                                    aria-label="加入選定的 Problem"
+                                    title="加入選定的 Problem"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      void runSourceTriage('link_to_problem', [d.id], { problemId: Number(selectedProblemId), memberName: memberLabel(d) })
+                                    }}
+                                  >
+                                    ✓
+                                  </button>
+                                </div>
+                              )}
                               <button
                                 type="button"
-                                className="cmo-button"
-                                style={{ minHeight: 28, padding: '4px 8px', fontSize: 12 }}
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  sendNhiDraftSummaryToPanel(d)
-                                }}
+                                className="cmo-iconbtn"
+                                aria-label="帶到右側填寫面板"
+                                title="帶到右側填寫面板"
+                                onClick={(event) => { event.stopPropagation(); sendNhiDraftSummaryToPanel(d) }}
                               >
-                                帶到右側
+                                →
                               </button>
-                              {redzoneCandidate && (
-                                <button
-                                  type="button"
-                                  className="cmo-button danger"
-                                  style={{ minHeight: 28, padding: '4px 8px', fontSize: 12 }}
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    sendNhiDraftToRedZone(d)
-                                  }}
-                                  title="帶到右側保命紅區分頁"
-                                >
-                                  帶到紅區
-                                </button>
-                              )}
-                              {d.status === 'pending' ? (
-                                <>
-                                <button type="button" className="ok" disabled={busy} title="接受" onClick={() => runSingle('accept', d.id)}>✓</button>
-                                <button type="button" className="no" disabled={busy} title="退回" onClick={() => runSingle('reject', d.id)}>✕</button>
-                                </>
-                              ) : <span className="cmo-muted" style={{ fontSize: 11 }}>已處理</span>}
+                              <RowActionsMenu groups={rowMenuGroups} />
                             </div>
                           </td>
                         </tr>,
@@ -887,11 +1093,52 @@ export default function NhiSectionsPage() {
       {selected.size > 0 && (
         <div className="cmo-bulk-bar">
           <span className="count">已選 {selected.size} 筆</span>
-          <span className="cmo-subtitle">區塊「{currentMeta.label}」內的批次操作</span>
+          <span className="cmo-subtitle">區塊「{currentMeta.label}」內的 source triage{selectedMemberName ? ` · ${selectedMemberName}` : ' · 請勿跨成員'}</span>
           <div className="actions">
+            {/* Primary bulk path: link every selected source row to one Problem. */}
+            <select
+              className="cmo-select"
+              style={{ minHeight: 34, width: 170, fontSize: 13 }}
+              value={bulkProblemId}
+              aria-label="批次加入的 Problem"
+              disabled={!selectedMemberName}
+              onChange={(event) => setBulkProblemId(event.target.value)}
+            >
+              <option value="">選 Problem…</option>
+              {problemOptionsForMember(selectedMemberName).map((problem) => (
+                <option key={problem.problem_id} value={problem.problem_id}>{problemLabel(problem)}</option>
+              ))}
+            </select>
+            <button
+              className="cmo-button primary"
+              type="button"
+              disabled={busy || !selectedMemberName || !bulkProblemId}
+              onClick={() => {
+                void runSourceTriage('link_to_problem', Array.from(selected), { problemId: Number(bulkProblemId), memberName: selectedMemberName })
+                setBulkProblemId('')
+              }}
+            >
+              加入 Problem ({selected.size})
+            </button>
+            <button className="cmo-button" type="button" disabled={busy || !selectedMemberName} onClick={() => void runSourceTriage('dismiss', Array.from(selected))}>免關聯</button>
+            <RowActionsMenu
+              ariaLabel="更多批次動作"
+              groups={[
+                {
+                  actions: [
+                    { key: 'bulk-missing', label: '需要補資料', hint: '向使用者發出補件請求', disabled: busy || !selectedMemberName, onSelect: () => { void runSourceTriage('request_missing_data', Array.from(selected)) } },
+                    { key: 'bulk-reject', label: '退回來源', hint: '來源有誤或無法採用', tone: 'danger', disabled: busy || !selectedMemberName, onSelect: () => { void runSourceTriage('reject', Array.from(selected)) } },
+                  ],
+                },
+                {
+                  title: 'Legacy 流程',
+                  actions: [
+                    { key: 'bulk-legacy-accept', label: 'Legacy 接受', disabled: busy, onSelect: () => runBulk('accept') },
+                  ],
+                },
+              ]}
+            />
             <button className="cmo-button" type="button" onClick={clearSelection}>清除</button>
-            <button className="cmo-button danger" type="button" disabled={busy} onClick={() => runBulk('reject')}>全部退回</button>
-            <button className="cmo-button primary" type="button" disabled={busy} onClick={() => runBulk('accept')}>全部接受 ({selected.size})</button>
           </div>
         </div>
       )}
@@ -905,13 +1152,13 @@ function DetailRow({ draft }: { draft: Draft }) {
 
   return (
     <tr>
-      <td colSpan={8} style={{ padding: 0, background: 'transparent', borderBottom: '1px solid #fde68a' }}>
+      <td colSpan={8} style={{ padding: 0, background: 'transparent', borderBottom: '1px solid #efdfae' }}>
         <div className="cmo-detail-card">
           <div className="cmo-detail-grid">
             {Object.entries(f).map(([k, v]) => (
               <div className="cmo-detail-field" key={k}>
                 <span className="k">{k}</span>
-                <div style={{ padding: '6px 8px', background: '#fff', border: '1px solid #d9e0ea', borderRadius: 6, fontSize: 13 }}>
+                <div style={{ padding: '6px 8px', background: '#fff', border: '1px solid #e0e7ec', borderRadius: 6, fontSize: 13 }}>
                   {toText(v) || '—'}
                 </div>
                 {toText(v) && (

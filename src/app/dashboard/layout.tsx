@@ -10,14 +10,13 @@ import { SyncProvider } from '@/lib/sync';
 import { ALL_MEMBERS, memberHref, normalizeMemberName } from '@/lib/members';
 import { Icon, HeartLogo } from './_components/Icon';
 
-// ── Desktop sidebar — primary model tabs first; legacy pages stay reachable. ──
+// ── Desktop sidebar — reminders are reachable from the bell / secondary lists.
 const menuSections = [
   {
     label: '主要',
     items: [
       { name: '首頁', icon: '🏠', href: '/dashboard' },
       { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
-      { name: '疾病總覽', icon: '🏥', href: '/dashboard/problems' },
       { name: '家庭與權限', icon: '👤', href: '/dashboard/settings' },
     ],
   },
@@ -27,7 +26,7 @@ const menuSections = [
       { name: '詳細健康檔案', icon: '🧬', href: '/dashboard/health-profile' },
       { name: '保命紅區',     icon: '🛟', href: '/dashboard/redzone' },
       { name: '急診連結',     icon: '🆘', href: '/dashboard/emergency' },
-      { name: '慢性病',       icon: '🏥', href: '/dashboard/conditions' },
+      { name: '疾病總覽',     icon: '🏥', href: '/dashboard/conditions' },
       { name: '藥物',         icon: '💊', href: '/dashboard/medications' },
       { name: '趨勢分析',     icon: '📈', href: '/dashboard/trends' },
     ],
@@ -37,6 +36,7 @@ const menuSections = [
     items: [
       { name: '新增紀錄', icon: '➕', href: '/dashboard/upload' },
       { name: '健保存摺匯入', icon: '📑', href: '/dashboard/nhi' },
+      { name: '提醒中心', icon: '🔔', href: '/dashboard/reminders' },
       { name: '影像庫',   icon: '🩻', href: '/dashboard/imaging' },
       { name: '文件庫',   icon: '📁', href: '/dashboard/documents' },
       { name: '歷史紀錄', icon: '📋', href: '/dashboard/history' },
@@ -44,13 +44,151 @@ const menuSections = [
   },
 ];
 
-// ── Mobile bottom nav: 4 primary tabs（首頁/健康/疾病/家庭）──
+// ── Mobile bottom nav: primary tabs; reminders stay reachable through the bell/secondary route. ──
 const mobileNavLeft = [
   { name: '首頁', icon: '🏠', href: '/dashboard' },
   { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
-  { name: '疾病', icon: '🏥', href: '/dashboard/problems' },
-  { name: '家庭', icon: '👤', href: '/dashboard/settings' },
+  { name: '資料', icon: '📁', href: '/dashboard/history' },
+  { name: '家庭與權限', icon: '👤', href: '/dashboard/settings' },
 ];
+
+type AuthMe = {
+  authenticated?: boolean;
+  needs_binding?: boolean;
+  family_name?: string;
+  display_name?: string | null;
+  role?: string | null;
+  health_data_scope?: 'family' | 'member' | 'none' | string | null;
+  permissions?: {
+    can_view_family_health_data?: boolean;
+  } | null;
+};
+
+type ReminderBellItem = {
+  id: string;
+  label: string;
+  title: string;
+  meta: string;
+  href: string;
+};
+
+function ReminderBell({
+  count,
+  items,
+  href,
+  open,
+  onToggle,
+  variant,
+}: {
+  count: number;
+  items: ReminderBellItem[];
+  href: string;
+  open: boolean;
+  onToggle: () => void;
+  variant: 'desktop' | 'mobile';
+}) {
+  const isDesktop = variant === 'desktop';
+  return (
+    <div
+      className={isDesktop ? 'desktop-reminder-bell' : undefined}
+      style={isDesktop ? {
+        position: 'fixed',
+        top: 18,
+        right: 24,
+        zIndex: 180,
+      } : {
+        position: 'relative',
+        flexShrink: 0,
+      }}
+    >
+      <button
+        type="button"
+        aria-label="提醒浮層"
+        aria-expanded={open}
+        onClick={onToggle}
+        style={{
+          position: 'relative',
+          width: isDesktop ? 42 : 36,
+          height: isDesktop ? 42 : 36,
+          borderRadius: isDesktop ? 21 : 18,
+          background: '#fff',
+          border: '1px solid var(--gray-200)',
+          boxShadow: isDesktop ? '0 10px 24px rgba(15,23,42,0.10)' : 'none',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#22313f',
+          cursor: 'pointer',
+        }}
+      >
+        <span aria-hidden="true">🔔</span>
+        {count > 0 && (
+          <span style={{
+            position: 'absolute',
+            top: -5,
+            right: -5,
+            minWidth: 18,
+            height: 18,
+            borderRadius: 9,
+            background: '#c0453a',
+            color: '#fff',
+            fontSize: 10,
+            fontWeight: 850,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '0 5px',
+          }}>{count}</span>
+        )}
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-label="提醒摘要"
+          style={{
+            position: 'absolute',
+            top: isDesktop ? 50 : 42,
+            right: 0,
+            width: isDesktop ? 330 : 300,
+            maxWidth: 'calc(100vw - 24px)',
+            background: '#fff',
+            border: '1px solid var(--gray-200)',
+            borderRadius: 10,
+            boxShadow: '0 20px 45px rgba(15,23,42,0.16)',
+            padding: 12,
+            zIndex: 260,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 8 }}>
+            <strong style={{ fontSize: 14, color: '#22313f' }}>提醒</strong>
+            <Link href={href} style={{ fontSize: 12, color: 'var(--primary)', fontWeight: 700, textDecoration: 'none' }}>提醒中心</Link>
+          </div>
+          {items.length === 0 ? (
+            <div style={{ fontSize: 13, color: '#6b7c8c', padding: '10px 0' }}>目前沒有需要立即處理的提醒。</div>
+          ) : items.map((item) => (
+            <Link
+              key={item.id}
+              href={item.href}
+              style={{
+                display: 'block',
+                textDecoration: 'none',
+                color: '#22313f',
+                borderTop: '1px solid #eef2f5',
+                padding: '9px 0',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                <span style={{ fontSize: 12, color: '#6b7c8c', fontWeight: 800 }}>{item.label}</span>
+                <span style={{ fontSize: 11, color: '#93a3af' }}>{item.meta}</span>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 750, marginTop: 3, lineHeight: 1.35 }}>{item.title}</div>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── MobileNavItem ─────────────────────────────────────────────────────────────
 function MobileNavItem({
@@ -65,7 +203,7 @@ function MobileNavItem({
       <div style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center',
         justifyContent: 'center', height: '68px', gap: '3px',
-        color: isActive ? 'var(--primary)' : '#94a3b8',
+        color: isActive ? 'var(--primary)' : '#93a3af',
       }}>
         <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 22 }}><Icon name={item.icon} size={22} /></span>
         <span style={{ fontSize: '10px', fontWeight: isActive ? '700' : '500' }}>{item.name}</span>
@@ -139,8 +277,8 @@ function MobileMenuSheet({
               width: 38,
               height: 38,
               borderRadius: 19,
-              background: '#f1f5f9',
-              color: '#334155',
+              background: '#eef2f5',
+              color: '#45596a',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -158,7 +296,7 @@ function MobileMenuSheet({
               <div style={{
                 fontSize: '11px',
                 fontWeight: 850,
-                color: '#64748b',
+                color: '#6b7c8c',
                 letterSpacing: '0.06em',
                 textTransform: 'uppercase',
                 padding: '4px 4px 8px',
@@ -177,9 +315,9 @@ function MobileMenuSheet({
                       style={{
                         minHeight: '58px',
                         borderRadius: '12px',
-                        border: `1px solid ${active ? '#99f6e4' : 'var(--hk-line)'}`,
-                        background: active ? '#f0fdfa' : '#fff',
-                        color: active ? '#0f766e' : 'var(--hk-ink)',
+                        border: `1px solid ${active ? '#cfe3e8' : 'var(--hk-line)'}`,
+                        background: active ? '#e7f3f5' : '#fff',
+                        color: active ? '#3e6b7e' : 'var(--hk-ink)',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '10px',
@@ -191,8 +329,8 @@ function MobileMenuSheet({
                         width: 28,
                         height: 28,
                         borderRadius: 9,
-                        background: active ? '#ccfbf1' : '#f8fafc',
-                        color: active ? '#0f766e' : '#475569',
+                        background: active ? '#ccfbf1' : '#f6f9fa',
+                        color: active ? '#3e6b7e' : '#56687a',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -250,7 +388,7 @@ function MemberActionBar({
       style={{
         ...actionStyle,
         background: '#e5e7eb',
-        color: '#94a3b8',
+        color: '#93a3af',
         cursor: 'not-allowed',
       }}
     >
@@ -263,23 +401,23 @@ function MemberActionBar({
       <div className="member-action-content">
         <div className="member-action-main">
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '11px', fontWeight: 800, color: '#64748b', letterSpacing: '0.04em' }}>
+            <div style={{ fontSize: '11px', fontWeight: 800, color: '#6b7c8c', letterSpacing: '0.04em' }}>
               目前記錄對象
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '3px', flexWrap: 'wrap' }}>
-              <strong style={{ fontSize: '16px', color: '#0f172a' }}>
+              <strong style={{ fontSize: '16px', color: '#22313f' }}>
                 {activeMember || (members.length > 1 ? '全家總覽' : members[0].name)}
               </strong>
               {activeInfo && (
-                <span style={{ fontSize: '12px', color: '#64748b' }}>
+                <span style={{ fontSize: '12px', color: '#6b7c8c' }}>
                   {activeInfo.relation}{activeInfo.age ? ` · ${activeInfo.age} 歲` : ''}
                 </span>
               )}
               {mustChooseMember && (
                 <span style={{
                   fontSize: '12px',
-                  color: '#b45309',
-                  background: '#fff7ed',
+                  color: '#a97614',
+                  background: '#fdf1e0',
                   border: '1px solid #fed7aa',
                   padding: '2px 8px',
                   borderRadius: '999px',
@@ -302,7 +440,7 @@ function MemberActionBar({
                     borderRadius: '999px',
                     border: `1px solid ${!activeMember ? 'var(--primary)' : '#dbe3ea'}`,
                     background: !activeMember ? 'var(--primary)' : '#fff',
-                    color: !activeMember ? '#fff' : '#475569',
+                    color: !activeMember ? '#fff' : '#56687a',
                     fontSize: '12px',
                     fontWeight: !activeMember ? 800 : 650,
                   }}
@@ -325,7 +463,7 @@ function MemberActionBar({
                       borderRadius: '999px',
                       border: `1px solid ${isActive ? member.color : '#dbe3ea'}`,
                       background: isActive ? member.color : '#fff',
-                      color: isActive ? '#fff' : '#475569',
+                      color: isActive ? '#fff' : '#56687a',
                       fontSize: '12px',
                       fontWeight: isActive ? 800 : 650,
                     }}
@@ -346,7 +484,7 @@ function MemberActionBar({
                 ...actionStyle,
                 background: 'var(--primary)',
                 color: '#fff',
-                boxShadow: '0 2px 10px rgba(0,123,255,0.22)',
+                boxShadow: '0 2px 10px rgba(14,116,144,0.22)',
               }}
             >
               + 新增紀錄
@@ -359,7 +497,7 @@ function MemberActionBar({
                 ...actionStyle,
                 background: '#fff',
                 color: 'var(--primary)',
-                border: '1px solid #bfdbfe',
+                border: '1px solid #cfe3e8',
               }}
             >
               上傳文件
@@ -387,18 +525,22 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   const [canUseFamilyUi, setCanUseFamilyUi] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [reminderBellOpen, setReminderBellOpen] = useState(false);
+  const [unreadReminderCount, setUnreadReminderCount] = useState(0);
+  const [reminderBellItems, setReminderBellItems] = useState<ReminderBellItem[]>([]);
   // ── Auth check ───────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     const check = async (silent: boolean) => {
       try {
-        const data = await api.get('/api/auth/me') as { authenticated?: boolean; needs_binding?: boolean; family_name?: string; display_name?: string | null; role?: string | null };
+        const data = await api.get('/api/auth/me') as AuthMe;
         if (cancelled) return;
         if (!data?.authenticated) { router.replace('/'); return; }
         if (data?.needs_binding) { router.replace('/setup'); return; }
         if (data?.family_name) setFamilyName(data.family_name);
         if (data?.display_name) setDisplayName(data.display_name);
-        setCanUseFamilyUi(['owner', 'family_manager', 'proxy', 'caregiver'].includes(data?.role ?? ''));
+        const canViewFullFamily = data?.permissions?.can_view_family_health_data === true;
+        setCanUseFamilyUi(canViewFullFamily);
         if (!silent) setAuthChecked(true);
       } catch {
         if (!cancelled) router.replace('/');
@@ -461,7 +603,60 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setMobileMenuOpen(false), 0);
+    if (!authChecked) return;
+    const params = activeMember && activeMember !== ALL_MEMBERS ? { member: activeMember } : undefined;
+    Promise.allSettled([
+      api.get('/api/patients/me/reminders', params),
+      api.get('/api/patients/me/missing-data-requests', params),
+      api.get('/api/patients/me/follow-ups', params),
+    ])
+      .then((results) => {
+        const valueAt = (index: number): unknown => results[index].status === 'fulfilled' ? (results[index] as PromiseFulfilledResult<unknown>).value : [];
+        const rows = Array.isArray(valueAt(0)) ? valueAt(0) as Array<{ id: number | string; is_done?: boolean; status?: string; scheduled_date?: string | null; title?: string | null }> : [];
+        const missingRows = Array.isArray(valueAt(1)) ? valueAt(1) as Array<{ id: string; title?: string | null; status?: string; due_date?: string | null }> : [];
+        const followRows = Array.isArray(valueAt(2)) ? valueAt(2) as Array<{ id: number | string; item?: string | null; reason?: string | null; status?: string; suggested_date?: string | null; priority?: string | null }> : [];
+        const today = new Date().toISOString().slice(0, 10);
+        const dueReminders = rows.filter((item) => !item.is_done && item.status !== 'completed' && item.status !== 'deleted' && item.scheduled_date && item.scheduled_date <= today);
+        const pendingMissing = missingRows.filter((item) => item.status && !['resolved', 'canceled', 'deleted'].includes(item.status));
+        const activeFollowUps = followRows.filter((item) => item.status && !['done', 'completed', 'resolved', 'closed', 'deleted', 'canceled'].includes(item.status));
+        const centerHref = memberHref('/dashboard/reminders', activeMember);
+        const items: ReminderBellItem[] = [
+          ...dueReminders.map((item) => ({
+            id: `reminder-${item.id}`,
+            label: '提醒',
+            title: item.title || '待處理提醒',
+            meta: item.scheduled_date || '今天',
+            href: centerHref,
+          })),
+          ...pendingMissing.map((item) => ({
+            id: `missing-${item.id}`,
+            label: '補資料',
+            title: item.title || 'CMO 需要補充資料',
+            meta: item.due_date || item.status || '待回覆',
+            href: `${centerHref}${centerHref.includes('?') ? '&' : '?'}highlight=missing-${item.id}`,
+          })),
+          ...activeFollowUps.map((item) => ({
+            id: `followup-${item.id}`,
+            label: item.priority === 'high' ? '高優先追蹤' : 'CMO 追蹤',
+            title: item.item || item.reason || 'CMO 追蹤提醒',
+            meta: item.suggested_date || '待追蹤',
+            href: `${centerHref}${centerHref.includes('?') ? '&' : '?'}highlight=followup-${item.id}`,
+          })),
+        ].slice(0, 8);
+        setReminderBellItems(items);
+        setUnreadReminderCount(dueReminders.length + pendingMissing.length + activeFollowUps.length);
+      })
+      .catch(() => {
+        setUnreadReminderCount(0);
+        setReminderBellItems([]);
+      });
+  }, [authChecked, activeMember]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setMobileMenuOpen(false);
+      setReminderBellOpen(false);
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [pathname, searchKey]);
 
@@ -486,7 +681,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         minHeight: '100vh',
-        background: 'linear-gradient(135deg, #007bff 0%, #0056b3 100%)',
+        background: 'linear-gradient(135deg, #3e6b7e 0%, #33596a 100%)',
       }}>
         <div style={{ textAlign: 'center', color: '#fff' }}>
           <h1 style={{ fontSize: '32px', fontWeight: 800, letterSpacing: '1px', marginBottom: '6px' }}>
@@ -506,7 +701,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#f4f7f9' }}>
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#f2f5f7' }}>
 
       {/* ── Desktop Sidebar ─────────────────────────────────────────────────────── */}
       <aside className="app-sidebar" style={{
@@ -520,7 +715,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
             <div style={{
               width: '34px', height: '34px', borderRadius: '10px', flexShrink: 0,
-              background: 'linear-gradient(135deg, #007bff 0%, #0056b3 100%)',
+              background: 'linear-gradient(135deg, #3e6b7e 0%, #33596a 100%)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
             }}><HeartLogo size={18} /></div>
             <div>
@@ -532,7 +727,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             background: '#f8f9fa', borderRadius: '10px', padding: '10px 12px',
             display: 'flex', alignItems: 'center', gap: '10px',
           }}>
-            <span style={{ display: 'flex', color: '#475569' }}><Icon name={canUseFamilyUi ? 'family' : '👤'} size={20} /></span>
+            <span style={{ display: 'flex', color: '#56687a' }}><Icon name={canUseFamilyUi ? 'family' : '👤'} size={20} /></span>
             <div>
               <div style={{ fontSize: '12px', fontWeight: '700', color: '#333' }}>{canUseFamilyUi ? familyName : (displayName || members[0]?.name || '本人')}</div>
               <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>
@@ -540,26 +735,6 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
               </div>
             </div>
           </div>
-          <Link
-            href={navHref('/dashboard/reminders')}
-            style={{
-              marginTop: 10,
-              minHeight: 36,
-              borderRadius: 10,
-              background: '#fff',
-              border: '1px solid var(--gray-200)',
-              color: '#475569',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              fontSize: 12,
-              fontWeight: 800,
-              textDecoration: 'none',
-            }}
-          >
-            <Icon name="🔔" size={16} /> 提醒
-          </Link>
         </div>
 
         {/* Nav sections */}
@@ -618,7 +793,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             {members.length === 0 ? (
               <div style={{ padding: '4px 8px 8px' }}>
                 {membersError ? (
-                  <p style={{ fontSize: '12px', color: '#c2410c', marginBottom: '8px', paddingLeft: '6px' }}>
+                  <p style={{ fontSize: '12px', color: '#b06a10', marginBottom: '8px', paddingLeft: '6px' }}>
                     成員資料載入失敗
                   </p>
                 ) : (
@@ -643,7 +818,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                       display: 'flex', alignItems: 'center', padding: '8px 10px',
                       cursor: 'pointer', borderRadius: '10px',
                       background: !activeMember ? '#e7f1ff' : 'transparent',
-                      border: `1px solid ${!activeMember ? '#bfdbfe' : 'transparent'}`,
+                      border: `1px solid ${!activeMember ? '#cfe3e8' : 'transparent'}`,
                       marginBottom: '3px', transition: 'all 0.15s',
                     }}
                   >
@@ -732,6 +907,15 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
+      <ReminderBell
+        count={unreadReminderCount}
+        items={reminderBellItems}
+        href={navHref('/dashboard/reminders')}
+        open={reminderBellOpen}
+        onToggle={() => setReminderBellOpen((value) => !value)}
+        variant="desktop"
+      />
+
       {/* ── Mobile Header ────────────────────────────────────────────────────────── */}
       <header
         className="mobile-header"
@@ -748,7 +932,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <div style={{
               width: '28px', height: '28px', borderRadius: '8px', flexShrink: 0,
-              background: 'linear-gradient(135deg, #007bff 0%, #0056b3 100%)',
+              background: 'linear-gradient(135deg, #3e6b7e 0%, #33596a 100%)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
             }}><HeartLogo size={16} /></div>
             <div style={{ fontSize: '15px', fontWeight: '800', color: '#111', letterSpacing: '-0.3px' }}>
@@ -813,25 +997,14 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
           )}
         </div>}
 
-        <Link
+        <ReminderBell
+          count={unreadReminderCount}
+          items={reminderBellItems}
           href={navHref('/dashboard/reminders')}
-          aria-label="提醒"
-          style={{
-            flexShrink: 0,
-            width: 36,
-            height: 36,
-            borderRadius: 11,
-            background: '#f8fafc',
-            color: '#475569',
-            border: '1px solid var(--gray-200)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            WebkitTapHighlightColor: 'transparent',
-          }}
-        >
-          <Icon name="🔔" size={18} />
-        </Link>
+          open={reminderBellOpen}
+          onToggle={() => setReminderBellOpen((value) => !value)}
+          variant="mobile"
+        />
 
         <button
           type="button"
@@ -842,7 +1015,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             minHeight: '36px',
             padding: '7px 10px',
             borderRadius: '11px',
-            background: '#0f766e',
+            background: '#3e6b7e',
             color: '#fff',
             display: 'flex',
             alignItems: 'center',

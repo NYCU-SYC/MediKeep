@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
+import { useSync } from '@/lib/sync'
 
 type Section = 'allergies' | 'implants' | 'mri' | 'profile' | 'family'
 type Dict = Record<string, unknown>
@@ -63,6 +64,11 @@ function dangerMri(mri: MriSafety) {
 export default function RedzoneEditorPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
+  const sync = useSync()
+  const patientSyncVersion = useMemo(() => sync.events.reduce((latest, event) => {
+    if (event.patient_id !== id || !event.affected_views?.includes('cmo_red_zone')) return latest
+    return Math.max(latest, event.id)
+  }, 0), [id, sync.events])
   const [section, setSection] = useState<Section>('allergies')
   const [patientName, setPatientName] = useState('')
   const [allergies, setAllergies] = useState<Allergy[]>([])
@@ -108,7 +114,7 @@ export default function RedzoneEditorPage() {
     let alive = true
     fetchRedzone().then((data) => { if (alive) applyRedzone(data) })
     return () => { alive = false }
-  }, [applyRedzone, fetchRedzone])
+  }, [applyRedzone, fetchRedzone, patientSyncVersion])
 
   useEffect(() => {
     let alive = true
@@ -247,22 +253,22 @@ export default function RedzoneEditorPage() {
         <div>
           <button type="button" className="cmo-button" onClick={() => router.push(`/cmo/patients/${id}`)}>返回病患資料</button>
           <h1 className="cmo-title" style={{ marginTop: 12 }}>保命紅區</h1>
-          <div className="cmo-subtitle">{patientName || id} · 急診、住院、影像檢查前必讀資訊</div>
+          <div className="cmo-subtitle">{patientName || id} · 急診、住院、影像檢查前必讀資訊 · 新增或儲存後會立即同步到 User 紅區</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {flash && <span className="cmo-badge" style={{ background: '#ecfdf5', color: '#047857' }}>{flash}</span>}
+          {flash && <span className="cmo-badge" style={{ background: '#e7f4ec', color: '#2e8b57' }}>{flash}</span>}
           <button className="cmo-button" onClick={() => navigator.clipboard.writeText(handoff).then(() => notify('已複製紅區摘要'))}>複製摘要</button>
           <Link className="cmo-button primary" href={`/cmo/patients/${id}`}>回 Patient POV</Link>
         </div>
       </header>
 
       <section className="cmo-kpi-grid">
-        <Kpi label="高風險項目" value={highRisk} note="嚴重過敏、植入物、MRI 禁忌、透析" tone="#be123c" />
-        <Kpi label="過敏紀錄" value={allergies.length} note={`${allergies.filter((a) => ['drug', 'medication'].includes(a.category)).length} 筆藥物`} tone="#dc2626" />
-        <Kpi label="植入物" value={implants.length} note="含節律器、支架、Port-A 等" tone="#7c3aed" />
-        <Kpi label="MRI 風險" value={dangerMri(mri)} note="需檢查相容性或補問診" tone="#a16207" />
-        <Kpi label="腎功能" value={profile.is_dialysis ? 'HD/PD' : profile.egfr_value ?? '-'} note={profile.ckd_stage ? `CKD ${profile.ckd_stage}` : 'eGFR / CKD'} tone="#0f766e" />
-        <Kpi label="完整度" value={`${completeness}/6`} note="關鍵欄位補齊程度" tone="#2563eb" />
+        <Kpi label="高風險項目" value={highRisk} note="嚴重過敏、植入物、MRI 禁忌、透析" tone="#a03a30" />
+        <Kpi label="過敏紀錄" value={allergies.length} note={`${allergies.filter((a) => ['drug', 'medication'].includes(a.category)).length} 筆藥物`} tone="#c0453a" />
+        <Kpi label="植入物" value={implants.length} note="含節律器、支架、Port-A 等" tone="#7a5fc0" />
+        <Kpi label="MRI 風險" value={dangerMri(mri)} note="需檢查相容性或補問診" tone="#a97614" />
+        <Kpi label="腎功能" value={profile.is_dialysis ? 'HD/PD' : profile.egfr_value ?? '-'} note={profile.ckd_stage ? `CKD ${profile.ckd_stage}` : 'eGFR / CKD'} tone="#3e6b7e" />
+        <Kpi label="完整度" value={`${completeness}/6`} note="關鍵欄位補齊程度" tone="#3e6b7e" />
       </section>
 
       {templates.length > 0 && (
@@ -275,7 +281,7 @@ export default function RedzoneEditorPage() {
             {templates.map((t) => (
               <button key={t.key} type="button" className="cmo-button" onClick={() => applyTemplate(t)} title={`套用 ${t.label}`}>
                 + {t.label}
-                {t.tier ? <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700, color: t.tier === 1 ? '#be123c' : '#a16207' }}>T{t.tier}</span> : null}
+                {t.tier ? <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700, color: t.tier === 1 ? '#a03a30' : '#a97614' }}>T{t.tier}</span> : null}
               </button>
             ))}
           </div>
@@ -321,7 +327,7 @@ function Kpi({ label, value, note, tone }: { label: string; value: string | numb
 }
 function RiskLine({ ok, label, reverse }: { ok: boolean; label: string; reverse?: boolean }) {
   const good = reverse ? !ok : ok
-  return <div className="cmo-list-item cmo-row"><span>{label}</span><span className="cmo-badge" style={{ background: good ? '#ecfdf5' : '#fff1f2', color: good ? '#047857' : '#be123c' }}>{good ? '完成' : '需補齊'}</span></div>
+  return <div className="cmo-list-item cmo-row"><span>{label}</span><span className="cmo-badge" style={{ background: good ? '#e7f4ec' : '#faecea', color: good ? '#2e8b57' : '#a03a30' }}>{good ? '完成' : '需補齊'}</span></div>
 }
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label style={{ display: 'block' }}><div className="cmo-kpi-label" style={{ marginBottom: 6 }}>{label}</div>{children}</label>
@@ -368,7 +374,7 @@ function AllergySection({
               </div>
               <div className="cmo-subtitle">source: {a.source || 'cmo_entry'} · {a.onset_date || '未填日期'}{a.note ? ` · ${a.note}` : ''}</div>
             </div>
-            <span className="cmo-badge" style={{ background: isInactive ? '#f1f5f9' : '#fff1f2', color: isInactive ? '#64748b' : '#be123c' }}>
+            <span className="cmo-badge" style={{ background: isInactive ? '#eef2f5' : '#faecea', color: isInactive ? '#6b7c8c' : '#a03a30' }}>
               {isInactive ? 'inactive/resolved' : 'active'}
             </span>
           </div>

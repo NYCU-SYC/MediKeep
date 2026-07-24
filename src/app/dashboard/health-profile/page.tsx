@@ -102,14 +102,14 @@ const FEEDBACK_OPTIONS: Array<{ key: FeedbackKind; label: string; requestedActio
 ];
 
 const REQUEST_STATUS_META: Record<string, { label: string; help: string; bg: string; color: string; border: string }> = {
-  draft: { label: '回報草稿', help: '尚未送交醫療團隊。', bg: '#f8fafc', color: '#475569', border: '#e2e8f0' },
-  pending_review: { label: '已送交醫療團隊', help: 'CMO 會先審查，不會直接覆蓋正式病歷。', bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
-  needs_clarification: { label: '需要你補充', help: '醫療團隊需要更多資訊後才會繼續整理。', bg: '#fff7ed', color: '#c2410c', border: '#fed7aa' },
-  needs_secondary_review: { label: '醫療團隊二次確認中', help: '這筆內容還不會直接發布到正式摘要。', bg: '#fefce8', color: '#854d0e', border: '#fde68a' },
-  accepted: { label: '已確認', help: '醫療團隊已處理這次回報。', bg: '#ecfdf5', color: '#047857', border: '#a7f3d0' },
-  modified_and_accepted: { label: '已修正後確認', help: '醫療團隊已依最終內容整理。', bg: '#ecfdf5', color: '#047857', border: '#a7f3d0' },
-  rejected: { label: '未採用', help: '醫療團隊未採用這次回報。', bg: '#fff1f2', color: '#be123c', border: '#fecdd3' },
-  withdrawn: { label: '已撤回', help: '你已撤回這次回報。', bg: '#f8fafc', color: '#64748b', border: '#e2e8f0' },
+  draft: { label: '回報草稿', help: '尚未送交醫療團隊。', bg: '#f6f9fa', color: '#56687a', border: '#e3e9ee' },
+  pending_review: { label: '已送交醫療團隊', help: 'CMO 會先審查，不會直接覆蓋正式病歷。', bg: '#e7f3f5', color: '#33596a', border: '#cfe3e8' },
+  needs_clarification: { label: '需要你補充', help: '醫療團隊需要更多資訊後才會繼續整理。', bg: '#fdf1e0', color: '#b06a10', border: '#fed7aa' },
+  needs_secondary_review: { label: '醫療團隊二次確認中', help: '這筆內容還不會直接發布到正式摘要。', bg: '#fefce8', color: '#a97614', border: '#efdfae' },
+  accepted: { label: '已確認', help: '醫療團隊已處理這次回報。', bg: '#e7f4ec', color: '#2e8b57', border: '#bfe0cd' },
+  modified_and_accepted: { label: '已修正後確認', help: '醫療團隊已依最終內容整理。', bg: '#e7f4ec', color: '#2e8b57', border: '#bfe0cd' },
+  rejected: { label: '未採用', help: '醫療團隊未採用這次回報。', bg: '#faecea', color: '#a03a30', border: '#fecdd3' },
+  withdrawn: { label: '已撤回', help: '你已撤回這次回報。', bg: '#f6f9fa', color: '#6b7c8c', border: '#e3e9ee' },
 };
 
 function requestStatusMeta(req?: PatientChangeRequest) {
@@ -140,9 +140,9 @@ const CATEGORIES: Record<CategoryKey, CategoryDef> = {
     key: 'treating',
     label: '治療中',
     icon: '🔴',
-    dot: '#dc2626',
-    border: '#dc2626',
-    badgeBg: '#fee2e2',
+    dot: '#c0453a',
+    border: '#c0453a',
+    badgeBg: '#faecea',
     badgeFg: '#b91c1c',
     emptyText: '目前沒有需治療的疾病',
   },
@@ -162,18 +162,18 @@ const CATEGORIES: Record<CategoryKey, CategoryDef> = {
     icon: '🟡',
     dot: '#eab308',
     border: '#eab308',
-    badgeBg: '#fef9c3',
-    badgeFg: '#a16207',
+    badgeBg: '#fdf6e3',
+    badgeFg: '#a97614',
     emptyText: '醫師將為您安排定期檢查',
   },
   resolved: {
     key: 'resolved',
     label: '已痊癒',
     icon: '⚪',
-    dot: '#94a3b8',
-    border: '#cbd5e1',
-    badgeBg: '#e2e8f0',
-    badgeFg: '#475569',
+    dot: '#93a3af',
+    border: '#c8d4dc',
+    badgeBg: '#e3e9ee',
+    badgeFg: '#56687a',
     emptyText: '目前沒有已痊癒的紀錄',
   },
 };
@@ -241,9 +241,9 @@ function formatRelative(iso: string | null | undefined): string {
 
 // Friendly tier label and dot color (NEVER show raw "T1/T2/T3" to patient)
 function tierFriendly(tier: number): { label: string; dot: string } | null {
-  if (tier === 1) return { label: '需優先關注', dot: '#dc2626' };
+  if (tier === 1) return { label: '需優先關注', dot: '#c0453a' };
   if (tier === 2) return { label: '持續追蹤', dot: '#b7791f' };
-  if (tier >= 3) return { label: '一般紀錄', dot: '#94a3b8' };
+  if (tier >= 3) return { label: '一般紀錄', dot: '#93a3af' };
   return null;
 }
 
@@ -370,7 +370,7 @@ function ProblemCard({
         padding: '18px 20px',
         boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
         borderLeft: `4px solid ${cat.border}`,
-        border: `1px solid #f1f5f9`,
+        border: `1px solid #eef2f5`,
         borderLeftWidth: '4px',
         borderLeftColor: cat.border,
         opacity: isResolved ? 0.78 : 1,
@@ -378,7 +378,7 @@ function ProblemCard({
     >
       {/* Title row */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' }}>
-        <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a', margin: 0, lineHeight: 1.3 }}>
+        <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#22313f', margin: 0, lineHeight: 1.3 }}>
           {problemTitleForPatient(p)}
         </h3>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -386,8 +386,8 @@ function ProblemCard({
             <span style={{
               display: 'inline-flex', alignItems: 'center', gap: '5px',
               fontSize: '11px', fontWeight: 600, padding: '2px 9px',
-              borderRadius: '20px', background: '#f8fafc', color: '#475569',
-              border: '1px solid #e2e8f0',
+              borderRadius: '20px', background: '#f6f9fa', color: '#56687a',
+              border: '1px solid #e3e9ee',
             }}>
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: tierInfo.dot, flexShrink: 0 }} />
               {tierInfo.label}
@@ -399,12 +399,12 @@ function ProblemCard({
             </span>
           )}
           {pendingRequest && (
-            <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', background: pendingMeta?.bg ?? '#fef3c7', color: pendingMeta?.color ?? '#92400e', border: `1px solid ${pendingMeta?.border ?? '#fde68a'}` }}>
+            <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', background: pendingMeta?.bg ?? '#fdf6e3', color: pendingMeta?.color ?? '#92400e', border: `1px solid ${pendingMeta?.border ?? '#efdfae'}` }}>
               {pendingMeta?.label ?? '待醫療團隊確認'}
             </span>
           )}
           {p.is_suspected && (
-            <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', background: '#fef3c7', color: '#b45309' }}>
+            <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', background: '#fdf6e3', color: '#a97614' }}>
               疑似診斷
             </span>
           )}
@@ -412,13 +412,13 @@ function ProblemCard({
       </div>
 
       {/* Info rows */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px', color: '#334155' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px', color: '#45596a' }}>
         {meds.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
             <span style={{ flexShrink: 0, opacity: 0.7 }}>💊</span>
             <span style={{ lineHeight: 1.5 }}>
               {meds.slice(0, 4).map(m => m.drug_name_layman || m.drug_name).join('、')}
-              {meds.length > 4 && <span style={{ color: '#94a3b8' }}> 等 {meds.length} 種</span>}
+              {meds.length > 4 && <span style={{ color: '#93a3af' }}> 等 {meds.length} 種</span>}
             </span>
           </div>
         )}
@@ -426,13 +426,13 @@ function ProblemCard({
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
             <span style={{ flexShrink: 0, opacity: 0.7 }}>📅</span>
             <span>
-              下次回診：<strong style={{ color: '#0f172a' }}>{formatDate(nextVisit.remind_at || nextVisit.due_date)}</strong>
-              {nextVisit.title && <span style={{ color: '#94a3b8' }}> · {nextVisit.title}</span>}
+              下次回診：<strong style={{ color: '#22313f' }}>{formatDate(nextVisit.remind_at || nextVisit.due_date)}</strong>
+              {nextVisit.title && <span style={{ color: '#93a3af' }}> · {nextVisit.title}</span>}
             </span>
           </div>
         )}
         {isResolved && p.resolution_date && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#6b7c8c' }}>
             <span style={{ opacity: 0.7 }}>✓</span>
             <span>痊癒於 {formatFullDate(p.resolution_date)}</span>
           </div>
@@ -442,10 +442,10 @@ function ProblemCard({
       {/* Two-layer overlay: your own tracking mark vs the medical team's record */}
       {p.patient_tracking_state && (
         <div style={{ marginTop: '12px', padding: '8px 10px', background: '#ecfeff', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          <span style={{ fontSize: '12px', fontWeight: 700, color: '#0e7490' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700, color: '#3e6b7e' }}>
             你目前標記：{TRACKING_LABELS[p.patient_tracking_state] ?? p.patient_tracking_state}
           </span>
-          <span style={{ fontSize: '11px', color: '#64748b' }}>
+          <span style={{ fontSize: '11px', color: '#6b7c8c' }}>
             醫療整理狀態：{statusLabel(p.status)}
             {p.patient_tracking_state !== 'following' && p.patient_tracking_state !== 'actively_treating' && ' · 醫療團隊尚未整理這次更新'}
           </span>
@@ -455,7 +455,7 @@ function ProblemCard({
       {pendingRequest && pendingMeta && (
         <div style={{ marginTop: 12, padding: '10px 12px', background: pendingMeta.bg, border: `1px solid ${pendingMeta.border}`, borderRadius: 10, color: pendingMeta.color }}>
           <div style={{ fontSize: 12, fontWeight: 850 }}>{pendingMeta.label}</div>
-          <div style={{ fontSize: 12, lineHeight: 1.6, marginTop: 3, color: '#475569' }}>
+          <div style={{ fontSize: 12, lineHeight: 1.6, marginTop: 3, color: '#56687a' }}>
             {pendingRequest.patient_facing_note || pendingRequest.reviewer_note || pendingMeta.help}
           </div>
           {pendingRequest.status === 'needs_clarification' && (
@@ -463,7 +463,7 @@ function ProblemCard({
               onClick={() => onOpenRequest(pendingRequest)}
               style={{
                 marginTop: 8, padding: '6px 10px', fontSize: 12, fontWeight: 800,
-                background: '#fff', color: '#c2410c', border: '1px solid #fed7aa',
+                background: '#fff', color: '#b06a10', border: '1px solid #fed7aa',
                 borderRadius: 8, cursor: 'pointer',
               }}
             >
@@ -476,7 +476,7 @@ function ProblemCard({
               style={{
                 marginTop: 8, marginLeft: pendingRequest.status === 'needs_clarification' ? 8 : 0,
                 padding: '6px 10px', fontSize: 12, fontWeight: 800,
-                background: '#fff', color: '#be123c', border: '1px solid #fecdd3',
+                background: '#fff', color: '#a03a30', border: '1px solid #fecdd3',
                 borderRadius: 8, cursor: 'pointer',
               }}
             >
@@ -493,7 +493,7 @@ function ProblemCard({
             onClick={onCopy}
             style={{
               padding: '6px 12px', fontSize: '12px', fontWeight: 600,
-              background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0',
+              background: '#eef2f5', color: '#56687a', border: '1px solid #e3e9ee',
               borderRadius: '8px', cursor: 'pointer',
             }}
           >
@@ -504,7 +504,7 @@ function ProblemCard({
               onClick={() => setShowFeedback((open) => !open)}
               style={{
                 padding: '6px 12px', fontSize: '12px', fontWeight: 600,
-                background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa',
+                background: '#fdf1e0', color: '#b06a10', border: '1px solid #fed7aa',
                 borderRadius: '8px', cursor: 'pointer',
               }}
             >
@@ -516,7 +516,7 @@ function ProblemCard({
               title="已有待處理回報，請查看目前狀態"
               style={{
                 padding: '6px 12px', fontSize: '12px', fontWeight: 600,
-                background: '#f8fafc', color: '#475569', border: '1px solid #e2e8f0',
+                background: '#f6f9fa', color: '#56687a', border: '1px solid #e3e9ee',
                 borderRadius: '8px', cursor: 'pointer',
               }}
             >
@@ -528,7 +528,7 @@ function ProblemCard({
               onClick={() => { setReminderDate(dateStrFromToday(30)); setShowDatePicker(true); }}
               style={{
                 padding: '6px 12px', fontSize: '12px', fontWeight: 600,
-                background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0',
+                background: '#e7f4ec', color: '#2e8b57', border: '1px solid #bfe0cd',
                 borderRadius: '8px', cursor: 'pointer',
               }}
             >
@@ -542,8 +542,8 @@ function ProblemCard({
                 autoFocus
                 onChange={(e) => setReminderDate(e.target.value)}
                 style={{
-                  padding: '5px 10px', fontSize: '12px', fontWeight: 600, color: '#047857',
-                  background: '#fff', border: '1px solid #a7f3d0', borderRadius: '8px', cursor: 'pointer',
+                  padding: '5px 10px', fontSize: '12px', fontWeight: 600, color: '#2e8b57',
+                  background: '#fff', border: '1px solid #bfe0cd', borderRadius: '8px', cursor: 'pointer',
                 }}
               />
               <button
@@ -555,7 +555,7 @@ function ProblemCard({
                 disabled={!reminderDate}
                 style={{
                   padding: '6px 12px', fontSize: '12px', fontWeight: 700, color: '#fff',
-                  background: reminderDate ? '#047857' : '#a7f3d0', border: 'none',
+                  background: reminderDate ? '#2e8b57' : '#bfe0cd', border: 'none',
                   borderRadius: '8px', cursor: reminderDate ? 'pointer' : 'not-allowed',
                 }}
               >
@@ -564,8 +564,8 @@ function ProblemCard({
               <button
                 onClick={() => setShowDatePicker(false)}
                 style={{
-                  padding: '6px 10px', fontSize: '12px', fontWeight: 600, color: '#64748b',
-                  background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer',
+                  padding: '6px 10px', fontSize: '12px', fontWeight: 600, color: '#6b7c8c',
+                  background: '#fff', border: '1px solid #e3e9ee', borderRadius: '8px', cursor: 'pointer',
                 }}
               >
                 取消
@@ -579,7 +579,7 @@ function ProblemCard({
         <summary>詳細資料與進階操作</summary>
         <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
           {shouldShowRawProblemDetails(p) && (
-            <div style={{ padding: '10px 12px', borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 12, color: '#475569', lineHeight: 1.6 }}>
+            <div style={{ padding: '10px 12px', borderRadius: 10, background: '#f6f9fa', border: '1px solid #e3e9ee', fontSize: 12, color: '#56687a', lineHeight: 1.6 }}>
               {p.display_layman && p.display_name !== p.display_layman && <div>原始醫療名稱：{p.display_name}</div>}
               {p.icd10_code && <div>ICD：{p.icd10_code}</div>}
               <ProblemEvidenceLine doc={p.evidence_document ?? null} fallbackId={p.source_document_id ?? null} />
@@ -606,7 +606,7 @@ function ProblemCard({
                   title="更新你自己的追蹤偏好（立即生效，不需等醫療團隊）"
                   style={{
                     padding: '6px 10px', fontSize: '12px', fontWeight: 600,
-                    background: '#ecfeff', color: '#0e7490', border: '1px solid #a5f3fc',
+                    background: '#ecfeff', color: '#3e6b7e', border: '1px solid #a5f3fc',
                     borderRadius: '8px', cursor: 'pointer',
                   }}
                 >
@@ -639,10 +639,10 @@ function ProblemCard({
       </details>
 
       {showFeedback && !pendingRequest && (
-        <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: '1px solid #fed7aa', background: '#fff7ed' }}>
-          <div style={{ fontSize: 12, fontWeight: 850, color: '#9a3412', marginBottom: 8 }}>送交醫療團隊確認</div>
+        <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: '1px solid #fed7aa', background: '#fdf1e0' }}>
+          <div style={{ fontSize: 12, fontWeight: 850, color: '#b06a10', marginBottom: 8 }}>送交醫療團隊確認</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, fontWeight: 800, color: '#9a3412' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, fontWeight: 800, color: '#b06a10' }}>
               回報類型
               <select
                 value={feedbackKind}
@@ -652,7 +652,7 @@ function ProblemCard({
                 {FEEDBACK_OPTIONS.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
               </select>
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, fontWeight: 800, color: '#9a3412' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, fontWeight: 800, color: '#b06a10' }}>
               需要確認的內容
               <textarea
                 value={feedbackNote}
@@ -664,14 +664,14 @@ function ProblemCard({
             </label>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
-            <div style={{ fontSize: 11, color: '#9a3412', lineHeight: 1.5 }}>送出後會進入 CMO 工作佇列；正式摘要不會在 QA 前被直接覆蓋。</div>
+            <div style={{ fontSize: 11, color: '#b06a10', lineHeight: 1.5 }}>送出後會進入 CMO 工作佇列；正式摘要不會在 QA 前被直接覆蓋。</div>
             <button
               onClick={submitFeedback}
               disabled={!feedbackNote.trim() || submittingFeedback}
               title={!feedbackNote.trim() ? '請先填寫需要確認的內容' : '送交醫療團隊確認'}
               style={{
                 padding: '8px 12px', fontSize: 12, fontWeight: 850,
-                background: feedbackNote.trim() && !submittingFeedback ? '#c2410c' : '#fed7aa',
+                background: feedbackNote.trim() && !submittingFeedback ? '#b06a10' : '#fed7aa',
                 color: '#fff', border: 'none', borderRadius: 8,
                 cursor: feedbackNote.trim() && !submittingFeedback ? 'pointer' : 'not-allowed',
               }}
@@ -686,8 +686,8 @@ function ProblemCard({
       {(p.verified_by_name || p.created_at) && (
         <div style={{
           marginTop: '12px', paddingTop: '10px',
-          borderTop: '1px dashed #e2e8f0',
-          fontSize: '11px', color: '#94a3b8',
+          borderTop: '1px dashed #e3e9ee',
+          fontSize: '11px', color: '#93a3af',
         }}>
           <div style={{ fontStyle: 'italic' }}>
             {p.verified_by_name ? `✓ 由 ${p.verified_by_name} 醫師確認` : '○ 待醫師確認'}
@@ -707,14 +707,14 @@ function ProblemCard({
 function ProblemEvidenceLine({ doc, fallbackId }: { doc: EvidenceDocument | null; fallbackId: string | null }) {
   if (!doc) {
     return (
-      <div style={{ marginTop: '6px', color: '#94a3b8', lineHeight: 1.45 }}>
+      <div style={{ marginTop: '6px', color: '#93a3af', lineHeight: 1.45 }}>
         原始文件：{fallbackId ? `已記錄 ID：${fallbackId}，但尚未建立可檢視連結` : '尚未連結原始文件'}
       </div>
     );
   }
   if (!doc.available || !doc.download_url) {
     return (
-      <div style={{ marginTop: '6px', color: '#94a3b8', lineHeight: 1.45 }}>
+      <div style={{ marginTop: '6px', color: '#93a3af', lineHeight: 1.45 }}>
         原始文件：{evidenceTitle(doc)} · {evidenceUnavailableText(doc)}
       </div>
     );
@@ -722,10 +722,10 @@ function ProblemEvidenceLine({ doc, fallbackId }: { doc: EvidenceDocument | null
   return (
     <div style={{ marginTop: '6px', lineHeight: 1.45 }}>
       原始文件：
-      <a href={doc.download_url} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontWeight: 700, textDecoration: 'none', wordBreak: 'break-word' }}>
+      <a href={doc.download_url} target="_blank" rel="noreferrer" style={{ color: '#3e6b7e', fontWeight: 700, textDecoration: 'none', wordBreak: 'break-word' }}>
         查看 {evidenceTitle(doc)}
       </a>
-      {evidenceMeta(doc) && <span style={{ color: '#94a3b8' }}> · {evidenceMeta(doc)}</span>}
+      {evidenceMeta(doc) && <span style={{ color: '#93a3af' }}> · {evidenceMeta(doc)}</span>}
     </div>
   );
 }
@@ -765,10 +765,10 @@ function CategorySection({
     <section style={{ marginBottom: '28px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
         <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: cat.dot }} />
-        <h2 style={{ fontSize: '12px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '1px', margin: 0 }}>
+        <h2 style={{ fontSize: '12px', fontWeight: 700, color: '#56687a', textTransform: 'uppercase', letterSpacing: '1px', margin: 0 }}>
           {cat.label}
         </h2>
-        <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>
+        <span style={{ fontSize: '12px', color: '#93a3af', fontWeight: 600 }}>
           {problems.length > 0 ? `· ${problems.length}` : ''}
         </span>
       </div>
@@ -776,7 +776,7 @@ function CategorySection({
       {problems.length === 0 ? (
         <div style={{
           background: '#fafbfc', borderRadius: '12px', padding: '20px',
-          border: '1px dashed #e2e8f0', fontSize: '13px', color: '#94a3b8', textAlign: 'center',
+          border: '1px dashed #e3e9ee', fontSize: '13px', color: '#93a3af', textAlign: 'center',
         }}>
           {cat.emptyText}
         </div>
@@ -843,15 +843,15 @@ function MetricsRow({ records }: { records: RecordOut[] }) {
       {items.map(it => (
         <div key={it.key} style={{
           background: '#fff', borderRadius: '12px', padding: '12px 14px',
-          boxShadow: '0 1px 2px rgba(0,0,0,0.04)', border: '1px solid #f1f5f9',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.04)', border: '1px solid #eef2f5',
           display: 'flex', alignItems: 'center', gap: '10px',
         }}>
           <span style={{ fontSize: '18px' }}>{it.icon}</span>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 600, letterSpacing: '0.3px' }}>{it.label}</div>
-            <div style={{ fontSize: '15px', fontWeight: 800, color: it.value ? '#0f172a' : '#cbd5e1', lineHeight: 1.2 }}>
+            <div style={{ fontSize: '10px', color: '#93a3af', fontWeight: 600, letterSpacing: '0.3px' }}>{it.label}</div>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: it.value ? '#22313f' : '#c8d4dc', lineHeight: 1.2 }}>
               {it.value || '—'}
-              {it.value && <span style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 500, marginLeft: '3px' }}>{it.unit}</span>}
+              {it.value && <span style={{ fontSize: '10px', color: '#93a3af', fontWeight: 500, marginLeft: '3px' }}>{it.unit}</span>}
             </div>
           </div>
         </div>
@@ -864,10 +864,10 @@ function HealthProfileLoadingSkeleton() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} aria-busy="true">
       {[0, 1, 2].map((item) => (
-        <div key={item} style={{ background: '#fff', border: '1px solid #f1f5f9', borderRadius: 14, padding: '18px 20px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-          <div style={{ width: '42%', height: 16, borderRadius: 999, background: '#e2e8f0', marginBottom: 12 }} />
-          <div style={{ width: '72%', height: 11, borderRadius: 999, background: '#f1f5f9', marginBottom: 8 }} />
-          <div style={{ width: '55%', height: 11, borderRadius: 999, background: '#f1f5f9' }} />
+        <div key={item} style={{ background: '#fff', border: '1px solid #eef2f5', borderRadius: 14, padding: '18px 20px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+          <div style={{ width: '42%', height: 16, borderRadius: 999, background: '#e3e9ee', marginBottom: 12 }} />
+          <div style={{ width: '72%', height: 11, borderRadius: 999, background: '#eef2f5', marginBottom: 8 }} />
+          <div style={{ width: '55%', height: 11, borderRadius: 999, background: '#eef2f5' }} />
         </div>
       ))}
     </div>
@@ -1199,11 +1199,11 @@ export default function HealthProfilePage() {
         {/* Compact hero */}
         <div
           style={{
-            background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+            background: 'linear-gradient(135deg, #e7f4ec 0%, #d1fae5 100%)',
             borderRadius: '16px',
             padding: '18px 22px',
             marginBottom: '20px',
-            border: '1px solid #a7f3d0',
+            border: '1px solid #bfe0cd',
             display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap',
           }}
         >
@@ -1220,7 +1220,7 @@ export default function HealthProfilePage() {
             <h1 style={{ fontSize: '18px', fontWeight: 800, color: '#064e3b', margin: 0, lineHeight: 1.2 }}>
               {scopeLabel}的醫師健康摘要
             </h1>
-            <p style={{ fontSize: '12px', color: '#047857', margin: '3px 0 0' }}>
+            <p style={{ fontSize: '12px', color: '#2e8b57', margin: '3px 0 0' }}>
               用藥、提醒、生命徵象與 Problem 摘要皆依目前成員顯示；醫療團隊發布後會同步到對應成員的健康摘要
             </p>
           </div>
@@ -1228,27 +1228,27 @@ export default function HealthProfilePage() {
             <div style={{ display: 'flex', gap: '14px', flexShrink: 0, flexWrap: 'wrap' }}>
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: '18px', fontWeight: 800, color: '#064e3b', lineHeight: 1 }}>{grouped.treating.length}</div>
-                <div style={{ fontSize: '10px', color: '#047857', fontWeight: 600, marginTop: '2px' }}>治療中</div>
+                <div style={{ fontSize: '10px', color: '#2e8b57', fontWeight: 600, marginTop: '2px' }}>治療中</div>
               </div>
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: '18px', fontWeight: 800, color: '#064e3b', lineHeight: 1 }}>{grouped.following.length}</div>
-                <div style={{ fontSize: '10px', color: '#047857', fontWeight: 600, marginTop: '2px' }}>追蹤中</div>
+                <div style={{ fontSize: '10px', color: '#2e8b57', fontWeight: 600, marginTop: '2px' }}>追蹤中</div>
               </div>
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: '18px', fontWeight: 800, color: '#064e3b', lineHeight: 1 }}>{grouped.resolved.length}</div>
-                <div style={{ fontSize: '10px', color: '#047857', fontWeight: 600, marginTop: '2px' }}>已痊癒</div>
+                <div style={{ fontSize: '10px', color: '#2e8b57', fontWeight: 600, marginTop: '2px' }}>已痊癒</div>
               </div>
             </div>
           )}
         </div>
 
         {loadError && (
-          <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 12, padding: '12px 14px', color: '#9a3412', fontSize: 13, lineHeight: 1.6, marginBottom: 14 }}>
+          <div style={{ background: '#fdf1e0', border: '1px solid #fed7aa', borderRadius: 12, padding: '12px 14px', color: '#b06a10', fontSize: 13, lineHeight: 1.6, marginBottom: 14 }}>
             <strong>部分資料暫時無法載入。</strong>
             <div style={{ marginTop: 4 }}>{loadError}</div>
             <button
               onClick={() => setReloadToken((value) => value + 1)}
-              style={{ marginTop: 8, padding: '7px 10px', border: '1px solid #fed7aa', borderRadius: 8, background: '#fff', color: '#9a3412', fontWeight: 800, cursor: 'pointer' }}
+              style={{ marginTop: 8, padding: '7px 10px', border: '1px solid #fed7aa', borderRadius: 8, background: '#fff', color: '#b06a10', fontWeight: 800, cursor: 'pointer' }}
             >
               重新載入
             </button>
@@ -1268,14 +1268,14 @@ export default function HealthProfilePage() {
         )}
 
         {!loading && problems.length === 0 && loadError && (
-          <div style={{ background: '#fff1f2', borderRadius: '16px', padding: '36px 28px', textAlign: 'center', border: '1px solid #fecdd3', marginTop: 14 }}>
-            <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#991b1b', marginBottom: 8 }}>健康摘要暫時無法載入</h3>
+          <div style={{ background: '#faecea', borderRadius: '16px', padding: '36px 28px', textAlign: 'center', border: '1px solid #fecdd3', marginTop: 14 }}>
+            <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#8f342b', marginBottom: 8 }}>健康摘要暫時無法載入</h3>
             <p style={{ fontSize: 13, color: '#7f1d1d', lineHeight: 1.7, maxWidth: 460, margin: '0 auto 18px' }}>
               這不是代表沒有病歷資料。請重新載入；如果仍失敗，醫療團隊端需要確認 API 或權限狀態。
             </p>
             <button
               onClick={() => setReloadToken((value) => value + 1)}
-              style={{ padding: '10px 18px', background: '#fff', color: '#be123c', border: '1px solid #fecdd3', borderRadius: 10, fontWeight: 800, cursor: 'pointer' }}
+              style={{ padding: '10px 18px', background: '#fff', color: '#a03a30', border: '1px solid #fecdd3', borderRadius: 10, fontWeight: 800, cursor: 'pointer' }}
             >
               重新載入
             </button>
@@ -1286,13 +1286,13 @@ export default function HealthProfilePage() {
         {!loading && problems.length === 0 && !loadError && (
           <div style={{
             background: '#fff', borderRadius: '16px', padding: '52px 32px',
-            textAlign: 'center', border: '1px dashed #cbd5e1',
+            textAlign: 'center', border: '1px dashed #c8d4dc',
           }}>
             <div style={{ fontSize: '48px', marginBottom: '14px' }}>📋</div>
-            <h3 style={{ fontSize: '17px', fontWeight: 700, color: '#0f172a', marginBottom: '8px' }}>
+            <h3 style={{ fontSize: '17px', fontWeight: 700, color: '#22313f', marginBottom: '8px' }}>
               {scopeLabel}還沒有醫師確認的資料
             </h3>
-            <p style={{ fontSize: '13px', color: '#64748b', lineHeight: 1.7, maxWidth: '380px', margin: '0 auto 22px' }}>
+            <p style={{ fontSize: '13px', color: '#6b7c8c', lineHeight: 1.7, maxWidth: '380px', margin: '0 auto 22px' }}>
               當您上傳健康資料後，醫療團隊會審閱並整理出您的健康狀況摘要
             </p>
             <button
@@ -1312,7 +1312,7 @@ export default function HealthProfilePage() {
                 marginLeft: '10px',
                 padding: '10px 18px',
                 background: '#fff',
-                color: '#059669', border: '1px solid #a7f3d0', borderRadius: '10px',
+                color: '#059669', border: '1px solid #bfe0cd', borderRadius: '10px',
                 fontSize: '13px', fontWeight: 700, cursor: 'pointer',
               }}
             >
@@ -1338,8 +1338,8 @@ export default function HealthProfilePage() {
               onClick={copyAll}
               style={{
                 padding: '12px 22px',
-                background: '#fff', color: '#475569',
-                border: '1.5px solid #e2e8f0', borderRadius: '12px',
+                background: '#fff', color: '#56687a',
+                border: '1.5px solid #e3e9ee', borderRadius: '12px',
                 fontSize: '14px', fontWeight: 700, cursor: 'pointer',
                 display: 'inline-flex', alignItems: 'center', gap: '8px',
                 boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
@@ -1349,8 +1349,8 @@ export default function HealthProfilePage() {
                 (e.currentTarget as HTMLButtonElement).style.color = '#059669';
               }}
               onMouseLeave={e => {
-                (e.currentTarget as HTMLButtonElement).style.borderColor = '#e2e8f0';
-                (e.currentTarget as HTMLButtonElement).style.color = '#475569';
+                (e.currentTarget as HTMLButtonElement).style.borderColor = '#e3e9ee';
+                (e.currentTarget as HTMLButtonElement).style.color = '#56687a';
               }}
             >
               📋 複製完整健康摘要
@@ -1361,11 +1361,11 @@ export default function HealthProfilePage() {
         {/* About footer */}
         {!loading && problems.length > 0 && (
           <div style={{
-            background: '#f8fafc', borderRadius: '12px', padding: '14px 18px',
-            fontSize: '12px', color: '#64748b', lineHeight: 1.7,
-            border: '1px solid #e2e8f0', marginBottom: '20px',
+            background: '#f6f9fa', borderRadius: '12px', padding: '14px 18px',
+            fontSize: '12px', color: '#6b7c8c', lineHeight: 1.7,
+            border: '1px solid #e3e9ee', marginBottom: '20px',
           }}>
-            <div style={{ fontWeight: 700, color: '#475569', marginBottom: '4px' }}>📌 關於本頁資料</div>
+            <div style={{ fontWeight: 700, color: '#56687a', marginBottom: '4px' }}>📌 關於本頁資料</div>
             這些健康摘要由您的醫師審閱您的紀錄與檢驗結果後整理而成。如有疑問請與您的醫療團隊聯繫。
           </div>
         )}
@@ -1374,7 +1374,7 @@ export default function HealthProfilePage() {
         {copyMsg && (
           <div style={{
             position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
-            background: '#0f172a', color: '#fff', padding: '10px 18px',
+            background: '#22313f', color: '#fff', padding: '10px 18px',
             borderRadius: '10px', fontSize: '13px', fontWeight: 600,
             boxShadow: '0 8px 24px rgba(0,0,0,0.2)', zIndex: 100,
           }}>

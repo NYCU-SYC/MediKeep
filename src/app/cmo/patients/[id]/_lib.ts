@@ -129,11 +129,7 @@ export function defaultRecommendationForm(): RecommendationForm {
     health_summary: '',
     recommendation: '',
     next_step: '',
-    summary_condition: '',
-    summary_exam: '',
-    summary_followup: '',
-    summary_values: '',
-    summary_advice: '',
+    attention_cells: { condition: '', check: '', followup: '', value: '', advice: '' },
     follow_up_date: '',
     source_refs: [],
   }
@@ -147,11 +143,7 @@ export function recommendationFormFromRow(row: CmoRecommendation | null): Recomm
     health_summary: row.health_summary || '',
     recommendation: row.recommendation || '',
     next_step: row.next_step || '',
-    summary_condition: row.summary_condition || row.attention_summary?.condition || '',
-    summary_exam: row.summary_exam || row.attention_summary?.exam || '',
-    summary_followup: row.summary_followup || row.attention_summary?.followup || '',
-    summary_values: row.summary_values || row.attention_summary?.values || '',
-    summary_advice: row.summary_advice || row.attention_summary?.advice || '',
+    attention_cells: row.attention_cells || { condition: '', check: '', followup: '', value: '', advice: '' },
     follow_up_date: row.follow_up_date || '',
     source_refs: row.source_refs || [],
   }
@@ -186,7 +178,8 @@ export function recommendationSourceFromItem(item: PriorityReviewItem): Recommen
 }
 
 export function recommendationChecks(form: RecommendationForm) {
-  const text = [form.title, form.health_summary, form.recommendation, form.next_step].join('\n')
+  const attentionText = Object.values(form.attention_cells || {}).join('\n')
+  const text = [form.title, form.health_summary, form.recommendation, form.next_step, attentionText].join('\n')
   const lower = text.toLowerCase()
   const noInternalNote = !INTERNAL_NOTE_MARKERS.some((marker) => lower.includes(marker.toLowerCase()))
   const noUnconfirmedSources = form.source_refs.every((ref) => {
@@ -202,6 +195,7 @@ export function recommendationChecks(form: RecommendationForm) {
     has_follow_up_or_missing_data: Boolean(form.follow_up_date.trim() || /補資料|補充|上傳|回覆/.test(form.next_step)),
     no_internal_note: noInternalNote,
     no_unconfirmed_sources: noUnconfirmedSources,
+    has_source_refs_or_reason: form.source_refs.length > 0 || Boolean((form.no_source_reason || '').trim()),
     medical_safety_copy: !/保證|一定會|診斷為|絕對/.test(text),
   }
 }

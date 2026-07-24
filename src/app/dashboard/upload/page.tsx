@@ -32,6 +32,26 @@ const DOC_TYPES = [
   { value: 'other',        label: '📄 其他文件' },
 ];
 
+const COMMON_HOSPITALS = ['台大醫院', '臺北榮總', '林口長庚', '馬偕醫院', '北醫附醫', '亞東醫院', '成大醫院', '中國醫附醫', '高醫附醫', '花蓮慈濟'];
+
+// Guess the document type + date from the file name so the uploader doesn't have
+// to set them by hand. Pure heuristic — the user can still override both.
+function inferDocMetaFromFilename(name: string): { docType?: string; docDate?: string } {
+  const lower = name.toLowerCase();
+  let docType: string | undefined;
+  if (/健保|快易通|nhi/.test(lower)) docType = 'nhia_card';
+  else if (/處方|藥|prescription|\brx\b/.test(lower)) docType = 'prescription';
+  else if (/出院|住院|discharge/.test(lower)) docType = 'discharge';
+  else if (/\.(jpe?g|png|dcm|tiff?|bmp)$/.test(lower) || /影像|超音波|x-?ray|\bct\b|\bmri\b|echo|ultrasound/.test(lower)) docType = 'image';
+  else if (/檢驗|檢查|報告|抽血|生化|lab|blood|hba1c|cbc|urine/.test(lower)) docType = 'lab_report';
+
+  let docDate: string | undefined;
+  const match = name.match(/(20\d{2})[-_./]?(0[1-9]|1[0-2])[-_./]?(0[1-9]|[12]\d|3[01])/);
+  if (match) docDate = `${match[1]}-${match[2]}-${match[3]}`;
+
+  return { docType, docDate };
+}
+
 const UPLOAD_FLOW_STEPS = [
   { title: '1. 已收到', body: '檔案進入文件庫，狀態會先顯示為「已收到」。' },
   { title: '2. 整理中', body: '系統擷取（OCR）讀取文字與醫療欄位，結果仍是草稿。' },
@@ -76,12 +96,12 @@ function UploadStatusTimeline({ status }: { status?: string | null }) {
         const done = i < active;
         const isActive = i === active && active < DOC_FLOW.length;
         const err = error && isActive;
-        const dotColor = err ? 'var(--hk-red)' : done ? 'var(--hk-green)' : isActive ? 'var(--hk-amber)' : '#cbd5e1';
+        const dotColor = err ? 'var(--hk-red)' : done ? 'var(--hk-green)' : isActive ? 'var(--hk-amber)' : '#c8d4dc';
         return (
           <div key={s.title} style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <span style={{ width: 14, height: 14, borderRadius: 7, flexShrink: 0, marginTop: 5, background: done || isActive || err ? dotColor : '#fff', border: `2px solid ${dotColor}`, boxShadow: isActive ? `0 0 0 4px ${err ? '#fef2f2' : '#fffbeb'}` : 'none' }} />
-              {i < DOC_FLOW.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 16, background: done ? 'var(--hk-green)' : '#e2e8f0' }} />}
+              <span style={{ width: 14, height: 14, borderRadius: 7, flexShrink: 0, marginTop: 5, background: done || isActive || err ? dotColor : '#fff', border: `2px solid ${dotColor}`, boxShadow: isActive ? `0 0 0 4px ${err ? '#faecea' : '#fdf6e3'}` : 'none' }} />
+              {i < DOC_FLOW.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 16, background: done ? 'var(--hk-green)' : '#e3e9ee' }} />}
             </div>
             <div style={{ paddingBottom: 10 }}>
               <div style={{ fontSize: 14, fontWeight: done || isActive ? 800 : 600, color: done ? 'var(--hk-green)' : isActive ? (err ? 'var(--hk-red)' : 'var(--hk-amber)') : 'var(--hk-ink-3)' }}>
@@ -374,7 +394,13 @@ export default function UploadPage() {
   };
 
   // ── File upload ─────────────────────────────────────────────────────────────
-  const handleFileSelect = useCallback((file: File) => { setSelectedFile(file); }, []);
+  const handleFileSelect = useCallback((file: File) => {
+    setSelectedFile(file);
+    // Auto-fill type + date from the file name so the uploader doesn't type them.
+    const meta = inferDocMetaFromFilename(file.name);
+    if (meta.docType) setDocType(meta.docType);
+    if (meta.docDate) setDocDate(meta.docDate);
+  }, []);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false);
@@ -440,7 +466,7 @@ export default function UploadPage() {
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
         {/* Back + Title */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
@@ -474,7 +500,7 @@ export default function UploadPage() {
         </div>
 
         {tab === 'file' && recentDocs.length > 0 && (
-          <div className="hk-card" style={{ marginBottom: 20, borderColor: '#dbeafe', background: '#fff' }}>
+          <div className="hk-card" style={{ marginBottom: 20, borderColor: '#d5e7ec', background: '#fff' }}>
             <div className="hk-ctitle">最近資料狀態
               <button type="button" onClick={() => void loadRecentDocs()} className="hk-btn hk-btn-ghost hk-btn-sm">重新整理</button>
             </div>
@@ -564,7 +590,7 @@ export default function UploadPage() {
                   ))}
                 </div>
                 {!member && members.length > 1 && (
-                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#b45309', fontWeight: 700 }}>
+                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#a97614', fontWeight: 700 }}>
                     請先選擇這筆紀錄屬於哪位家庭成員。
                   </div>
                 )}
@@ -749,7 +775,7 @@ export default function UploadPage() {
             })()}
             <div style={{ background: '#fff', borderRadius: '16px', padding: '28px', boxShadow: 'var(--shadow-sm)', marginBottom: '20px' }}>
               <div style={{
-                background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412',
+                background: '#fdf1e0', border: '1px solid #fed7aa', color: '#b06a10',
                 borderRadius: '12px', padding: '12px 14px', fontSize: '13px',
                 lineHeight: 1.6, marginBottom: '20px',
               }}>
@@ -764,14 +790,14 @@ export default function UploadPage() {
               }}>
                 {UPLOAD_FLOW_STEPS.map((step, index) => (
                   <div key={step.title} style={{
-                    border: '1px solid #e2e8f0', borderRadius: '12px',
-                    background: index === 0 ? '#eff6ff' : '#f8fafc',
+                    border: '1px solid #e3e9ee', borderRadius: '12px',
+                    background: index === 0 ? '#e7f3f5' : '#f6f9fa',
                     padding: '12px', minHeight: '104px',
                   }}>
-                    <div style={{ fontSize: '12px', fontWeight: 900, color: index === 0 ? '#1d4ed8' : '#334155' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 900, color: index === 0 ? '#33596a' : '#45596a' }}>
                       {step.title}
                     </div>
-                    <div style={{ fontSize: '12px', color: '#64748b', lineHeight: 1.55, marginTop: '6px' }}>
+                    <div style={{ fontSize: '12px', color: '#6b7c8c', lineHeight: 1.55, marginTop: '6px' }}>
                       {step.body}
                     </div>
                   </div>
@@ -793,7 +819,7 @@ export default function UploadPage() {
                   ))}
                 </div>
                 {!fileMember && members.length > 1 && (
-                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#b45309', fontWeight: 700 }}>
+                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#a97614', fontWeight: 700 }}>
                     請先選擇這份文件屬於哪位家庭成員。
                   </div>
                 )}
@@ -830,7 +856,7 @@ export default function UploadPage() {
                       <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
                         {(selectedFile.size / 1024).toFixed(1)} KB · 點擊更換
                       </div>
-                      <div style={{ fontSize: '12px', color: '#15803d', marginTop: '8px', fontWeight: 700 }}>
+                      <div style={{ fontSize: '12px', color: '#2e8b57', marginTop: '8px', fontWeight: 700 }}>
                         下一步：送入文件庫並標示為「已上傳，等待整理」
                       </div>
                     </>
@@ -859,8 +885,17 @@ export default function UploadPage() {
 
               {/* Note */}
               <div>
-                <label style={labelStyle}>備註（選填）</label>
-                <textarea placeholder="例：XX醫院 2025/01 健檢報告…"
+                <label style={labelStyle}>備註（選填）· 點選院所免打字</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                  {COMMON_HOSPITALS.map(h => (
+                    <button key={h} type="button"
+                      onClick={() => setFileNote(fileNote.trim() ? `${fileNote.trim()} ${h}` : h)}
+                      style={{ border: '1px solid var(--gray-300)', borderRadius: '999px', background: '#fff', padding: '4px 10px', fontSize: '12px', cursor: 'pointer', color: '#456' }}>
+                      ＋ {h}
+                    </button>
+                  ))}
+                </div>
+                <textarea placeholder="例：台大醫院 2025/01 健檢報告…"
                   value={fileNote} onChange={e => setFileNote(e.target.value)}
                   rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
               </div>

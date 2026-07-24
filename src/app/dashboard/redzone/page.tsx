@@ -44,10 +44,29 @@ type RedZonePayload = {
 };
 
 const TIER_META = {
-  tier1: { title: 'Tier 1 · 保命紅區', desc: '看診、急診、檢查前最需要先看到的項目。', color: '#be123c', bg: '#fff1f2' },
-  tier2: { title: 'Tier 2 · 重要追蹤', desc: '會影響判斷與照護安排的重要背景。', color: '#a16207', bg: '#fef3c7' },
-  tier3: { title: 'Tier 3 · 基本資料', desc: '人口統計與生活習慣資料。', color: '#475569', bg: '#f8fafc' },
+  tier1: { title: 'Tier 1 · 保命紅區', desc: '看診、急診、檢查前最需要先看到的項目。', color: '#a03a30', bg: '#faecea' },
+  tier2: { title: 'Tier 2 · 重要追蹤', desc: '會影響判斷與照護安排的重要背景。', color: '#a97614', bg: '#fdf6e3' },
+  tier3: { title: 'Tier 3 · 基本資料', desc: '人口統計與生活習慣資料。', color: '#56687a', bg: '#f6f9fa' },
 };
+
+const TIER1_MINI_CELLS = [
+  { label: '血型', tokens: ['blood_type', 'blood type', '血型'] },
+  { label: '藥物過敏', tokens: ['drug allergy', 'medication allergy', 'allergy', '過敏', '顯影', '藥物過敏'] },
+  { label: '關鍵用藥', tokens: ['medication', 'drug', 'anticoagulant', 'warfarin', 'doac', '抗凝', '用藥', '藥'] },
+  { label: '緊急聯絡人', tokens: ['emergency contact', 'contact', '聯絡人', '緊急'] },
+  { label: '重大診斷', tokens: ['problem', 'diagnosis', '診斷', '重大', '腫瘤', '中風', '心肌'] },
+  { label: '近期趨勢', tokens: ['trend', 'vital', 'egfr', 'renal', 'kidney', 'glucose', 'blood_pressure', '趨勢', '血壓', '血糖', '腎'] },
+] as const;
+
+function tier1MiniValue(items: RedZoneItem[], tokens: readonly string[]): string {
+  const matched = tokens.length
+    ? items.find((item) => {
+        const haystack = [item.target_type, item.category, item.label, item.value].join(' ').toLowerCase();
+        return tokens.some((token) => haystack.includes(token.toLowerCase()));
+      })
+    : items.find((item) => !TIER1_MINI_CELLS.slice(0, 5).some((cell) => cell.tokens.some((token) => [item.target_type, item.category, item.label, item.value].join(' ').toLowerCase().includes(token.toLowerCase()))));
+  return matched ? `${matched.label}: ${matched.value}` : '—';
+}
 
 function fmtDate(value: string | null): string {
   if (!value) return '未記錄';
@@ -138,7 +157,7 @@ export default function RedZonePage() {
   };
 
   if (loading) {
-    return <div className="page-wrap"><div style={{ color: '#64748b' }}>正在載入保命紅區...</div></div>;
+    return <div className="page-wrap"><div style={{ color: '#6b7c8c' }}>正在載入保命紅區...</div></div>;
   }
 
   const copyState = data?.copy || {
@@ -150,12 +169,12 @@ export default function RedZonePage() {
 
   if (!data || data.empty_state) {
     return (
-      <div className="page-wrap" style={{ maxWidth: 980, margin: '0 auto' }}>
+      <div className="page-wrap hk-redzone-page" style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
         <button onClick={() => router.back()} style={backBtn}>← 返回</button>
         <header style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 18 }}>
           <div>
             <h1 style={titleStyle}>{scopeLabel}保命紅區</h1>
-            <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: 14 }}>
+            <p style={{ margin: '4px 0 0', color: '#6b7c8c', fontSize: 14 }}>
               Active 0 項 · copy modes 目前停用
             </p>
           </div>
@@ -163,9 +182,9 @@ export default function RedZonePage() {
         </header>
         <section style={emptyCard}>
           <div style={{ fontSize: 38, marginBottom: 10 }}>🛟</div>
-          <h2 style={{ fontSize: 18, fontWeight: 850, color: '#0f172a', margin: 0 }}>{data?.empty_state?.title || '目前尚無保命紅區資料'}</h2>
-          <p style={{ color: '#64748b', lineHeight: 1.7 }}>{data?.empty_state?.why || '醫療團隊尚未整理出 active Tier 1/2/3 項目。'}</p>
-          <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.6, marginTop: 0 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 850, color: '#22313f', margin: 0 }}>{data?.empty_state?.title || '目前尚無保命紅區資料'}</h2>
+          <p style={{ color: '#6b7c8c', lineHeight: 1.7 }}>{data?.empty_state?.why || '醫療團隊尚未整理出 active Tier 1/2/3 項目。'}</p>
+          <p style={{ color: '#93a3af', fontSize: 13, lineHeight: 1.6, marginTop: 0 }}>
             {copyState.disabled_reason || '沒有 active 紅區項目，因此 Tier 1 / 全部 Active / 急診摘要暫時不能複製。'}
           </p>
           <button onClick={() => router.push(data?.empty_state?.cta ? memberHref(data.empty_state.cta, activeMember) : uploadHref)} style={primaryBtn}>
@@ -177,13 +196,13 @@ export default function RedZonePage() {
   }
 
   return (
-    <div className="page-wrap" style={{ maxWidth: 1180, margin: '0 auto' }}>
+    <div className="page-wrap hk-redzone-page" style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
       <button onClick={() => router.back()} style={backBtn}>← 返回</button>
       <header style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 18 }}>
         <div>
           <h1 style={titleStyle}>{scopeLabel}保命紅區</h1>
-          <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: 14 }}>
-            急診 Tier 1 {data.summary.tier_counts.tier1} 項 · 最後整理 {fmtDate(data.summary.last_reviewed_at)}
+          <p style={{ margin: '4px 0 0', color: '#6b7c8c', fontSize: 14 }}>
+            Active {data.summary.active_count} 項 · 最後整理 {fmtDate(data.summary.last_reviewed_at)}
           </p>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             {data.summary.source_badges.map((source) => <span key={source} style={badge}>{source}</span>)}
@@ -192,33 +211,48 @@ export default function RedZonePage() {
         <CopyModeButtons copy={data.copy} onCopy={copyText} />
       </header>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 340px', gap: 16, alignItems: 'start' }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(142px, 1fr))', gap: 10, marginBottom: 18 }}>
+        {TIER1_MINI_CELLS.map((cell) => {
+          const value = tier1MiniValue(data.tiers.tier1, cell.tokens);
+          return (
+            <div key={cell.label} style={{ ...countCard, borderColor: value === '—' ? '#e3e9ee' : '#f2d3cf', background: value === '—' ? '#fff' : '#faecea' }}>
+              <div style={{ fontSize: 12, color: '#6b7c8c', fontWeight: 850 }}>{cell.label}</div>
+              <div style={{ marginTop: 8, color: value === '—' ? '#93a3af' : '#8f342b', fontWeight: 850, lineHeight: 1.35, wordBreak: 'break-word' }}>{value}</div>
+            </div>
+          );
+        })}
+      </section>
+
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginBottom: 18 }}>
+        <button type="button" onClick={() => router.push(memberHref('/dashboard/conditions', activeMember))} style={{ ...countCard, textAlign: 'left', cursor: 'pointer' }}>
+          <div style={{ fontSize: 12, color: '#a97614', fontWeight: 850 }}>Tier 2 重要追蹤</div>
+          <div style={{ marginTop: 6, color: '#22313f', fontWeight: 850 }}>前往疾病總覽</div>
+          <div style={{ marginTop: 4, color: '#6b7c8c', fontSize: 12 }}>查看已發布 Problem、slots 與 timeline。</div>
+        </button>
+        <button type="button" onClick={() => router.push('/dashboard/settings')} style={{ ...countCard, textAlign: 'left', cursor: 'pointer' }}>
+          <div style={{ fontSize: 12, color: '#56687a', fontWeight: 850 }}>Tier 3 家庭與權限</div>
+          <div style={{ marginTop: 6, color: '#22313f', fontWeight: 850 }}>前往家庭與權限</div>
+          <div style={{ marginTop: 4, color: '#6b7c8c', fontSize: 12 }}>管理家庭成員、加入碼與權限設定。</div>
+        </button>
+      </section>
+
+      <div className="hk-redzone-layout">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <TierSection tierKey="tier1" items={data.tiers.tier1} onSelect={setSelected} />
-          {(data.summary.tier_counts.tier2 > 0 || data.summary.tier_counts.tier3 > 0) && (
-            <section style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: 16 }}>
-              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 900, color: '#0f172a' }}>其他追蹤資料</h2>
-              <p style={{ color: '#64748b', fontSize: 13, lineHeight: 1.7 }}>
-                Tier 2 重要追蹤已移到疾病總覽；Tier 3 基本資料請到家庭與權限維護。
-              </p>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button onClick={() => router.push(memberHref('/dashboard/problems', activeMember))} style={secondaryBtn}>疾病總覽</button>
-                <button onClick={() => router.push('/dashboard/settings')} style={secondaryBtn}>家庭與權限</button>
-              </div>
-            </section>
-          )}
+          {(['tier1', 'tier2', 'tier3'] as const).map((tierKey) => (
+            <TierSection key={tierKey} tierKey={tierKey} items={data.tiers[tierKey]} onSelect={setSelected} />
+          ))}
         </div>
-        <aside style={{ position: 'sticky', top: 16 }}>
+        <aside className="hk-redzone-detail">
           {selected ? (
             <div style={detailCard}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
                 <div>
-                  <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 800 }}>Tier {selected.tier} · {selected.category}</div>
-                  <h2 style={{ margin: '4px 0', fontSize: 18, color: '#0f172a' }}>{selected.label}</h2>
+                  <div style={{ fontSize: 12, color: '#93a3af', fontWeight: 800 }}>Tier {selected.tier} · {selected.category}</div>
+                  <h2 style={{ margin: '4px 0', fontSize: 18, color: '#22313f' }}>{selected.label}</h2>
                 </div>
                 <button onClick={() => setSelected(null)} style={linkBtn}>關閉</button>
               </div>
-              <div style={{ fontSize: 20, fontWeight: 850, color: '#0f172a', margin: '10px 0 12px', lineHeight: 1.35 }}>{selected.value}</div>
+              <div style={{ fontSize: 20, fontWeight: 850, color: '#22313f', margin: '10px 0 12px', lineHeight: 1.35 }}>{selected.value}</div>
               <DetailLine label="狀態" value={selected.status} />
               <DetailLine label="家庭成員" value={memberDisplayName(selected.member_name || activeMember, '未指定成員')} />
               <DetailLine label="來源" value={selected.source} />
@@ -227,8 +261,8 @@ export default function RedZonePage() {
               <EvidenceDetail doc={selected.evidence_document ?? null} fallbackId={selected.source_document_id ?? null} />
               {selected.related_problem_label && <DetailLine label="相關 Problem" value={selected.related_problem_label} />}
               {selected.pending_correction && <div style={{ ...notice, marginTop: 10 }}>你已送出更正回報，醫療團隊整理中。</div>}
-              <div style={{ borderTop: '1px solid #e2e8f0', marginTop: 14, paddingTop: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 850, color: '#0f172a', marginBottom: 6 }}>回報錯誤或補充</div>
+              <div style={{ borderTop: '1px solid #e3e9ee', marginTop: 14, paddingTop: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 850, color: '#22313f', marginBottom: 6 }}>回報錯誤或補充</div>
                 <textarea value={correctionNote} onChange={(e) => setCorrectionNote(e.target.value)} rows={4} placeholder="例：這項過敏已被醫師說明不是過敏，或反應內容需要修正。" style={textarea} />
                 <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                   <button onClick={reportCorrection} disabled={!correctionNote.trim() || !!busy} title={!correctionNote.trim() ? '請先填寫要更正或補充的內容' : '送出到醫療團隊工作台'} style={primaryBtn}>送出更正</button>
@@ -238,8 +272,8 @@ export default function RedZonePage() {
             </div>
           ) : (
             <div style={detailCard}>
-              <h2 style={{ margin: 0, fontSize: 18, color: '#0f172a' }}>點一筆查看詳情</h2>
-              <p style={{ color: '#64748b', lineHeight: 1.7, fontSize: 13 }}>
+              <h2 style={{ margin: 0, fontSize: 18, color: '#22313f' }}>點一筆查看詳情</h2>
+              <p style={{ color: '#6b7c8c', lineHeight: 1.7, fontSize: 13 }}>
                 每筆紅區都可查看來源、確認狀態與最後整理時間。若內容不對，可以送出更正回報，CMO 端會看到待整理狀態。
               </p>
             </div>
@@ -247,7 +281,7 @@ export default function RedZonePage() {
         </aside>
       </div>
 
-      <div style={{ marginTop: 18, color: '#94a3b8', fontSize: 12, lineHeight: 1.7 }}>
+      <div style={{ marginTop: 18, color: '#93a3af', fontSize: 12, lineHeight: 1.7 }}>
         此頁只整理事實與來源狀態，不提供醫療建議。急症或不適請立即就醫。
       </div>
     </div>
@@ -269,6 +303,14 @@ function CopyModeButtons({ copy, onCopy }: {
         複製 Tier 1
       </button>
       <button
+        onClick={() => onCopy('all_active')}
+        disabled={!copy.all_active}
+        title={!copy.all_active ? copy.disabled_reason || '沒有 active 項目' : '複製所有 active'}
+        style={copyBtn(!copy.all_active)}
+      >
+        複製所有 Active
+      </button>
+      <button
         onClick={() => onCopy('emergency_summary')}
         disabled={!copy.emergency_summary}
         title={!copy.emergency_summary ? copy.disabled_reason || '沒有急診摘要內容' : '複製急診摘要'}
@@ -283,35 +325,35 @@ function CopyModeButtons({ copy, onCopy }: {
 function TierSection({ tierKey, items, onSelect }: { tierKey: 'tier1' | 'tier2' | 'tier3'; items: RedZoneItem[]; onSelect: (item: RedZoneItem) => void }) {
   const meta = TIER_META[tierKey];
   return (
-    <section style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+    <section style={{ background: '#fff', border: '1px solid #e3e9ee', borderRadius: 12, padding: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 17, fontWeight: 900, color: meta.color }}>{meta.title}</h2>
-          <div style={{ color: '#64748b', fontSize: 12, marginTop: 3 }}>{meta.desc}</div>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 900, color: meta.color }}>{meta.title}</h2>
+          <div style={{ color: '#6b7c8c', fontSize: 12, marginTop: 3 }}>{meta.desc}</div>
         </div>
         <span style={{ ...badge, background: meta.bg, color: meta.color }}>{items.length} 項</span>
       </div>
       {items.length === 0 ? (
-        <div style={{ border: '1px dashed #cbd5e1', borderRadius: 10, padding: 12, color: '#64748b', fontSize: 13 }}>
+        <div style={{ border: '1px dashed #c8d4dc', borderRadius: 10, padding: 12, color: '#6b7c8c', fontSize: 13 }}>
           目前沒有此 Tier 的 active 資料。若你知道有相關資料，可以上傳文件或等待醫療團隊整理。
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
           {items.map((item) => (
             <button key={item.id} onClick={() => onSelect(item)} style={{
-              textAlign: 'left', border: '1px solid #edf1f7', borderRadius: 12, padding: 12,
-              background: item.pending_correction ? '#fff7ed' : '#fff', cursor: 'pointer',
+              textAlign: 'left', border: '1px solid #edf1f7', borderRadius: 8, padding: 9,
+              background: item.pending_correction ? '#fdf1e0' : '#fff', cursor: 'pointer',
             }}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
                 <span style={{ ...badge, background: meta.bg, color: meta.color }}>Tier {item.tier}</span>
-                <span style={{ ...badge, background: item.is_verified ? '#ecfdf5' : '#fef3c7', color: item.is_verified ? '#047857' : '#a16207' }}>{item.is_verified ? '已確認' : '待確認'}</span>
+                <span style={{ ...badge, background: item.is_verified ? '#e7f4ec' : '#fdf6e3', color: item.is_verified ? '#2e8b57' : '#a97614' }}>{item.is_verified ? '已確認' : '待確認'}</span>
                 {item.member_name && <span style={badge}>{item.member_name}</span>}
-                {item.evidence_document?.available && <span style={{ ...badge, background: '#eff6ff', color: '#1d4ed8' }}>有原始文件</span>}
-                {item.pending_correction && <span style={{ ...badge, background: '#ffedd5', color: '#c2410c' }}>待更正</span>}
+                {item.evidence_document?.available && <span style={{ ...badge, background: '#e7f3f5', color: '#33596a' }}>有原始文件</span>}
+                {item.pending_correction && <span style={{ ...badge, background: '#fdf1e0', color: '#b06a10' }}>待更正</span>}
               </div>
-              <div style={{ fontSize: 14, color: '#0f172a', fontWeight: 850, lineHeight: 1.4 }}>{item.label}</div>
-              <div style={{ fontSize: 13, color: '#475569', marginTop: 4, lineHeight: 1.45 }}>{item.value}</div>
-              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>{item.source} · {fmtDate(item.last_reviewed_at)}</div>
+              <div style={{ fontSize: 14, color: '#22313f', fontWeight: 850, lineHeight: 1.4 }}>{item.label}</div>
+              <div style={{ fontSize: 13, color: '#56687a', marginTop: 4, lineHeight: 1.45 }}>{item.value}</div>
+              <div style={{ fontSize: 11, color: '#93a3af', marginTop: 8 }}>{item.source} · {fmtDate(item.last_reviewed_at)}</div>
             </button>
           ))}
         </div>
@@ -322,9 +364,9 @@ function TierSection({ tierKey, items, onSelect }: { tierKey: 'tier1' | 'tier2' 
 
 function DetailLine({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderBottom: '1px solid #f1f5f9' }}>
-      <span style={{ color: '#64748b', fontSize: 12, fontWeight: 800 }}>{label}</span>
-      <span style={{ color: '#0f172a', fontSize: 13, textAlign: 'right' }}>{value}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderBottom: '1px solid #eef2f5' }}>
+      <span style={{ color: '#6b7c8c', fontSize: 12, fontWeight: 800 }}>{label}</span>
+      <span style={{ color: '#22313f', fontSize: 13, textAlign: 'right' }}>{value}</span>
     </div>
   );
 }
@@ -337,30 +379,31 @@ function EvidenceDetail({ doc, fallbackId }: { doc: EvidenceDocument | null; fal
     return <DetailLine label="原始文件" value={`${evidenceTitle(doc)} · ${evidenceUnavailableText(doc)}`} />;
   }
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderBottom: '1px solid #f1f5f9', alignItems: 'flex-start' }}>
-      <span style={{ color: '#64748b', fontSize: 12, fontWeight: 800, flexShrink: 0 }}>原始文件</span>
-      <a href={doc.download_url} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontSize: 13, textAlign: 'right', fontWeight: 850, textDecoration: 'none', wordBreak: 'break-word' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderBottom: '1px solid #eef2f5', alignItems: 'flex-start' }}>
+      <span style={{ color: '#6b7c8c', fontSize: 12, fontWeight: 800, flexShrink: 0 }}>原始文件</span>
+      <a href={doc.download_url} target="_blank" rel="noreferrer" style={{ color: '#3e6b7e', fontSize: 13, textAlign: 'right', fontWeight: 850, textDecoration: 'none', wordBreak: 'break-word' }}>
         查看 {evidenceTitle(doc)}
-        {evidenceMeta(doc) && <span style={{ color: '#64748b', fontWeight: 700 }}> · {evidenceMeta(doc)}</span>}
+        {evidenceMeta(doc) && <span style={{ color: '#6b7c8c', fontWeight: 700 }}> · {evidenceMeta(doc)}</span>}
       </a>
     </div>
   );
 }
 
-const titleStyle: React.CSSProperties = { fontSize: 28, fontWeight: 900, color: '#0f172a', margin: '8px 0 0' };
-const badge: React.CSSProperties = { display: 'inline-flex', borderRadius: 999, padding: '3px 8px', background: '#f1f5f9', color: '#475569', fontSize: 11, fontWeight: 850 };
-const backBtn: React.CSSProperties = { border: '1px solid #e2e8f0', background: '#fff', color: '#334155', borderRadius: 10, padding: '8px 12px', fontWeight: 800, cursor: 'pointer' };
-const primaryBtn: React.CSSProperties = { border: 'none', background: '#2563eb', color: '#fff', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
-const secondaryBtn: React.CSSProperties = { border: '1px solid #cbd5e1', background: '#fff', color: '#334155', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
-const linkBtn: React.CSSProperties = { border: 'none', background: 'transparent', color: '#2563eb', fontWeight: 850, cursor: 'pointer' };
-const detailCard: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: 16, boxShadow: 'var(--shadow-sm)' };
-const emptyCard: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: 28, textAlign: 'center' };
-const notice: React.CSSProperties = { background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 10, padding: 10, fontSize: 12, lineHeight: 1.5 };
-const textarea: React.CSSProperties = { width: '100%', border: '1px solid #cbd5e1', borderRadius: 10, padding: 10, fontSize: 13, resize: 'vertical' };
+const titleStyle: React.CSSProperties = { fontSize: 28, fontWeight: 900, color: '#22313f', margin: '8px 0 0' };
+const countCard: React.CSSProperties = { background: '#fff', border: '1px solid #e3e9ee', borderRadius: 12, padding: 12, minHeight: 92 };
+const badge: React.CSSProperties = { display: 'inline-flex', borderRadius: 999, padding: '3px 8px', background: '#eef2f5', color: '#56687a', fontSize: 11, fontWeight: 850 };
+const backBtn: React.CSSProperties = { border: '1px solid #e3e9ee', background: '#fff', color: '#45596a', borderRadius: 10, padding: '8px 12px', fontWeight: 800, cursor: 'pointer' };
+const primaryBtn: React.CSSProperties = { border: 'none', background: '#3e6b7e', color: '#fff', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
+const secondaryBtn: React.CSSProperties = { border: '1px solid #c8d4dc', background: '#fff', color: '#45596a', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
+const linkBtn: React.CSSProperties = { border: 'none', background: 'transparent', color: '#3e6b7e', fontWeight: 850, cursor: 'pointer' };
+const detailCard: React.CSSProperties = { background: '#fff', border: '1px solid #e3e9ee', borderRadius: 14, padding: 16, boxShadow: 'var(--shadow-sm)' };
+const emptyCard: React.CSSProperties = { background: '#fff', border: '1px solid #e3e9ee', borderRadius: 14, padding: 28, textAlign: 'center' };
+const notice: React.CSSProperties = { background: '#fdf1e0', border: '1px solid #fed7aa', color: '#b06a10', borderRadius: 10, padding: 10, fontSize: 12, lineHeight: 1.5 };
+const textarea: React.CSSProperties = { width: '100%', border: '1px solid #c8d4dc', borderRadius: 10, padding: 10, fontSize: 13, resize: 'vertical' };
 const copyBtn = (disabled: boolean): React.CSSProperties => ({
-  border: '1px solid #cbd5e1',
-  background: disabled ? '#f8fafc' : '#fff',
-  color: disabled ? '#94a3b8' : '#0f172a',
+  border: '1px solid #c8d4dc',
+  background: disabled ? '#f6f9fa' : '#fff',
+  color: disabled ? '#93a3af' : '#22313f',
   borderRadius: 10,
   padding: '10px 12px',
   fontWeight: 850,

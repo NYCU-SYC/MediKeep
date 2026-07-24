@@ -46,7 +46,7 @@ export function DiffBox({ title, data, empty }: { title: string; data: Record<st
     <div className="cmo-card cmo-section" style={{ background: '#fff' }}>
       <div className="cmo-kpi-label">{title}</div>
       {data && Object.keys(data).length > 0 ? (
-        <pre style={{ marginTop: 8, whiteSpace: 'pre-wrap', fontSize: 12, lineHeight: 1.5, color: '#334155', maxHeight: 260, overflow: 'auto' }}>
+        <pre style={{ marginTop: 8, whiteSpace: 'pre-wrap', fontSize: 12, lineHeight: 1.5, color: '#45596a', maxHeight: 260, overflow: 'auto' }}>
           {JSON.stringify(data, null, 2)}
         </pre>
       ) : (

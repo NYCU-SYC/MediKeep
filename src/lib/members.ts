@@ -10,8 +10,15 @@ export type MemberLike = {
 
 export function normalizeMemberName(value?: string | null): string {
   const text = (value ?? '').trim();
-  if (!text || text === '全部' || text === 'all') return ALL_MEMBERS;
-  return text === 'self' ? '本人' : text;
+  if (!text || ['all', '\u5168\u90e8', '\u5168\u5bb6', '\u5168\u5bb6\u7e3d\u89bd'].includes(text)) {
+    return ALL_MEMBERS;
+  }
+  const lowered = text.toLowerCase();
+  if (['self', '\u672c\u4eba', '\u6211', 'owner'].includes(lowered)) return '\u672c\u4eba';
+  if (['\u7238\u7238', '\u7238', '\u7236\u89aa', 'father', 'dad'].includes(lowered)) return '\u7238\u7238';
+  if (['\u5abd\u5abd', '\u5abd', '\u6bcd\u89aa', 'mother', 'mom', 'mum'].includes(lowered)) return '\u5abd\u5abd';
+  if (['\u914d\u5076', '\u592a\u592a', '\u5148\u751f', 'spouse', 'partner'].includes(lowered)) return '\u914d\u5076';
+  return text;
 }
 
 export function memberDisplayName(value?: string | null, allLabel = '全家總覽'): string {

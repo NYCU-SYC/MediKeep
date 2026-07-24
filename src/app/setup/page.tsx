@@ -7,6 +7,21 @@ import { setPatientSessionToken } from '@/lib/api';
 type Tab = 'create' | 'join';
 
 type NewMember = { name: string; relation: string; age: string; gender: string; color: string };
+type JoinPreview = {
+  family_name: string;
+  join_code: string;
+  join_code_expires_at?: string | null;
+  join_code_status?: string | null;
+  member_count: number;
+  current_family_name?: string | null;
+  has_local_data?: boolean;
+  local_data_summary?: string[];
+  requires_confirmation?: boolean;
+  confirmation_reasons?: string[];
+  will_leave_current_family?: boolean;
+  will_keep_existing_health_data_separate?: boolean;
+  warning?: string | null;
+};
 
 const PRESETS = [
   { name: '本人',   relation: '本人', gender: '男', color: '#2196f3' },
@@ -42,17 +57,26 @@ export default function SetupPage() {
   const [joinCode, setJoinCode] = useState('');
   const [step1Submitting, setStep1Submitting] = useState(false);
   const [step1Error, setStep1Error] = useState('');
+  const [createConfirmed, setCreateConfirmed] = useState(false);
+  const [joinPreview, setJoinPreview] = useState<JoinPreview | null>(null);
+  const [joinConfirmed, setJoinConfirmed] = useState(false);
 
   // Step 2 — add members
   const [members, setMembers] = useState<NewMember[]>([]);
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customMember, setCustomMember] = useState<NewMember>(BLANK_MEMBER);
   const [saving, setSaving] = useState(false);
+  const [cancelingCreate, setCancelingCreate] = useState(false);
+  const [finishError, setFinishError] = useState('');
 
   // ── Step 1: create family ──────────────────────────────────────────────────
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setStep1Error('');
+    if (!createConfirmed) {
+      setStep1Error('請先確認這是新的獨立家庭；如果已有加入代碼，請改用「加入已有家庭」。');
+      return;
+    }
     setStep1Submitting(true);
     try {
       const resp = await fetch('/api/auth/setup', {
@@ -66,6 +90,7 @@ export default function SetupPage() {
         return;
       }
       setPatientSessionToken(null);
+      setFinishError('');
       setStep(2);
     } catch {
       setStep1Error('網路錯誤，請稍後再試');
@@ -82,13 +107,37 @@ export default function SetupPage() {
     if (code.length < 8 || code.length > 20) { setStep1Error('請輸入 8 到 20 碼的加入代碼'); return; }
     setStep1Submitting(true);
     try {
+      if (joinPreview?.join_code !== code) {
+        const previewResp = await fetch(`/api/auth/join/preview?join_code=${encodeURIComponent(code)}`, {
+          method: 'GET',
+          credentials: 'include',
+        });
+        if (!previewResp.ok) {
+          setJoinPreview(null);
+          setStep1Error(await readApiError(previewResp, '找不到此家庭代碼，請確認後重試'));
+          return;
+        }
+        const preview = await previewResp.json() as JoinPreview;
+        setJoinPreview(preview);
+        setJoinConfirmed(false);
+        return;
+      }
+      if (joinPreview?.requires_confirmation && !joinConfirmed) {
+        setStep1Error('請先勾選確認，確認這是正確家庭，且了解原本資料不會自動搬移。');
+        return;
+      }
       const resp = await fetch('/api/auth/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ join_code: code }),
+        body: JSON.stringify({
+          join_code: code,
+          confirmed_family_name: joinPreview?.family_name,
+          confirm_local_data_transfer: joinConfirmed || !joinPreview?.requires_confirmation,
+        }),
       });
       if (!resp.ok) {
+        if (resp.status !== 409) setJoinPreview(null);
         setStep1Error(await readApiError(resp, '加入失敗，請確認代碼後再試'));
         return;
       }
@@ -122,10 +171,11 @@ export default function SetupPage() {
   // ── Step 2: save members and enter dashboard ───────────────────────────────
   const handleFinish = async () => {
     setSaving(true);
+    setFinishError('');
     try {
       for (let i = 0; i < members.length; i++) {
         const m = members[i];
-        await fetch('/api/members', {
+        const resp = await fetch('/api/members', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -138,12 +188,43 @@ export default function SetupPage() {
             sort_order: i,
           }),
         });
+        if (!resp.ok) {
+          throw new Error(await readApiError(resp, `無法新增 ${m.name || '家庭成員'}，請稍後再試`));
+        }
       }
-    } catch {
-      // Non-fatal — we can add members later in settings
+      router.replace('/dashboard');
+    } catch (error) {
+      setFinishError(error instanceof Error ? error.message : '新增家庭成員失敗，請稍後再試');
     } finally {
       setSaving(false);
-      router.replace('/dashboard');
+    }
+  };
+
+  const cancelCreatedFamily = async () => {
+    setFinishError('');
+    setCancelingCreate(true);
+    try {
+      const resp = await fetch('/api/auth/family/leave', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!resp.ok) {
+        setFinishError(await readApiError(resp, '無法撤銷此家庭。若已有健康資料或其他成員登入，請到設定中處理權限。'));
+        return;
+      }
+      const result = await resp.json().catch(() => ({}));
+      if (result?.session_token) setPatientSessionToken(result.session_token);
+      setMembers([]);
+      setFamilyName('');
+      setCreateConfirmed(false);
+      setShowCustomForm(false);
+      setCustomMember(BLANK_MEMBER);
+      setTab('join');
+      setStep(1);
+    } catch {
+      setFinishError('網路錯誤，無法撤銷新家庭。請稍後再試。');
+    } finally {
+      setCancelingCreate(false);
     }
   };
 
@@ -155,7 +236,7 @@ export default function SetupPage() {
 
   const btnPrimary: React.CSSProperties = {
     width: '100%', padding: '14px', borderRadius: '12px', border: 'none',
-    background: '#007bff', color: '#fff', fontSize: '15px', fontWeight: '700',
+    background: '#3e6b7e', color: '#fff', fontSize: '15px', fontWeight: '700',
     cursor: 'pointer',
   };
 
@@ -163,11 +244,15 @@ export default function SetupPage() {
     background: '#fff0f0', border: '1px solid #ffcdd2', borderRadius: '8px',
     padding: '10px 14px', fontSize: '13px', color: '#c62828', marginBottom: '16px',
   };
+  const joinCodeForSubmit = joinCode.trim().toUpperCase();
+  const joinCodeInvalid = joinCodeForSubmit.length < 8 || joinCodeForSubmit.length > 20;
+  const createSubmitDisabled = step1Submitting || !createConfirmed;
+  const joinSubmitDisabled = step1Submitting || joinCodeInvalid || (joinPreview?.requires_confirmation === true && !joinConfirmed);
 
   return (
     <div style={{
       minHeight: '100vh',
-      background: 'linear-gradient(135deg, #007bff 0%, #0056b3 100%)',
+      background: 'linear-gradient(135deg, #3e6b7e 0%, #33596a 100%)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       padding: '24px',
     }}>
@@ -186,9 +271,9 @@ export default function SetupPage() {
           </div>
 
           <div style={{
-            background: '#fff7ed',
+            background: '#fdf1e0',
             border: '1px solid #fed7aa',
-            color: '#9a3412',
+            color: '#b06a10',
             borderRadius: '12px',
             padding: '12px 14px',
             fontSize: '12px',
@@ -204,10 +289,10 @@ export default function SetupPage() {
               { key: 'create' as Tab, label: '🏗 建立新家庭' },
               { key: 'join'   as Tab, label: '🔗 加入已有家庭' },
             ]).map(t => (
-              <button key={t.key} onClick={() => { setTab(t.key); setStep1Error(''); }} style={{
+              <button key={t.key} onClick={() => { setTab(t.key); setStep1Error(''); setCreateConfirmed(false); setJoinPreview(null); setJoinConfirmed(false); }} style={{
                 flex: 1, padding: '10px 8px', borderRadius: '10px', border: 'none',
                 background: tab === t.key ? '#fff' : 'transparent',
-                color: tab === t.key ? '#007bff' : '#888',
+                color: tab === t.key ? '#3e6b7e' : '#888',
                 fontWeight: tab === t.key ? '700' : '500', fontSize: '13px', cursor: 'pointer',
                 boxShadow: tab === t.key ? '0 1px 4px rgba(0,0,0,0.12)' : 'none',
               }}>{t.label}</button>
@@ -232,8 +317,41 @@ export default function SetupPage() {
                   fontFamily: 'inherit', outline: 'none', marginBottom: '20px', boxSizing: 'border-box',
                 }}
               />
+              <div style={{
+                border: '1px solid #bae6fd',
+                background: '#f0f9ff',
+                borderRadius: '12px',
+                padding: '12px',
+                marginBottom: '16px',
+                color: '#0c4a6e',
+                fontSize: '13px',
+                lineHeight: 1.65,
+              }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontWeight: 700 }}>
+                  <input
+                    type="checkbox"
+                    checked={createConfirmed}
+                    onChange={event => setCreateConfirmed(event.target.checked)}
+                    style={{ marginTop: '3px' }}
+                  />
+                  <span>
+                    我確認要建立一個新的獨立家庭。若我已有家人提供的加入代碼，應改用「加入已有家庭」，避免健康資料綁到錯誤家庭。
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => { setTab('join'); setStep1Error(''); setCreateConfirmed(false); }}
+                  style={{ marginTop: '10px', border: 'none', background: 'transparent', color: '#0369a1', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+                >
+                  我有加入代碼，改為加入已有家庭
+                </button>
+              </div>
               {step1Error && <div style={errorBox}>{step1Error}</div>}
-              <button type="submit" disabled={step1Submitting} style={{ ...btnPrimary, opacity: step1Submitting ? 0.6 : 1 }}>
+              <button
+                type="submit"
+                disabled={createSubmitDisabled}
+                style={{ ...btnPrimary, opacity: createSubmitDisabled ? 0.55 : 1, cursor: createSubmitDisabled ? 'not-allowed' : 'pointer' }}
+              >
                 {step1Submitting ? '建立中...' : '下一步：新增成員 →'}
               </button>
             </form>
@@ -250,7 +368,11 @@ export default function SetupPage() {
               <input
                 type="text" placeholder="例：NHI2605302258"
                 value={joinCode}
-                onChange={e => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20))}
+                onChange={e => {
+                  setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20));
+                  setJoinPreview(null);
+                  setJoinConfirmed(false);
+                }}
                 maxLength={20}
                 style={{
                   width: '100%', padding: '12px 14px', borderRadius: '10px',
@@ -259,10 +381,66 @@ export default function SetupPage() {
                   letterSpacing: joinCode.length > 8 ? '2px' : '6px', textAlign: 'center', boxSizing: 'border-box',
                 }}
               />
+              {joinPreview && (
+                <div style={{
+                  border: '1px solid #bae6fd',
+                  background: '#f0f9ff',
+                  borderRadius: '12px',
+                  padding: '14px',
+                  marginBottom: '16px',
+                  color: '#0c4a6e',
+                  fontSize: '13px',
+                  lineHeight: 1.65,
+                }}>
+                  <div style={{ fontWeight: 800, color: '#075985', marginBottom: '6px' }}>請確認要加入的家庭</div>
+                  <div>家庭名稱：<strong>{joinPreview.family_name}</strong></div>
+                  <div>目前成員數：{joinPreview.member_count} 位</div>
+                  <div>
+                    加入碼有效期限：
+                    {joinPreview.join_code_expires_at ? new Date(joinPreview.join_code_expires_at).toLocaleString('zh-TW') : '永不自動過期'}
+                  </div>
+                  {joinPreview.current_family_name && <div>你目前綁定：{joinPreview.current_family_name}</div>}
+                  {joinPreview.warning && (
+                    <div style={{ marginTop: '8px', color: '#92400e', background: '#fdf6e3', border: '1px solid #efdfae', borderRadius: '8px', padding: '8px 10px' }}>
+                      {joinPreview.warning}
+                    </div>
+                  )}
+                  {(joinPreview.confirmation_reasons?.length || joinPreview.local_data_summary?.length) ? (
+                    <div style={{ marginTop: '10px', border: '1px solid #bae6fd', background: '#fff', borderRadius: '10px', padding: '10px' }}>
+                      {joinPreview.confirmation_reasons?.map((reason, idx) => (
+                        <div key={`reason-${idx}`} style={{ color: '#22313f', marginBottom: '4px' }}>{reason}</div>
+                      ))}
+                      {joinPreview.local_data_summary?.length ? (
+                        <div style={{ color: '#56687a' }}>目前帳號已有：{joinPreview.local_data_summary.join('、')}</div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {joinPreview.requires_confirmation && (
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginTop: '10px', color: '#22313f', fontWeight: 700 }}>
+                      <input
+                        type="checkbox"
+                        checked={joinConfirmed}
+                        onChange={event => setJoinConfirmed(event.target.checked)}
+                        style={{ marginTop: '3px' }}
+                      />
+                      <span>
+                        我確認這是正確家庭；加入後目前登入身分會切到此家庭，原本本地資料不會自動搬移或顯示給新家庭。
+                      </span>
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { setJoinPreview(null); setJoinConfirmed(false); setJoinCode(''); }}
+                    style={{ marginTop: '10px', border: 'none', background: 'transparent', color: '#0369a1', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+                  >
+                    取消，重新輸入代碼
+                  </button>
+                </div>
+              )}
               {step1Error && <div style={errorBox}>{step1Error}</div>}
-              <button type="submit" disabled={step1Submitting || joinCode.trim().length < 8 || joinCode.trim().length > 20}
-                style={{ ...btnPrimary, opacity: (step1Submitting || joinCode.trim().length < 8 || joinCode.trim().length > 20) ? 0.5 : 1 }}>
-                {step1Submitting ? '加入中...' : '加入家庭 →'}
+              <button type="submit" disabled={joinSubmitDisabled}
+                style={{ ...btnPrimary, opacity: joinSubmitDisabled ? 0.5 : 1 }}>
+                {step1Submitting ? (joinPreview ? '加入中...' : '確認中...') : (joinPreview ? '確認加入此家庭 →' : '檢查加入代碼 →')}
               </button>
             </form>
           )}
@@ -280,7 +458,7 @@ export default function SetupPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '28px' }}>
             <div style={{ width: '24px', height: '24px', borderRadius: '12px', background: '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', fontWeight: '700' }}>✓</div>
             <div style={{ flex: 1, height: '3px', background: '#4caf50', borderRadius: '2px' }} />
-            <div style={{ width: '24px', height: '24px', borderRadius: '12px', background: '#007bff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', fontWeight: '700' }}>2</div>
+            <div style={{ width: '24px', height: '24px', borderRadius: '12px', background: '#3e6b7e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', fontWeight: '700' }}>2</div>
           </div>
 
           <div style={{ marginBottom: '24px' }}>
@@ -356,7 +534,7 @@ export default function SetupPage() {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button type="submit" style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#007bff', color: '#fff', fontWeight: '700', cursor: 'pointer', fontSize: '13px' }}>新增</button>
+                <button type="submit" style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#3e6b7e', color: '#fff', fontWeight: '700', cursor: 'pointer', fontSize: '13px' }}>新增</button>
                 <button type="button" onClick={() => setShowCustomForm(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #ddd', background: '#fff', color: '#666', cursor: 'pointer', fontSize: '13px' }}>取消</button>
               </div>
             </form>
@@ -382,12 +560,47 @@ export default function SetupPage() {
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '10px' }}>
+          {finishError && (
+            <div role="alert" style={{
+              background: '#faecea',
+              border: '1px solid #fecdd3',
+              borderRadius: '10px',
+              color: '#a03a30',
+              fontSize: '13px',
+              fontWeight: 700,
+              lineHeight: 1.5,
+              marginBottom: '14px',
+              padding: '10px 12px',
+            }}>
+              {finishError}
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px' }}>
             <button
-              onClick={handleFinish} disabled={saving}
-              style={{ ...btnPrimary, opacity: saving ? 0.7 : 1 }}
+              onClick={handleFinish} disabled={saving || cancelingCreate}
+              style={{ ...btnPrimary, opacity: saving || cancelingCreate ? 0.7 : 1, cursor: saving || cancelingCreate ? 'not-allowed' : 'pointer' }}
             >
               {saving ? '儲存中...' : members.length > 0 ? `完成並進入 →` : '跳過，直接進入 →'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void cancelCreatedFamily()}
+              disabled={saving || cancelingCreate}
+              style={{
+                width: '100%',
+                padding: '12px',
+                borderRadius: '12px',
+                border: '1px solid #c8d4dc',
+                background: '#fff',
+                color: '#45596a',
+                fontSize: '14px',
+                fontWeight: 800,
+                cursor: saving || cancelingCreate ? 'not-allowed' : 'pointer',
+                opacity: saving || cancelingCreate ? 0.65 : 1,
+              }}
+            >
+              {cancelingCreate ? '撤銷中...' : '取消新家庭，重新輸入加入代碼'}
             </button>
           </div>
 

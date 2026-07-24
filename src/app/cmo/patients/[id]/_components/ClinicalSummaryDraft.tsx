@@ -34,10 +34,10 @@ interface Props {
 }
 
 const FLAG_STYLE: Record<string, { bg: string; fg: string }> = {
-  高風險: { bg: '#fef2f2', fg: '#be123c' },
-  '出血風險（見警示）': { bg: '#fef2f2', fg: '#be123c' },
-  '不可能值 · 待確認': { bg: '#fefce8', fg: '#854d0e' },
-  偏高: { bg: '#fff7ed', fg: '#c2410c' },
+  高風險: { bg: '#faecea', fg: '#a03a30' },
+  '出血風險（見警示）': { bg: '#faecea', fg: '#a03a30' },
+  '不可能值 · 待確認': { bg: '#fefce8', fg: '#a97614' },
+  偏高: { bg: '#fdf1e0', fg: '#b06a10' },
 }
 
 export function ClinicalSummaryDraft({ sections, reviews, onDecision, onEdit, onAddConfirmed, busyItemKey }: Props) {
@@ -47,27 +47,27 @@ export function ClinicalSummaryDraft({ sections, reviews, onDecision, onEdit, on
 
   if (total === 0) return null
 
-  const btn: CSSProperties = { fontSize: 11, padding: '3px 7px', borderRadius: 6, border: '0.5px solid #cbd5e1', background: '#fff', cursor: 'pointer', color: '#475569' }
+  const btn: CSSProperties = { fontSize: 11, padding: '3px 7px', borderRadius: 6, border: '0.5px solid #c8d4dc', background: '#fff', cursor: 'pointer', color: '#56687a' }
   const disabledBtn: CSSProperties = { opacity: 0.62, cursor: 'wait' }
 
   return (
-    <section className="cmo-card cmo-section" style={{ background: 'linear-gradient(135deg,#ffffff,#f8fafc)' }}>
+    <section className="cmo-card cmo-section" style={{ background: 'linear-gradient(135deg,#ffffff,#f6f9fa)' }}>
       <div className="cmo-title-row" style={{ alignItems: 'flex-start', marginBottom: 4 }}>
         <div>
           <div className="cmo-kpi-label">Patient-facing categories</div>
           <h2 className="cmo-section-title" style={{ margin: '4px 0' }}>
-            病人端分類草稿 <span className="cmo-badge" style={{ background: '#f1f5f9', color: '#475569', fontWeight: 500 }}>AI 初稿</span>
+            病人端分類草稿 <span className="cmo-badge" style={{ background: '#eef2f5', color: '#56687a', fontWeight: 500 }}>AI 初稿</span>
           </h2>
           <div className="cmo-subtitle">依 User 端六分類自動組裝，每筆附來源；確認/忽略會寫入稽核軌跡，但不變更臨床資料列、不發布。</div>
         </div>
-        <span className="cmo-badge" style={{ background: confirmedItems.length === total ? '#ecfdf5' : '#eff6ff', color: confirmedItems.length === total ? '#047857' : '#1d4ed8' }}>
+        <span className="cmo-badge" style={{ background: confirmedItems.length === total ? '#e7f4ec' : '#e7f3f5', color: confirmedItems.length === total ? '#2e8b57' : '#33596a' }}>
           已確認 {confirmedItems.length} / {total}
         </span>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginTop: 8 }}>
         {sections.map((section) => (
-          <div key={section.key} style={{ border: '0.5px solid #e2e8f0', borderRadius: 8, padding: '10px 12px', background: '#fff' }}>
+          <div key={section.key} style={{ border: '0.5px solid #e3e9ee', borderRadius: 8, padding: '10px 12px', background: '#fff' }}>
             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>{section.title}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {section.items.map((item) => {
@@ -75,14 +75,14 @@ export function ClinicalSummaryDraft({ sections, reviews, onDecision, onEdit, on
                 const isConfirmed = decision === 'confirmed'
                 const isDismissed = decision === 'dismissed'
                 const isBusy = busyItemKey === item.id
-                const flag = item.flag ? FLAG_STYLE[item.flag] ?? { bg: '#f1f5f9', fg: '#475569' } : null
+                const flag = item.flag ? FLAG_STYLE[item.flag] ?? { bg: '#eef2f5', fg: '#56687a' } : null
                 return (
                   <div
                     key={item.id}
                     style={{
-                      borderTop: '0.5px solid #f1f5f9', paddingTop: 6,
+                      borderTop: '0.5px solid #eef2f5', paddingTop: 6,
                       opacity: isDismissed ? 0.5 : 1,
-                      background: isConfirmed ? '#f0fdf4' : 'transparent',
+                      background: isConfirmed ? '#e7f4ec' : 'transparent',
                       borderRadius: isConfirmed ? 6 : 0, padding: isConfirmed ? '6px' : '6px 0 0',
                     }}
                   >
@@ -91,7 +91,7 @@ export function ClinicalSummaryDraft({ sections, reviews, onDecision, onEdit, on
                         <span style={{ fontSize: 13, fontWeight: 500, textDecoration: isDismissed ? 'line-through' : 'none' }}>{item.primary}</span>
                         {item.flag && flag && <span className="cmo-badge" style={{ background: flag.bg, color: flag.fg, marginLeft: 6 }}>{item.flag}</span>}
                         {item.secondary && <div className="cmo-subtitle" style={{ fontSize: 11, marginTop: 1 }}>{item.secondary}</div>}
-                        <span className="cmo-badge" style={{ background: '#eff6ff', color: '#1d4ed8', marginTop: 3, fontSize: 10 }}>
+                        <span className="cmo-badge" style={{ background: '#e7f3f5', color: '#33596a', marginTop: 3, fontSize: 10 }}>
                           來源：{item.source || '未連結'}
                         </span>
                       </div>
@@ -100,7 +100,7 @@ export function ClinicalSummaryDraft({ sections, reviews, onDecision, onEdit, on
                           <button type="button" style={{ ...btn, ...(isBusy ? disabledBtn : {}) }} disabled={isBusy} onClick={() => onDecision(item.id, 'cleared', item)} aria-label="復原">{isBusy ? '儲存中' : '復原'}</button>
                         ) : (
                           <>
-                            <button type="button" style={{ ...btn, ...(isConfirmed ? { background: '#dcfce7', color: '#047857', borderColor: '#bbf7d0' } : {}), ...(isBusy ? disabledBtn : {}) }} disabled={isBusy} onClick={() => onDecision(item.id, isConfirmed ? 'cleared' : 'confirmed', item)} aria-label="確認">{isBusy ? '儲存中' : isConfirmed ? '已確認' : '確認'}</button>
+                            <button type="button" style={{ ...btn, ...(isConfirmed ? { background: '#dcefe3', color: '#2e8b57', borderColor: '#cfe8da' } : {}), ...(isBusy ? disabledBtn : {}) }} disabled={isBusy} onClick={() => onDecision(item.id, isConfirmed ? 'cleared' : 'confirmed', item)} aria-label="確認">{isBusy ? '儲存中' : isConfirmed ? '已確認' : '確認'}</button>
                             <button type="button" style={{ ...btn, ...(isBusy ? disabledBtn : {}) }} disabled={isBusy} onClick={() => onEdit?.(item)} aria-label="修改">修改</button>
                             <button type="button" style={{ ...btn, ...(isBusy ? disabledBtn : {}) }} disabled={isBusy} onClick={() => onDecision(item.id, 'dismissed', item)} aria-label="忽略">忽略</button>
                           </>

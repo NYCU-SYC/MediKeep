@@ -283,7 +283,7 @@ export default function AiPage() {
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '28px' }}>
@@ -343,10 +343,10 @@ export default function AiPage() {
             textAlign: 'center', boxShadow: 'var(--shadow-sm)', marginBottom: '20px',
           }}>
             <div style={{ fontSize: '52px', marginBottom: '16px' }}>📊</div>
-            <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a', marginBottom: '10px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#22313f', marginBottom: '10px' }}>
               請選擇要分析的成員
             </h3>
-            <p style={{ fontSize: '14px', color: '#64748b', lineHeight: 1.7, marginBottom: '24px' }}>
+            <p style={{ fontSize: '14px', color: '#6b7c8c', lineHeight: 1.7, marginBottom: '24px' }}>
               數值整理會針對個別成員的健康紀錄，<br />請從上方選擇成員後再查看。
             </p>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>

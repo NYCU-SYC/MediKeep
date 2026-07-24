@@ -70,18 +70,18 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_META: Record<string, { label: string; bg: string; color: string; border: string; helper: string }> = {
-  pending: { label: '待處理', bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe', helper: '已排入處理流程。' },
+  pending: { label: '待處理', bg: '#e7f3f5', color: '#33596a', border: '#cfe3e8', helper: '已排入處理流程。' },
   processing: { label: '整理中', bg: '#eef2ff', color: '#4338ca', border: '#c7d2fe', helper: '資料仍在整理，尚未完成確認。' },
-  needs_clarification: { label: '需要你補充', bg: '#fff7ed', color: '#b45309', border: '#fed7aa', helper: '請補充資料後送回醫療團隊。' },
+  needs_clarification: { label: '需要你補充', bg: '#fdf1e0', color: '#a97614', border: '#fed7aa', helper: '請補充資料後送回醫療團隊。' },
   replied: { label: '已回覆', bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd', helper: '你的補充已送回醫療團隊。' },
-  completed: { label: '已完成', bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0', helper: '這個動作已完成。' },
-  published: { label: '已發布', bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0', helper: '已更新到 User 端可見內容。' },
-  unpublished: { label: '暫時撤下', bg: '#f8fafc', color: '#475569', border: '#e2e8f0', helper: '醫療團隊暫時撤下先前發布內容。' },
-  withdrawn: { label: '已撤回', bg: '#f8fafc', color: '#475569', border: '#e2e8f0', helper: '這次異動已撤回。' },
-  reverted: { label: '已還原', bg: '#f8fafc', color: '#475569', border: '#e2e8f0', helper: '上一個操作已被還原。' },
-  rejected: { label: '未採用', bg: '#fef2f2', color: '#991b1b', border: '#fecaca', helper: '醫療團隊未採用這次異動。' },
-  failed: { label: '失敗', bg: '#fef2f2', color: '#b91c1c', border: '#fecaca', helper: '這個處理未成功，請查看下一步。' },
-  done: { label: '已記錄', bg: '#f1f5f9', color: '#475569', border: '#e2e8f0', helper: '自我紀錄已保存。' },
+  completed: { label: '已完成', bg: '#e7f4ec', color: '#2e8b57', border: '#cfe8da', helper: '這個動作已完成。' },
+  published: { label: '已發布', bg: '#e7f4ec', color: '#2e8b57', border: '#cfe8da', helper: '已更新到 User 端可見內容。' },
+  unpublished: { label: '暫時撤下', bg: '#f6f9fa', color: '#56687a', border: '#e3e9ee', helper: '醫療團隊暫時撤下先前發布內容。' },
+  withdrawn: { label: '已撤回', bg: '#f6f9fa', color: '#56687a', border: '#e3e9ee', helper: '這次異動已撤回。' },
+  reverted: { label: '已還原', bg: '#f6f9fa', color: '#56687a', border: '#e3e9ee', helper: '上一個操作已被還原。' },
+  rejected: { label: '未採用', bg: '#faecea', color: '#8f342b', border: '#f2d3cf', helper: '醫療團隊未採用這次異動。' },
+  failed: { label: '失敗', bg: '#faecea', color: '#b91c1c', border: '#f2d3cf', helper: '這個處理未成功，請查看下一步。' },
+  done: { label: '已記錄', bg: '#eef2f5', color: '#56687a', border: '#e3e9ee', helper: '自我紀錄已保存。' },
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -330,7 +330,7 @@ export default function HistoryPage() {
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '28px' }}>
         <button onClick={() => router.back()} style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#fff', border: '1px solid var(--gray-200)', fontSize: '18px', cursor: 'pointer', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: 'var(--shadow-sm)' }}>←</button>
@@ -350,30 +350,30 @@ export default function HistoryPage() {
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
         gap: '10px', marginBottom: '18px',
       }}>
-        <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '12px', padding: '12px' }}>
-          <div style={{ fontSize: '20px', fontWeight: 900, color: actionRequiredCount ? '#b45309' : '#64748b' }}>{actionRequiredCount}</div>
-          <div style={{ fontSize: '12px', fontWeight: 800, color: '#475569' }}>需要你處理</div>
-          <div style={{ fontSize: '11px', color: '#64748b', marginTop: 4 }}>補件、回覆或重新送交會出現在這裡。</div>
+        <div style={{ background: '#fdf1e0', border: '1px solid #fed7aa', borderRadius: '12px', padding: '12px' }}>
+          <div style={{ fontSize: '20px', fontWeight: 900, color: actionRequiredCount ? '#a97614' : '#6b7c8c' }}>{actionRequiredCount}</div>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: '#56687a' }}>需要你處理</div>
+          <div style={{ fontSize: '11px', color: '#6b7c8c', marginTop: 4 }}>補件、回覆或重新送交會出現在這裡。</div>
         </div>
-        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '12px' }}>
-          <div style={{ fontSize: '20px', fontWeight: 900, color: '#15803d' }}>{teamActivityCount}</div>
-          <div style={{ fontSize: '12px', fontWeight: 800, color: '#475569' }}>醫療團隊處理</div>
-          <div style={{ fontSize: '11px', color: '#64748b', marginTop: 4 }}>包含 QA、發布、撤回與補件要求。</div>
+        <div style={{ background: '#e7f4ec', border: '1px solid #cfe8da', borderRadius: '12px', padding: '12px' }}>
+          <div style={{ fontSize: '20px', fontWeight: 900, color: '#2e8b57' }}>{teamActivityCount}</div>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: '#56687a' }}>醫療團隊處理</div>
+          <div style={{ fontSize: '11px', color: '#6b7c8c', marginTop: 4 }}>包含 QA、發布、撤回與補件要求。</div>
         </div>
-        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px' }}>
-          <div style={{ fontSize: '20px', fontWeight: 900, color: '#0f172a' }}>{sourceLinkedCount}</div>
-          <div style={{ fontSize: '12px', fontWeight: 800, color: '#475569' }}>有 evidence</div>
-          <div style={{ fontSize: '11px', color: '#64748b', marginTop: 4 }}>可追溯到原始文件的更新。</div>
+        <div style={{ background: '#f6f9fa', border: '1px solid #e3e9ee', borderRadius: '12px', padding: '12px' }}>
+          <div style={{ fontSize: '20px', fontWeight: 900, color: '#22313f' }}>{sourceLinkedCount}</div>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: '#56687a' }}>有 evidence</div>
+          <div style={{ fontSize: '11px', color: '#6b7c8c', marginTop: 4 }}>可追溯到原始文件的更新。</div>
         </div>
       </div>
 
       <section style={{ background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)', padding: '18px', marginBottom: '26px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
           <div>
-            <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', margin: 0 }}>醫療互動與資料處理紀錄</h3>
-            <p style={{ fontSize: '13px', color: '#64748b', margin: '4px 0 0' }}>每筆紀錄都包含 actor、target、status、下一步與可追溯入口。</p>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#22313f', margin: 0 }}>醫療互動與資料處理紀錄</h3>
+            <p style={{ fontSize: '13px', color: '#6b7c8c', margin: '4px 0 0' }}>每筆紀錄都包含 actor、target、status、下一步與可追溯入口。</p>
           </div>
-          <button onClick={fetchActivity} style={{ border: '1px solid var(--gray-200)', background: '#fff', borderRadius: '10px', padding: '8px 12px', color: '#334155', fontWeight: 700, cursor: 'pointer' }}>
+          <button onClick={fetchActivity} style={{ border: '1px solid var(--gray-200)', background: '#fff', borderRadius: '10px', padding: '8px 12px', color: '#45596a', fontWeight: 700, cursor: 'pointer' }}>
             重新整理
           </button>
         </div>
@@ -384,40 +384,40 @@ export default function HistoryPage() {
               padding: '8px 14px', borderRadius: '999px', border: '1px solid',
               borderColor: activityTab === t.key ? 'var(--primary)' : 'var(--gray-200)',
               background: activityTab === t.key ? 'var(--primary)' : '#fff',
-              color: activityTab === t.key ? '#fff' : '#475569',
+              color: activityTab === t.key ? '#fff' : '#56687a',
               fontSize: '13px', fontWeight: 700, cursor: 'pointer',
             }}>{t.label}</button>
           ))}
         </div>
 
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
-          <label style={{ fontSize: '12px', color: '#64748b', fontWeight: 700 }}>
+          <label style={{ fontSize: '12px', color: '#6b7c8c', fontWeight: 700 }}>
             類型
             <select value={activityType} onChange={(e) => setActivityType(e.target.value)} style={{ marginLeft: 8, border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '6px 8px', background: '#fff' }}>
               {activityTypes.map(t => <option key={t} value={t}>{t === '全部' ? '全部' : TYPE_LABELS[t] || t}</option>)}
             </select>
           </label>
-          <label style={{ fontSize: '12px', color: '#64748b', fontWeight: 700 }}>
+          <label style={{ fontSize: '12px', color: '#6b7c8c', fontWeight: 700 }}>
             狀態
             <select value={activityStatus} onChange={(e) => setActivityStatus(e.target.value)} style={{ marginLeft: 8, border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '6px 8px', background: '#fff' }}>
               {activityStatuses.map(s => <option key={s} value={s}>{s === '全部' ? '全部' : STATUS_LABELS[s] || s}</option>)}
             </select>
           </label>
-          <label style={{ fontSize: '12px', color: '#64748b', fontWeight: 700 }}>
+          <label style={{ fontSize: '12px', color: '#6b7c8c', fontWeight: 700 }}>
             起日
             <input type="date" value={activityFrom} onChange={(e) => setActivityFrom(e.target.value)} style={{ marginLeft: 8, border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '5px 8px', background: '#fff' }} />
           </label>
-          <label style={{ fontSize: '12px', color: '#64748b', fontWeight: 700 }}>
+          <label style={{ fontSize: '12px', color: '#6b7c8c', fontWeight: 700 }}>
             迄日
             <input type="date" value={activityTo} onChange={(e) => setActivityTo(e.target.value)} style={{ marginLeft: 8, border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '5px 8px', background: '#fff' }} />
           </label>
-          <label style={{ fontSize: '12px', color: '#64748b', fontWeight: 700 }}>
+          <label style={{ fontSize: '12px', color: '#6b7c8c', fontWeight: 700 }}>
             來源文件
             <select value={activitySource} onChange={(e) => setActivitySource(e.target.value)} style={{ marginLeft: 8, border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '6px 8px', background: '#fff', maxWidth: 210 }}>
               {activitySources.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '12px', color: '#64748b', fontWeight: 700, border: '1px solid var(--gray-200)', borderRadius: '999px', padding: '6px 10px', background: activityOnlyAction ? '#fff7ed' : '#fff' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '12px', color: '#6b7c8c', fontWeight: 700, border: '1px solid var(--gray-200)', borderRadius: '999px', padding: '6px 10px', background: activityOnlyAction ? '#fdf1e0' : '#fff' }}>
             <input type="checkbox" checked={activityOnlyAction} onChange={(e) => setActivityOnlyAction(e.target.checked)} />
             只看需要我處理
           </label>
@@ -429,9 +429,9 @@ export default function HistoryPage() {
         </div>
 
         {activityLoading ? (
-          <div style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>正在載入健康管理記錄...</div>
+          <div style={{ textAlign: 'center', padding: '30px', color: '#93a3af' }}>正在載入健康管理記錄...</div>
         ) : activityLoadError ? (
-          <div role="alert" style={{ border: '1px solid #fecaca', background: '#fef2f2', borderRadius: '12px', padding: '22px', color: '#991b1b', lineHeight: 1.7 }}>
+          <div role="alert" style={{ border: '1px solid #f2d3cf', background: '#faecea', borderRadius: '12px', padding: '22px', color: '#8f342b', lineHeight: 1.7 }}>
             <div style={{ fontWeight: 800, marginBottom: '4px' }}>互動紀錄載入失敗</div>
             <div style={{ fontSize: '13px', color: '#7f1d1d' }}>這不代表沒有 CMO 處理紀錄或補件要求。請重新整理後再判斷目前狀態。</div>
             <button type="button" onClick={fetchActivity} style={{ marginTop: '12px', border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', borderRadius: '8px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: 'pointer' }}>
@@ -439,7 +439,7 @@ export default function HistoryPage() {
             </button>
           </div>
         ) : filteredActivity.length === 0 ? (
-          <div style={{ border: '1px dashed #cbd5e1', borderRadius: '12px', padding: '22px', color: '#64748b', lineHeight: 1.7 }}>
+          <div style={{ border: '1px dashed #c8d4dc', borderRadius: '12px', padding: '22px', color: '#6b7c8c', lineHeight: 1.7 }}>
             目前沒有符合條件的管理紀錄。若你剛上傳資料、回覆補充或醫療團隊剛發布更新，請按「重新整理」；也可以先到上傳頁新增 NHI、藥袋、回診資料。
           </div>
         ) : (
@@ -453,30 +453,30 @@ export default function HistoryPage() {
               const cta = needsAction ? '補充資料' : e.available_actions?.includes('undo_if_available') ? '查看復原方式' : '查看詳情';
               return (
                 <button key={e.id} onClick={() => router.push(routeWithMember(routeForActivity(e)))} style={{
-                  width: '100%', textAlign: 'left', background: needsAction ? '#fff7ed' : '#fff',
+                  width: '100%', textAlign: 'left', background: needsAction ? '#fdf1e0' : '#fff',
                   border: `1px solid ${needsAction ? '#fed7aa' : statusMeta.border}`,
                   borderRadius: '12px', padding: '14px 16px', cursor: 'pointer',
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 800, color: e.actor === 'you' ? '#2563eb' : e.actor === 'medical_team' ? '#047857' : '#64748b' }}>{e.actor_label || (e.actor === 'you' ? '你' : e.actor === 'medical_team' ? '醫療團隊' : '系統')}</span>
-                        <span style={{ fontSize: '11px', color: '#94a3b8' }}>{targetType}</span>
-                        {e.member_name && <span style={{ fontSize: '11px', color: '#475569', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '999px', padding: '2px 8px', fontWeight: 700 }}>{e.member_name}</span>}
+                        <span style={{ fontSize: '12px', fontWeight: 800, color: e.actor === 'you' ? '#3e6b7e' : e.actor === 'medical_team' ? '#2e8b57' : '#6b7c8c' }}>{e.actor_label || (e.actor === 'you' ? '你' : e.actor === 'medical_team' ? '醫療團隊' : '系統')}</span>
+                        <span style={{ fontSize: '11px', color: '#93a3af' }}>{targetType}</span>
+                        {e.member_name && <span style={{ fontSize: '11px', color: '#56687a', background: '#f6f9fa', border: '1px solid #e3e9ee', borderRadius: '999px', padding: '2px 8px', fontWeight: 700 }}>{e.member_name}</span>}
                         <span style={{
                           fontSize: '11px', color: statusMeta.color, background: statusMeta.bg,
                           border: `1px solid ${statusMeta.border}`, borderRadius: '999px',
                           padding: '2px 8px', fontWeight: 800,
                         }}>{STATUS_LABELS[status] || statusMeta.label}</span>
                       </div>
-                      <div style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a', lineHeight: 1.4 }}>{activityTitle(e)}</div>
-                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px', lineHeight: 1.5 }}>{e.short_description || e.patient_facing_note || '這筆資料有狀態更新，點擊可查看來源與下一步。'}</div>
+                      <div style={{ fontSize: '15px', fontWeight: 800, color: '#22313f', lineHeight: 1.4 }}>{activityTitle(e)}</div>
+                      <div style={{ fontSize: '12px', color: '#6b7c8c', marginTop: '4px', lineHeight: 1.5 }}>{e.short_description || e.patient_facing_note || '這筆資料有狀態更新，點擊可查看來源與下一步。'}</div>
                       <div style={{ fontSize: '12px', color: statusMeta.color, marginTop: '4px', lineHeight: 1.5, fontWeight: 700 }}>{statusMeta.helper}</div>
-                      {e.related_problem_label && <div style={{ fontSize: '12px', color: '#0e7490', marginTop: '4px' }}>相關 Problem：{e.related_problem_label}</div>}
-                      {e.source_document_id && <div style={{ fontSize: '12px', color: '#7c3aed', marginTop: '4px' }}>Evidence：已連結原始文件，可到文件庫查看（{e.source_document_id}）</div>}
+                      {e.related_problem_label && <div style={{ fontSize: '12px', color: '#3e6b7e', marginTop: '4px' }}>相關 Problem：{e.related_problem_label}</div>}
+                      {e.source_document_id && <div style={{ fontSize: '12px', color: '#7a5fc0', marginTop: '4px' }}>Evidence：已連結原始文件，可到文件庫查看（{e.source_document_id}）</div>}
                     </div>
                     <div style={{ flexShrink: 0, textAlign: 'right' }}>
-                      {at && <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px' }}>{formatDate(at)} {formatTime(at)}</div>}
+                      {at && <div style={{ fontSize: '11px', color: '#93a3af', marginBottom: '8px' }}>{formatDate(at)} {formatTime(at)}</div>}
                       <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: 800 }}>{cta} →</span>
                     </div>
                   </div>
@@ -488,8 +488,8 @@ export default function HistoryPage() {
       </section>
 
       <div style={{ marginBottom: '14px' }}>
-        <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', margin: 0 }}>量測流水帳</h3>
-        <p style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>血壓、血糖、體重、睡眠等自我量測紀錄。</p>
+        <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#22313f', margin: 0 }}>量測流水帳</h3>
+        <p style={{ fontSize: '13px', color: '#6b7c8c', marginTop: '4px' }}>血壓、血糖、體重、睡眠等自我量測紀錄。</p>
       </div>
 
       {/* Filters */}
@@ -533,9 +533,9 @@ export default function HistoryPage() {
       {loading ? (
         <div style={{ textAlign: 'center', padding: '60px', color: '#999', fontSize: '16px' }}>載入中...</div>
       ) : recordsLoadError ? (
-        <div role="alert" style={{ textAlign: 'center', padding: '48px', background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)', border: '1px solid #fecaca' }}>
-          <div style={{ fontWeight: '800', color: '#991b1b', marginBottom: '8px' }}>量測紀錄載入失敗</div>
-          <div style={{ fontSize: '13px', color: '#64748b', lineHeight: 1.6, marginBottom: '16px' }}>
+        <div role="alert" style={{ textAlign: 'center', padding: '48px', background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)', border: '1px solid #f2d3cf' }}>
+          <div style={{ fontWeight: '800', color: '#8f342b', marginBottom: '8px' }}>量測紀錄載入失敗</div>
+          <div style={{ fontSize: '13px', color: '#6b7c8c', lineHeight: 1.6, marginBottom: '16px' }}>
             這不代表沒有自我量測資料。請重新載入確認。
           </div>
           <button onClick={fetchRecords} style={{

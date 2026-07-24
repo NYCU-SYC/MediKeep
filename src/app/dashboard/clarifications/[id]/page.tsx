@@ -191,9 +191,9 @@ export default function ClarificationReplyPage() {
     return (
       <div className="page-wrap" style={{ maxWidth: 980, margin: '0 auto' }}>
         <section style={card} aria-busy="true">
-          <div style={{ width: '38%', height: 18, borderRadius: 999, background: '#e2e8f0', marginBottom: 12 }} />
-          <div style={{ width: '70%', height: 12, borderRadius: 999, background: '#f1f5f9', marginBottom: 8 }} />
-          <div style={{ width: '52%', height: 12, borderRadius: 999, background: '#f1f5f9' }} />
+          <div style={{ width: '38%', height: 18, borderRadius: 999, background: '#e3e9ee', marginBottom: 12 }} />
+          <div style={{ width: '70%', height: 12, borderRadius: 999, background: '#eef2f5', marginBottom: 8 }} />
+          <div style={{ width: '52%', height: 12, borderRadius: 999, background: '#eef2f5' }} />
         </section>
       </div>
     );
@@ -203,8 +203,8 @@ export default function ClarificationReplyPage() {
     return (
       <div className="page-wrap" style={{ maxWidth: 860, margin: '0 auto' }}>
         <button onClick={() => router.back()} style={backBtn}>← 返回</button>
-        <section style={{ ...card, borderColor: '#fecdd3', background: '#fff1f2' }}>
-          <h1 style={{ ...title, color: '#991b1b' }}>補充資料暫時無法載入</h1>
+        <section style={{ ...card, borderColor: '#fecdd3', background: '#faecea' }}>
+          <h1 style={{ ...title, color: '#8f342b' }}>補充資料暫時無法載入</h1>
           <p style={{ color: '#7f1d1d', lineHeight: 1.7 }}>這可能是 API、登入或權限狀態問題，不代表這筆 request 不存在。錯誤：{loadError}</p>
           <button onClick={() => setReloadToken((value) => value + 1)} style={primaryBtn}>重新載入</button>
         </section>
@@ -218,7 +218,7 @@ export default function ClarificationReplyPage() {
         <button onClick={() => router.back()} style={backBtn}>← 返回</button>
         <section style={card}>
           <h1 style={title}>找不到這筆補充資料</h1>
-          <p style={{ color: '#64748b' }}>這筆 request 可能已不存在，或目前不屬於你的帳號。</p>
+          <p style={{ color: '#6b7c8c' }}>這筆 request 可能已不存在，或目前不屬於你的帳號。</p>
         </section>
       </div>
     );
@@ -229,7 +229,7 @@ export default function ClarificationReplyPage() {
       <button onClick={() => router.back()} style={backBtn}>← 返回</button>
       <header style={{ marginBottom: 16 }}>
         <h1 style={title}>補充資料</h1>
-        <p style={{ color: '#64748b', margin: '4px 0 0', lineHeight: 1.6 }}>
+        <p style={{ color: '#6b7c8c', margin: '4px 0 0', lineHeight: 1.6 }}>
           醫療團隊需要你補充 · {requestItem.target_label}
         </p>
       </header>
@@ -240,8 +240,8 @@ export default function ClarificationReplyPage() {
           <span style={badge}>{requestItem.status}</span>
           <span style={badge}>{ACTION_LABELS[requestedAction] || requestedAction}</span>
         </div>
-        <h2 style={{ margin: '0 0 8px', fontSize: 18, color: '#0f172a' }}>{question}</h2>
-        <div style={{ color: '#64748b', fontSize: 13, lineHeight: 1.7 }}>
+        <h2 style={{ margin: '0 0 8px', fontSize: 18, color: '#22313f' }}>{question}</h2>
+        <div style={{ color: '#6b7c8c', fontSize: 13, lineHeight: 1.7 }}>
           建立時間：{fmtDate(requestItem.created_at)} · 更新時間：{fmtDate(requestItem.updated_at)}
         </div>
         {!canReply && (
@@ -252,7 +252,7 @@ export default function ClarificationReplyPage() {
       </section>
 
       <section style={{ ...card, marginTop: 14 }}>
-        <h2 style={{ margin: 0, fontSize: 18, color: '#0f172a' }}>你的回覆</h2>
+        <h2 style={{ margin: 0, fontSize: 18, color: '#22313f' }}>你的回覆</h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginTop: 12 }}>
           <label style={labelStyle}>
             補充說明
@@ -263,14 +263,14 @@ export default function ClarificationReplyPage() {
               相關日期
               <input type="date" value={replyDate} disabled={!canReply} onChange={(e) => setReplyDate(e.target.value)} style={input} />
             </label>
-            <label style={{ ...labelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
+            <label style={{ ...labelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, border: '1px solid #e3e9ee', borderRadius: 10, padding: 10 }}>
               <input type="checkbox" checked={uncertain} disabled={!canReply} onChange={(e) => setUncertain(e.target.checked)} />
               我不確定
             </label>
             <label style={labelStyle}>
               上傳照片/文件
               <input type="file" disabled={!canReply} onChange={(e) => setFile(e.target.files?.[0] ?? null)} style={input} />
-              {uploadedDocId && <span style={{ color: '#047857', fontSize: 12 }}>已上傳文件：{uploadedDocId}</span>}
+              {uploadedDocId && <span style={{ color: '#2e8b57', fontSize: 12 }}>已上傳文件：{uploadedDocId}</span>}
             </label>
           </div>
         </div>
@@ -280,14 +280,14 @@ export default function ClarificationReplyPage() {
           <button onClick={withdraw} disabled={!canWithdraw || busy !== ''} title={!canWithdraw ? '已處理或關閉，不能撤回' : '撤回尚未完成的補充/異動'} style={dangerBtn}>撤回</button>
         </div>
         {busy && (
-          <div style={{ ...notice, marginTop: 12, background: '#eff6ff', borderColor: '#bfdbfe', color: '#1d4ed8' }}>
+          <div style={{ ...notice, marginTop: 12, background: '#e7f3f5', borderColor: '#cfe3e8', color: '#33596a' }}>
             {busy === 'draft' ? '正在儲存草稿...' : busy === 'submit' ? '正在送回醫療團隊...' : busy === 'withdraw' ? '正在撤回...' : '正在處理...'}
           </div>
         )}
       </section>
 
       <section style={{ ...card, marginTop: 14 }}>
-        <h2 style={{ margin: 0, fontSize: 16, color: '#0f172a' }}>這筆補充會回到哪裡</h2>
+        <h2 style={{ margin: 0, fontSize: 16, color: '#22313f' }}>這筆補充會回到哪裡</h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginTop: 10 }}>
           <InfoTile label="資料項目" value={requestItem.target_label || payloadText(requestItem.current_snapshot, ['display_layman', 'display_name', 'drug_name', 'substance', 'title'])} />
           <InfoTile label="目前正式紀錄" value={payloadText(requestItem.current_snapshot, ['status', 'display_layman', 'display_name', 'drug_name', 'substance', 'title'])} />
@@ -295,7 +295,7 @@ export default function ClarificationReplyPage() {
           <InfoTile label="醫療團隊需要" value={ACTION_LABELS[requestedAction] || requestedAction} />
         </div>
         {(savedDraft || submittedReply) && (
-          <div style={{ ...notice, marginTop: 12, background: submittedReply ? '#ecfdf5' : '#f8fafc', borderColor: submittedReply ? '#a7f3d0' : '#e2e8f0', color: submittedReply ? '#047857' : '#475569' }}>
+          <div style={{ ...notice, marginTop: 12, background: submittedReply ? '#e7f4ec' : '#f6f9fa', borderColor: submittedReply ? '#bfe0cd' : '#e3e9ee', color: submittedReply ? '#2e8b57' : '#56687a' }}>
             <strong>{submittedReply ? '已送出的補充' : '已儲存的草稿'}：</strong>
             {payloadText((submittedReply || savedDraft) as Record<string, unknown>, ['reply_text'])}
             {payloadText((submittedReply || savedDraft) as Record<string, unknown>, ['reply_date']) !== '未記錄' && ` · 日期 ${payloadText((submittedReply || savedDraft) as Record<string, unknown>, ['reply_date'])}`}
@@ -308,21 +308,21 @@ export default function ClarificationReplyPage() {
 
 function InfoTile({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
-      <div style={{ fontSize: 12, color: '#64748b', fontWeight: 850, marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.5, wordBreak: 'break-word' }}>{value}</div>
+    <div style={{ background: '#f6f9fa', border: '1px solid #e3e9ee', borderRadius: 10, padding: 10 }}>
+      <div style={{ fontSize: 12, color: '#6b7c8c', fontWeight: 850, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 13, color: '#22313f', lineHeight: 1.5, wordBreak: 'break-word' }}>{value}</div>
     </div>
   );
 }
 
-const title: React.CSSProperties = { margin: '8px 0 0', color: '#0f172a', fontSize: 28, fontWeight: 900 };
-const card: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: 18, boxShadow: 'var(--shadow-sm)' };
-const badge: React.CSSProperties = { display: 'inline-flex', borderRadius: 999, background: '#f1f5f9', color: '#475569', padding: '3px 8px', fontSize: 11, fontWeight: 850 };
-const notice: React.CSSProperties = { background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 10, padding: 10, fontSize: 13, lineHeight: 1.6 };
-const backBtn: React.CSSProperties = { border: '1px solid #e2e8f0', background: '#fff', color: '#334155', borderRadius: 10, padding: '8px 12px', fontWeight: 800, cursor: 'pointer' };
-const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#64748b', fontWeight: 850 };
-const input: React.CSSProperties = { border: '1px solid #cbd5e1', borderRadius: 10, padding: 10, fontSize: 13, background: '#fff' };
+const title: React.CSSProperties = { margin: '8px 0 0', color: '#22313f', fontSize: 28, fontWeight: 900 };
+const card: React.CSSProperties = { background: '#fff', border: '1px solid #e3e9ee', borderRadius: 14, padding: 18, boxShadow: 'var(--shadow-sm)' };
+const badge: React.CSSProperties = { display: 'inline-flex', borderRadius: 999, background: '#eef2f5', color: '#56687a', padding: '3px 8px', fontSize: 11, fontWeight: 850 };
+const notice: React.CSSProperties = { background: '#fdf1e0', border: '1px solid #fed7aa', color: '#b06a10', borderRadius: 10, padding: 10, fontSize: 13, lineHeight: 1.6 };
+const backBtn: React.CSSProperties = { border: '1px solid #e3e9ee', background: '#fff', color: '#45596a', borderRadius: 10, padding: '8px 12px', fontWeight: 800, cursor: 'pointer' };
+const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#6b7c8c', fontWeight: 850 };
+const input: React.CSSProperties = { border: '1px solid #c8d4dc', borderRadius: 10, padding: 10, fontSize: 13, background: '#fff' };
 const textarea: React.CSSProperties = { ...input, resize: 'vertical', minHeight: 160 };
-const primaryBtn: React.CSSProperties = { border: 'none', background: '#2563eb', color: '#fff', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
-const secondaryBtn: React.CSSProperties = { border: '1px solid #cbd5e1', background: '#fff', color: '#334155', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
-const dangerBtn: React.CSSProperties = { border: '1px solid #fecdd3', background: '#fff1f2', color: '#be123c', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
+const primaryBtn: React.CSSProperties = { border: 'none', background: '#3e6b7e', color: '#fff', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
+const secondaryBtn: React.CSSProperties = { border: '1px solid #c8d4dc', background: '#fff', color: '#45596a', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
+const dangerBtn: React.CSSProperties = { border: '1px solid #fecdd3', background: '#faecea', color: '#a03a30', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };

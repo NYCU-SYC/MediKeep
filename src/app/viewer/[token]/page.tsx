@@ -270,7 +270,7 @@ function DicomViewer({
             <span style={{ color: '#555', fontSize: '11px', width: '52px', flexShrink: 0 }}>切片</span>
             <input type="range" min={0} max={sorted.length - 1} value={currentIdx}
               onChange={e => { setCurrentIdx(parseInt(e.target.value)); setImageLoading(true); setImageError(false); }}
-              style={{ flex: 1, accentColor: '#007bff', cursor: 'pointer' }} />
+              style={{ flex: 1, accentColor: '#3e6b7e', cursor: 'pointer' }} />
             <span style={{ color: '#666', fontSize: '11px', width: '52px', textAlign: 'right', flexShrink: 0 }}>
               {currentIdx + 1}/{sorted.length}
             </span>
@@ -390,7 +390,7 @@ export default function PublicViewerPage() {
                   padding: '5px 12px', borderRadius: '6px', border: '1px solid',
                   borderColor: selectedSeriesId === s.id ? '#1565c0' : '#333',
                   background: selectedSeriesId === s.id ? '#1565c0' : '#1a1a1a',
-                  color: s.storage_available === false ? '#b45309' : (selectedSeriesId === s.id ? '#fff' : '#888'),
+                  color: s.storage_available === false ? '#a97614' : (selectedSeriesId === s.id ? '#fff' : '#888'),
                   fontSize: '12px', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap',
                 }}>
                   {s.series_description || `序列 ${s.series_number ?? '?'}`}

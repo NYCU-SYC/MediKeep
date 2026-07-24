@@ -129,7 +129,7 @@ function StatRow({ points, unit, showDiastolic }: { points: Point[]; unit: strin
       </div>
       {/* Diastolic note for blood pressure */}
       {diastolicAvg !== null && (
-        <div style={{ fontSize: '12px', color: '#64748b', marginTop: '10px', textAlign: 'center' }}>
+        <div style={{ fontSize: '12px', color: '#6b7c8c', marginTop: '10px', textAlign: 'center' }}>
           舒張壓平均：{diastolicAvg.toFixed(0)} mmHg（虛線）
         </div>
       )}
@@ -204,7 +204,7 @@ export default function TrendsPage() {
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
         {/* ── Header ── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '24px' }}>
@@ -218,8 +218,8 @@ export default function TrendsPage() {
             }}
           >←</button>
           <div style={{ flex: 1 }}>
-            <h2 style={{ fontSize: '22px', fontWeight: '800', color: '#0f172a', lineHeight: 1.2 }}>趨勢分析</h2>
-            <p style={{ fontSize: '13px', color: '#64748b', marginTop: '3px' }}>
+            <h2 style={{ fontSize: '22px', fontWeight: '800', color: '#22313f', lineHeight: 1.2 }}>趨勢分析</h2>
+            <p style={{ fontSize: '13px', color: '#6b7c8c', marginTop: '3px' }}>
               {activeMember ? `${activeMember}的健康指標趨勢` : '追蹤各項健康指標的變化'}
             </p>
           </div>
@@ -230,7 +230,7 @@ export default function TrendsPage() {
                 background: 'var(--primary)', color: '#fff', border: 'none',
                 padding: '10px 18px', borderRadius: '10px', fontWeight: '700',
                 fontSize: '14px', cursor: 'pointer', flexShrink: 0,
-                boxShadow: '0 2px 8px rgba(0,123,255,0.3)',
+                boxShadow: '0 2px 8px rgba(14,116,144,0.3)',
               }}
             >
               + 新增
@@ -245,10 +245,10 @@ export default function TrendsPage() {
             textAlign: 'center', boxShadow: 'var(--shadow-sm)', marginBottom: '20px',
           }}>
             <div style={{ fontSize: '52px', marginBottom: '16px' }}>📈</div>
-            <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a', marginBottom: '10px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#22313f', marginBottom: '10px' }}>
               請選擇要查看的成員
             </h3>
-            <p style={{ fontSize: '14px', color: '#64748b', lineHeight: 1.7, marginBottom: '24px' }}>
+            <p style={{ fontSize: '14px', color: '#6b7c8c', lineHeight: 1.7, marginBottom: '24px' }}>
               趨勢分析針對個別成員的健康數據，<br />請從上方選擇成員後查看圖表。
             </p>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -305,18 +305,18 @@ export default function TrendsPage() {
             {loading ? (
               <div style={{ background: '#fff', borderRadius: '16px', padding: '60px', textAlign: 'center', boxShadow: 'var(--shadow-sm)', marginBottom: '24px' }}>
                 <div style={{ width: '36px', height: '36px', border: '3px solid var(--gray-200)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
-                <div style={{ color: '#94a3b8', fontSize: '14px' }}>載入中...</div>
+                <div style={{ color: '#93a3af', fontSize: '14px' }}>載入中...</div>
                 <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
               </div>
             ) : points.length >= 2 ? (
               <div style={{ background: '#fff', borderRadius: '16px', padding: '24px', boxShadow: 'var(--shadow-sm)', marginBottom: '24px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '8px' }}>
                   <div>
-                    <h3 style={{ fontSize: '17px', fontWeight: '800', color: '#0f172a' }}>
+                    <h3 style={{ fontSize: '17px', fontWeight: '800', color: '#22313f' }}>
                       {metric.icon} {metric.label}
-                      <span style={{ fontSize: '13px', color: '#94a3b8', fontWeight: 'normal', marginLeft: '8px' }}>· {activeMember}</span>
+                      <span style={{ fontSize: '13px', color: '#93a3af', fontWeight: 'normal', marginLeft: '8px' }}>· {activeMember}</span>
                     </h3>
-                    <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                    <p style={{ fontSize: '12px', color: '#93a3af', marginTop: '2px' }}>
                       最近 {points.length} 筆紀錄
                       {isBP && ' · 實線=收縮壓，虛線=舒張壓'}
                     </p>
@@ -333,23 +333,23 @@ export default function TrendsPage() {
               </div>
             ) : points.length === 1 ? (
               <div style={{ background: '#fff', borderRadius: '16px', padding: '28px', boxShadow: 'var(--shadow-sm)', marginBottom: '24px' }}>
-                <h3 style={{ fontSize: '17px', fontWeight: '800', marginBottom: '20px', color: '#0f172a' }}>{metric.icon} {metric.label}</h3>
+                <h3 style={{ fontSize: '17px', fontWeight: '800', marginBottom: '20px', color: '#22313f' }}>{metric.icon} {metric.label}</h3>
                 <div style={{ textAlign: 'center', padding: '20px' }}>
                   <div style={{ fontSize: '48px', fontWeight: '900', color: metric.color, lineHeight: 1 }}>{points[0].value}</div>
-                  <div style={{ fontSize: '14px', color: '#94a3b8', marginTop: '6px' }}>{metric.unit}</div>
-                  <p style={{ fontSize: '13px', color: '#94a3b8', marginTop: '12px' }}>僅有 1 筆紀錄，再新增 1 筆即可看到趨勢圖</p>
+                  <div style={{ fontSize: '14px', color: '#93a3af', marginTop: '6px' }}>{metric.unit}</div>
+                  <p style={{ fontSize: '13px', color: '#93a3af', marginTop: '12px' }}>僅有 1 筆紀錄，再新增 1 筆即可看到趨勢圖</p>
                 </div>
               </div>
             ) : (
               <div style={{ background: '#fff', borderRadius: '16px', padding: '60px 32px', textAlign: 'center', boxShadow: 'var(--shadow-sm)', marginBottom: '24px' }}>
                 <div style={{ fontSize: '48px', marginBottom: '16px' }}>📈</div>
-                <div style={{ fontWeight: '700', color: '#0f172a', marginBottom: '8px', fontSize: '17px' }}>
+                <div style={{ fontWeight: '700', color: '#22313f', marginBottom: '8px', fontSize: '17px' }}>
                   {activeMember} 還沒有 {metric.label} 的紀錄
                 </div>
-                <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '24px' }}>開始記錄即可看到趨勢圖表</p>
+                <p style={{ fontSize: '13px', color: '#93a3af', marginBottom: '24px' }}>開始記錄即可看到趨勢圖表</p>
                 <button
                   onClick={() => router.push(`/dashboard/upload?type=${activeMetricKey === 'body_fat' ? 'body_composition' : metric.key}`)}
-                  style={{ background: 'var(--primary)', color: '#fff', border: 'none', padding: '12px 28px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,123,255,0.3)' }}
+                  style={{ background: 'var(--primary)', color: '#fff', border: 'none', padding: '12px 28px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', boxShadow: '0 2px 8px rgba(14,116,144,0.3)' }}
                 >
                   + 記錄第一筆 {metric.label}
                 </button>
@@ -359,7 +359,7 @@ export default function TrendsPage() {
             {/* Overview grid — other metrics */}
             {Object.values(summary).some(arr => arr && arr.length > 0) && (
               <>
-                <div style={{ fontSize: '11px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px' }}>
+                <div style={{ fontSize: '11px', fontWeight: '700', color: '#93a3af', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px' }}>
                   全部指標概覽
                 </div>
                 <div className="grid-2col">
@@ -400,10 +400,10 @@ export default function TrendsPage() {
                             </span>
                           )}
                         </div>
-                        <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '3px', fontWeight: '600' }}>{m.label}</div>
-                        <div style={{ fontSize: '22px', fontWeight: '800', color: '#0f172a' }}>
+                        <div style={{ fontSize: '12px', color: '#93a3af', marginBottom: '3px', fontWeight: '600' }}>{m.label}</div>
+                        <div style={{ fontSize: '22px', fontWeight: '800', color: '#22313f' }}>
                           {m.key === 'steps' ? last.toLocaleString() : last.toFixed(1)}
-                          {m.unit && <span style={{ fontSize: '12px', fontWeight: 'normal', color: '#94a3b8', marginLeft: '4px' }}>{m.unit}</span>}
+                          {m.unit && <span style={{ fontSize: '12px', fontWeight: 'normal', color: '#93a3af', marginLeft: '4px' }}>{m.unit}</span>}
                         </div>
                         {miniPts.length >= 2 && (
                           <div style={{ height: '28px', display: 'flex', alignItems: 'flex-end', gap: '2px', marginTop: '10px' }}>

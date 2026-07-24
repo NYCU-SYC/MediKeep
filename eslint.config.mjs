@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // macOS AppleDouble / metadata junk that gets synced into the repo — these
+    // are not real source files and cause "Parsing error: Invalid character".
+    "**/._*",
+    "**/.DS_Store",
+    "**/*.bak",
   ]),
 ]);
 

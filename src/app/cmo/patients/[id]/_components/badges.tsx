@@ -23,17 +23,17 @@ export function ReviewStatusBadge({ status }: { status: string }) {
 
 export function ClinicalPublishBadge({ verified, published }: { verified?: boolean; published?: boolean }) {
   const copy = published ? 'Patient visible' : verified ? 'Verified, not published' : 'Needs CMO verify'
-  const bg = published ? '#eff6ff' : verified ? '#ecfdf5' : '#fff7ed'
-  const fg = published ? '#1d4ed8' : verified ? '#047857' : '#c2410c'
+  const bg = published ? '#e7f3f5' : verified ? '#e7f4ec' : '#fdf1e0'
+  const fg = published ? '#33596a' : verified ? '#2e8b57' : '#b06a10'
   return <span className="cmo-badge" style={{ background: bg, color: fg }}>{copy}</span>
 }
 
 export function CriticalTile({ title, value, tone }: { title: string; value: string; tone: string }) {
   const missing = /未記錄|未填|未知|not recorded/i.test(value)
   return (
-    <div className="cmo-card cmo-section" style={{ background: missing ? '#fefce8' : '#f8fafc', borderColor: missing ? '#fde68a' : undefined }}>
+    <div className="cmo-card cmo-section" style={{ background: missing ? '#fefce8' : '#f6f9fa', borderColor: missing ? '#efdfae' : undefined }}>
       <div className="cmo-kpi-label">{title}</div>
-      <div style={{ marginTop: 8, color: missing ? '#854d0e' : tone, fontWeight: 820, lineHeight: 1.45 }}>{value}</div>
+      <div style={{ marginTop: 8, color: missing ? '#a97614' : tone, fontWeight: 820, lineHeight: 1.45 }}>{value}</div>
       {missing && <div className="cmo-subtitle" style={{ marginTop: 6, fontSize: 11 }}>未知需補，不代表正常。</div>}
     </div>
   )
