@@ -224,6 +224,13 @@
 .cmo-structure-panel>.cmo-list{order:2;margin-top:0!important}
 .cmo-structure-panel>form .cmo-section-title{margin-bottom:10px;color:#33596a}
 .cmo-structure-panel>form .cmo-form-grid{margin-bottom:12px}
+.cmo-c7-problem-review{margin-top:12px;padding:14px;border:1px solid #cfe3e8;border-radius:12px;background:#fff}
+.cmo-c7-review-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}
+.cmo-c7-review-pane{min-width:0;padding:11px;border:1px solid #e3e9ee;border-radius:10px;background:#f8fafb}
+.cmo-c7-review-list{display:flex;max-height:300px;flex-direction:column;gap:8px;margin-top:10px;overflow:auto;scrollbar-gutter:stable}
+.cmo-c7-problem-row,.cmo-c7-evidence-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;padding:10px;border:1px solid #e3e9ee;border-radius:9px;background:#fff}
+.cmo-c7-problem-row strong,.cmo-c7-evidence-row strong{display:block;color:#22313f;font-size:13px;line-height:1.4}
+.cmo-c7-problem-review>form{max-height:min(600px,calc(100vh - 150px));overflow:auto;border-color:#b9d8ca!important;background:#f6fbf8!important;scrollbar-gutter:stable}
 .cmo-reference-workflow{display:grid;grid-template-columns:minmax(380px,.42fr) minmax(0,.58fr);gap:16px;align-items:start}
 .cmo-reference-workflow>.cmo-card,.cmo-reference-workflow>.cmo-sticky-panel{min-width:0}
 .cmo-review-workspace{display:grid;grid-template-columns:minmax(390px,.72fr) minmax(760px,1.28fr);gap:16px;align-items:start;margin-top:16px}
@@ -456,3 +463,6 @@
 .cmo-nhi-sub{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;margin-top:3px;color:#6b7c8c;font-size:12px;line-height:1.45}
 .cmo-nhi-icd{color:#56687a;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;white-space:nowrap}
 .cmo-nhi-shell .cmo-triage-table .cmo-badge{font-size:10.5px;font-weight:750;padding:3px 7px}
+
+@media (max-width:980px){.cmo-c7-review-grid{grid-template-columns:1fr}.cmo-c7-review-list{max-height:none}}
+@media (max-width:560px){.cmo-c7-problem-row,.cmo-c7-evidence-row{grid-template-columns:1fr}.cmo-c7-problem-row .cmo-chipbar{justify-content:flex-start}}

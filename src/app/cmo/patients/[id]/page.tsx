@@ -1525,14 +1525,14 @@ export default function CmoPatientWorkspacePage() {
     return true
   }, [])
 
-  const openProblemCreator = (context?: ProblemCreationContext) => {
+  const openProblemCreator = (context?: ProblemCreationContext, options?: { keepMode?: boolean }) => {
     setPendingProblemLink(context ?? null)
     setProblemCreatorOpen(true)
     if (context) {
       setProblemForm((current) => current.title.trim() ? current : { ...current, title: context.resourceLabel })
     }
     problemCreatorFocusPending.current = true
-    if (activeMode !== 'structure') setActiveMode('structure')
+    if (!options?.keepMode && activeMode !== 'structure') setActiveMode('structure')
   }
 
   const closeProblemCreator = () => {
@@ -1543,7 +1543,7 @@ export default function CmoPatientWorkspacePage() {
   }
 
   useEffect(() => {
-    if (activeMode !== 'structure' || !problemCreatorOpen || !problemCreatorFocusPending.current) return
+    if (!problemCreatorOpen || !problemCreatorFocusPending.current) return
     const frame = window.requestAnimationFrame(() => {
       problemCreatorFocusPending.current = !focusProblemCreator()
     })
@@ -1717,7 +1717,17 @@ export default function CmoPatientWorkspacePage() {
                 onSave={() => void saveSummary(false)}
                 onReady={() => void saveSummary(true)}
                 onPublish={() => void publishSummary()}
-                onCreateProblem={openProblemCreator}
+                problemForm={problemForm}
+                setProblemForm={setProblemForm}
+                problemCreatorOpen={problemCreatorOpen}
+                pendingProblemLink={pendingProblemLink}
+                sourceConditions={workspace.cmo_output.unlinked?.conditions ?? workspace.cmo_output.conditions ?? []}
+                onSubmitProblem={createProblem}
+                onCreateProblem={(context) => openProblemCreator(context, { keepMode: true })}
+                onCloseProblemCreator={closeProblemCreator}
+                onClearProblemLink={() => setPendingProblemLink(null)}
+                onProblemAction={runProblemAction}
+                onDeleteProblem={(problem) => void deleteProblem(problem)}
               />
             </div>
           </section>
@@ -1971,7 +1981,17 @@ export default function CmoPatientWorkspacePage() {
             onSave={() => void saveSummary(false)}
             onReady={() => void saveSummary(true)}
             onPublish={() => void publishSummary()}
-            onCreateProblem={openProblemCreator}
+            problemForm={problemForm}
+            setProblemForm={setProblemForm}
+            problemCreatorOpen={problemCreatorOpen}
+            pendingProblemLink={pendingProblemLink}
+            sourceConditions={workspace.cmo_output.unlinked?.conditions ?? workspace.cmo_output.conditions ?? []}
+            onSubmitProblem={createProblem}
+            onCreateProblem={(context) => openProblemCreator(context, { keepMode: true })}
+            onCloseProblemCreator={closeProblemCreator}
+            onClearProblemLink={() => setPendingProblemLink(null)}
+            onProblemAction={runProblemAction}
+            onDeleteProblem={(problem) => void deleteProblem(problem)}
           />
           </div>
         </section>
@@ -2547,6 +2567,140 @@ function ProblemCreateForm({
   )
 }
 
+function C7ProblemReviewPanel({
+  workspace,
+  busy,
+  form,
+  setForm,
+  creatorOpen,
+  pendingLink,
+  sourceConditions,
+  onSubmit,
+  onCreateProblem,
+  onCloseCreator,
+  onClearPendingLink,
+  onProblemAction,
+  onDeleteProblem,
+  onUseProblem,
+}: {
+  workspace: WorkspaceResponse
+  busy: string
+  form: ProblemForm
+  setForm: (form: ProblemForm) => void
+  creatorOpen: boolean
+  pendingLink: ProblemCreationContext | null
+  sourceConditions: ConditionReview[]
+  onSubmit: (event: FormEvent) => void
+  onCreateProblem: (context?: ProblemCreationContext) => void
+  onCloseCreator: () => void
+  onClearPendingLink: () => void
+  onProblemAction: (problem: HealthProblem, action: ProblemAction) => void
+  onDeleteProblem: (problem: HealthProblem) => void
+  onUseProblem: (problem: HealthProblem) => void
+}) {
+  const problems = workspace.cmo_output.problems
+  const evidenceRows = workspace.source_review.nhi_records
+    .filter((record) => record.triage_status !== 'dismissed' && record.triage_status !== 'rejected')
+    .slice(0, 6)
+  const existingNames = new Set(problems.flatMap((problem) => [problem.title, problem.plain_language_title].filter(Boolean).map((value) => String(value).trim().toLowerCase())))
+  const candidateConditions = sourceConditions
+    .filter((condition) => !existingNames.has(String(condition.display_name ?? '').trim().toLowerCase()))
+    .slice(0, 5)
+
+  return (
+    <section className="cmo-c7-problem-review" aria-label="C7 Problem review and creation">
+      <div className="cmo-title-row" style={{ alignItems: 'flex-start' }}>
+        <div>
+          <div className="cmo-kpi-label">同頁審閱與建立</div>
+          <h4 className="cmo-section-title">Patient Problem 工作區</h4>
+          <div className="cmo-subtitle">選既有 Problem 帶入 C7；也能從病人資料建立並自動關聯，或直接手動新增。</div>
+        </div>
+        <button type="button" className="cmo-button primary" onClick={() => creatorOpen ? onCloseCreator() : onCreateProblem()}>
+          {creatorOpen ? '收合新增' : '＋ 快捷新增 Problem'}
+        </button>
+      </div>
+
+      <div className="cmo-c7-review-grid">
+        <div className="cmo-c7-review-pane">
+          <div className="cmo-title-row" style={{ gap: 8 }}>
+            <strong>目前 Problem</strong>
+            <ToneBadge label={`${problems.length} 筆`} tone={problems.length ? 'blue' : 'amber'} />
+          </div>
+          <div className="cmo-c7-review-list">
+            {problems.length === 0 ? <EmptyText text="目前沒有 Problem，可從右側病人資料建立或手動新增。" /> : problems.map((problem) => {
+              const label = problem.plain_language_title || problem.title
+              const problemBusy = busy === `problem-${problem.problem_id}` || busy === `problem-delete-${problem.problem_id}`
+              return (
+                <article key={problem.problem_id} className="cmo-c7-problem-row">
+                  <div>
+                    <strong>{label}</strong>
+                    <div className="cmo-subtitle">{problem.icd10_code || '無 ICD-10'} · {problem.is_published ? '使用者可見' : problem.is_verified ? '已確認、未發布' : '待確認草稿'}</div>
+                  </div>
+                  <div className="cmo-chipbar">
+                    <button type="button" className="cmo-button" disabled={problemBusy} onClick={() => onUseProblem(problem)}>帶入 C7</button>
+                    {problem.is_published ? (
+                      <button type="button" className="cmo-button" disabled={problemBusy} onClick={() => onProblemAction(problem, 'unpublish')} title="已發布內容需先撤下，才能刪除">
+                        先撤下
+                      </button>
+                    ) : (
+                      <button type="button" className="cmo-button danger" disabled={problemBusy} onClick={() => onDeleteProblem(problem)}>
+                        {busy === `problem-delete-${problem.problem_id}` ? '刪除中…' : '刪除'}
+                      </button>
+                    )}
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="cmo-c7-review-pane">
+          <div className="cmo-title-row" style={{ gap: 8 }}>
+            <strong>可轉成 Problem 的病人資料</strong>
+            <ToneBadge label="建立時自動關聯" tone="green" />
+          </div>
+          <div className="cmo-c7-review-list">
+            {candidateConditions.map((condition) => (
+              <article key={`condition-${condition.id}`} className="cmo-c7-evidence-row">
+                <div>
+                  <strong>{condition.display_name}</strong>
+                  <div className="cmo-subtitle">診斷 / 病史{condition.icd10_code ? ` · ${condition.icd10_code}` : ''}</div>
+                </div>
+                <button type="button" className="cmo-button" onClick={() => onCreateProblem({ resourceType: 'condition', resourceId: condition.id, resourceLabel: condition.display_name })}>由此建立</button>
+              </article>
+            ))}
+            {evidenceRows.map((record) => {
+              const label = cleanText(record.diagnosis || record.title || record.summary, `${record.section_label}紀錄`)
+              return (
+                <article key={`nhi-${record.id}`} className="cmo-c7-evidence-row">
+                  <div>
+                    <strong>{shortText(label, 'NHI 紀錄', 46)}</strong>
+                    <div className="cmo-subtitle">{record.section_label} · {formatDateOnly(record.date)} · {record.facility || '院所未記錄'}</div>
+                  </div>
+                  <button type="button" className="cmo-button" onClick={() => onCreateProblem({ resourceType: 'nhi_draft', resourceId: record.id, resourceLabel: label })}>由此建立</button>
+                </article>
+              )
+            })}
+            {candidateConditions.length === 0 && evidenceRows.length === 0 && <EmptyText text="目前沒有待整理的病人資料；仍可使用手動新增。" />}
+          </div>
+        </div>
+      </div>
+
+      {creatorOpen && (
+        <ProblemCreateForm
+          sourceConditions={sourceConditions}
+          busy={busy}
+          form={form}
+          setForm={setForm}
+          pendingLink={pendingLink}
+          onSubmit={onSubmit}
+          onClose={onCloseCreator}
+          onClearPendingLink={onClearPendingLink}
+        />
+      )}
+    </section>
+  )
+}
 function ProblemListPanel({
   problems,
   sourceConditions,
@@ -2909,7 +3063,17 @@ function SummaryBuilder({
   onSave,
   onReady,
   onPublish,
+  problemForm,
+  setProblemForm,
+  problemCreatorOpen,
+  pendingProblemLink,
+  sourceConditions,
+  onSubmitProblem,
   onCreateProblem,
+  onCloseProblemCreator,
+  onClearProblemLink,
+  onProblemAction,
+  onDeleteProblem,
 }: {
   workspace: WorkspaceResponse
   form: SummaryForm
@@ -2924,7 +3088,17 @@ function SummaryBuilder({
   onSave: () => void
   onReady: () => void
   onPublish: () => void
-  onCreateProblem: () => void
+  problemForm: ProblemForm
+  setProblemForm: (form: ProblemForm) => void
+  problemCreatorOpen: boolean
+  pendingProblemLink: ProblemCreationContext | null
+  sourceConditions: ConditionReview[]
+  onSubmitProblem: (event: FormEvent) => void
+  onCreateProblem: (context?: ProblemCreationContext) => void
+  onCloseProblemCreator: () => void
+  onClearProblemLink: () => void
+  onProblemAction: (problem: HealthProblem, action: ProblemAction) => void
+  onDeleteProblem: (problem: HealthProblem) => void
 }) {
   const checks = summaryPublishChecks(form, sourceRefs)
   const localBlockers = SUMMARY_PUBLISH_CHECKS.filter((item) => !checks[item.key]).map((item) => item.blocker)
@@ -3007,11 +3181,27 @@ function SummaryBuilder({
             <h3 className="cmo-section-title">C7 需要注意</h3>
             <div className="cmo-subtitle">病人端首頁只顯示這五格；每格最多 20 字。</div>
           </div>
-          <div className="cmo-chipbar">
-            <button type="button" className="cmo-button primary" onClick={() => onCreateProblem()}>＋ 新增 Problem</button>
-            <ToneBadge label={Object.values(form.attention_cells).some(Boolean) ? '已填寫' : '空白'} tone={Object.values(form.attention_cells).some(Boolean) ? 'green' : 'amber'} />
-          </div>
+          <ToneBadge label={Object.values(form.attention_cells).some(Boolean) ? '已填寫' : '空白'} tone={Object.values(form.attention_cells).some(Boolean) ? 'green' : 'amber'} />
         </div>
+        <C7ProblemReviewPanel
+          workspace={workspace}
+          busy={busy}
+          form={problemForm}
+          setForm={setProblemForm}
+          creatorOpen={problemCreatorOpen}
+          pendingLink={pendingProblemLink}
+          sourceConditions={sourceConditions}
+          onSubmit={onSubmitProblem}
+          onCreateProblem={onCreateProblem}
+          onCloseCreator={onCloseProblemCreator}
+          onClearPendingLink={onClearProblemLink}
+          onProblemAction={onProblemAction}
+          onDeleteProblem={onDeleteProblem}
+          onUseProblem={(problem) => {
+            const label = (problem.plain_language_title || problem.title).slice(0, 20)
+            setForm({ ...form, attention_cells: { ...form.attention_cells, condition: label } })
+          }}
+        />
         <div className="cmo-form-grid" style={{ marginTop: 12 }}>
           {attentionCellFields.map((field) => {
             const value = form.attention_cells[field.key] || ''
