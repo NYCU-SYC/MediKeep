@@ -9,16 +9,18 @@ import { api, setPatientSessionToken } from '@/lib/api';
 import { SyncProvider } from '@/lib/sync';
 import { ALL_MEMBERS, memberHref, normalizeMemberName } from '@/lib/members';
 import { Icon, HeartLogo } from './_components/Icon';
+import NhiOnboardingGate from '@/components/NhiOnboardingGate';
 
 // ── Desktop sidebar — reminders are reachable from the bell / secondary lists.
 const menuSections = [
   {
-    label: '主要',
-    items: [
-      { name: '首頁', icon: '🏠', href: '/dashboard' },
-      { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
-      { name: '家庭與權限', icon: '👤', href: '/dashboard/settings' },
-    ],
+      label: '主要',
+      items: [
+        { name: '首頁', icon: '🏠', href: '/dashboard' },
+        { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
+        { name: '健康時間軸', icon: '📋', href: '/dashboard/timeline' },
+        { name: '家庭與權限', icon: '👤', href: '/dashboard/settings' },
+      ],
   },
   {
     label: '健康細節',
@@ -1040,6 +1042,9 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
       {/* ── Main Content ─────────────────────────────────────────────────────────── */}
       <main className="app-main">
         <SyncProvider scope="patient" enabled={authChecked}>
+          <Suspense fallback={null}>
+            <NhiOnboardingGate />
+          </Suspense>
           {pathname !== '/dashboard' && (
             <MemberActionBar canUseFamilyUi={canUseFamilyUi} onSwitchMember={switchMember} />
           )}

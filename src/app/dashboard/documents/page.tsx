@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useActiveMember } from '../member-context';
 import { useToast } from '../toast-context';
 import { ALL_MEMBERS, memberHref, memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
+import { api } from '@/lib/api';
 
 type DocOut = {
   id: string;
@@ -132,8 +133,11 @@ export default function DocumentsPage() {
     if (!confirm('確定要刪除這份文件嗎？')) return;
     setDeleting(id);
     try {
-      await fetch(`/api/documents/${id}`, { method: 'DELETE', credentials: 'include' });
+      await api.delete(`/api/documents/${id}`);
       setDocs(prev => prev.filter(d => d.id !== id));
+      showToast('文件已移除', 'success');
+    } catch {
+      showToast('移除失敗，文件仍保留在清單中', 'error');
     } finally {
       setDeleting(null);
     }

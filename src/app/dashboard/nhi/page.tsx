@@ -1,8 +1,8 @@
 'use client';
 
 // Patient-facing NHI 健康存摺 viewer (Spec §8.1 / §8.2).
-// Read-only. Shows the patient their imported NHI data grouped into the 10
-// official sections, with a clear "organised by medical team" status so they
+// Read-only. Shows the patient their imported NHI data grouped by source
+// section, with a clear "organised by medical team" status so they
 // understand the Raw → CMO → Published flow. No CMO-only fields are exposed.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -15,6 +15,10 @@ import { useActiveMember } from '../member-context';
 import { memberDisplayName, memberHref, memberQueryParams, normalizeMemberName } from '@/lib/members';
 import type { EvidenceDocument } from '@/lib/evidence';
 import { evidenceMeta, evidenceTitle, evidenceUnavailableText } from '@/lib/evidence';
+import {
+  PATIENT_PROBLEM_TRACKING_LABELS,
+  PATIENT_PROBLEM_TRACKING_OPTIONS,
+} from '@/lib/patientStatus';
 
 interface NhiSection {
   key: string;
@@ -57,9 +61,6 @@ interface NhiItem {
   review_status_label: string;
   publish_status: string;
   publish_status_label: string;
-  raw_payload_preview: string;
-  raw_payload: Record<string, unknown>;
-  parsed_payload: Record<string, unknown>;
   official_layer: { status: string; label: string; linked_object: { type: string; id: string; label: string } | null };
   published_layer: { status: string; label: string; object: unknown | null };
   linked_official_object: { type: string; id: string; label: string } | null;
@@ -70,11 +71,22 @@ interface NhiItem {
   evidence_links?: EvidenceDocument[];
   available_actions: string[];
   created_at: string | null;
+  patient_tracking_state?: string | null;
+  patient_tracking_state_id?: string | null;
 }
+
+type DraftTrackingUndo = {
+  rowId: number;
+  stateId: string;
+  previous: string | null;
+  next: string;
+  label: string;
+};
 
 const SECTION_ICON: Record<string, string> = {
   outpatient: '🩺', inpatient: '🏥', med: '💊', surgery: '🔪',
   imaging: '🩻', lab: '🧪', vaccine: '💉', covid: '🦠', tcm: '🌿', dental: '🦷',
+  advance_directive: '📜',
 };
 
 const STATUS_STYLE: Record<string, { color: string; bg: string }> = {
@@ -102,13 +114,18 @@ export default function NhiImportPage() {
   );
   const [overview, setOverview] = useState<NhiOverview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [overviewError, setOverviewError] = useState('');
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [items, setItems] = useState<NhiItem[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemsError, setItemsError] = useState('');
+  const [itemsReloadKey, setItemsReloadKey] = useState(0);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [actionBusy, setActionBusy] = useState('');
+  const [trackingUndo, setTrackingUndo] = useState<DraftTrackingUndo | null>(null);
   const scopeLabel = memberDisplayName(activeMember, members.length > 1 ? '全家' : '本人');
-  const uploadHref = memberHref('/dashboard/upload', activeMember);
+  const uploadHref = memberHref('/dashboard/upload', activeMember, { mode: 'nhi-first' });
+  const timelineHref = memberHref('/dashboard/timeline', activeMember);
   const requestedMemberParam = searchParams.get('member');
 
   useEffect(() => {
@@ -118,6 +135,7 @@ export default function NhiImportPage() {
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
+    setOverviewError('');
     try {
       const data = await api.get('/api/patients/me/nhi-imports', memberQueryParams(activeMember)) as NhiOverview;
       setOverview(data);
@@ -125,7 +143,7 @@ export default function NhiImportPage() {
         setActiveSection(data.sections[0].key);
       }
     } catch {
-      setOverview({ has_data: false, summary: { total: 0, organised: 0, pending: 0, not_used: 0, latest_visit_date: null }, sections: [] });
+      setOverviewError('健保存摺資料載入失敗，請稍後再試。');
     } finally {
       setLoading(false);
     }
@@ -137,12 +155,18 @@ export default function NhiImportPage() {
     if (!activeSection) return;
     let alive = true;
     setItemsLoading(true);
+    setItemsError('');
     api.get(`/api/patients/me/nhi-imports/${activeSection}`, memberQueryParams(activeMember))
       .then((d) => { if (alive) setItems(((d as { items?: NhiItem[] })?.items) ?? []); })
-      .catch(() => { if (alive) setItems([]); })
+      .catch(() => {
+        if (alive) {
+          setItems([]);
+          setItemsError('此分區載入失敗，請重試。');
+        }
+      })
       .finally(() => { if (alive) setItemsLoading(false); });
     return () => { alive = false; };
-  }, [activeMember, activeSection, nhiVersion]);
+  }, [activeMember, activeSection, nhiVersion, itemsReloadKey]);
 
   const summary = overview?.summary;
   const sections = useMemo(() => overview?.sections ?? [], [overview]);
@@ -151,8 +175,9 @@ export default function NhiImportPage() {
     setActionBusy(`${status}-${item.id}`);
     try {
       await api.post('/api/patients/me/patient-reported-states', {
-        target_type: 'source_document',
-        target_id: item.source_document_id,
+        target_type: 'nhi_draft',
+        target_id: String(item.id),
+        source_document_id: item.source_document_id,
         reported_status: status,
         reported_payload: {
           target_label: item.raw_label,
@@ -172,11 +197,81 @@ export default function NhiImportPage() {
     }
   };
 
+  const updateDraftTracking = async (item: NhiItem, status: string) => {
+    const previous = item.patient_tracking_state ?? null;
+    if (previous === status) return;
+    setItems((current) => current.map((row) => row.id === item.id ? { ...row, patient_tracking_state: status } : row));
+    setActionBusy(`tracking-${item.id}`);
+    try {
+      const response = await api.post('/api/patients/me/patient-reported-states', {
+        target_type: 'nhi_draft_tracking',
+        target_id: String(item.id),
+        source_document_id: item.source_document_id,
+        reported_status: status,
+        reported_payload: {
+          target_label: item.diagnosis || item.raw_label,
+          nhi_draft_id: item.id,
+          member_name: item.member_name || activeMember || null,
+          section: item.section,
+          personal_tracking_only: true,
+        },
+        note: `使用者將 NHI 疾病追蹤狀況標記為：${PATIENT_PROBLEM_TRACKING_LABELS[status] ?? status}`,
+      }) as { id?: string };
+      const stateId = response.id || item.patient_tracking_state_id;
+      setItems((current) => current.map((row) => row.id === item.id ? {
+        ...row,
+        patient_tracking_state: status,
+        patient_tracking_state_id: stateId ?? null,
+      } : row));
+      if (stateId) {
+        setTrackingUndo({ rowId: item.id, stateId, previous, next: status, label: item.diagnosis || item.raw_label });
+      }
+      showToast(`你的追蹤狀況已更新為「${PATIENT_PROBLEM_TRACKING_LABELS[status] ?? status}」`, 'success');
+      sync.refreshNow();
+    } catch {
+      setItems((current) => current.map((row) => row.id === item.id ? { ...row, patient_tracking_state: previous } : row));
+      showToast('追蹤狀況更新失敗，已恢復原本狀態', 'error');
+    } finally {
+      setActionBusy('');
+    }
+  };
+
+  const undoDraftTracking = async () => {
+    const change = trackingUndo;
+    if (!change) return;
+    setTrackingUndo(null);
+    setItems((current) => current.map((row) => row.id === change.rowId ? { ...row, patient_tracking_state: change.previous } : row));
+    setActionBusy(`tracking-${change.rowId}`);
+    try {
+      const action = change.previous === null ? 'withdraw' : 'restore-previous';
+      await api.post(`/api/patients/me/patient-reported-states/${change.stateId}/${action}`, {});
+      showToast(`已復原「${change.label}」的追蹤狀況`, 'success');
+      sync.refreshNow();
+    } catch {
+      setItems((current) => current.map((row) => row.id === change.rowId ? { ...row, patient_tracking_state: change.next } : row));
+      showToast('復原失敗，已保留目前狀態', 'error');
+    } finally {
+      setActionBusy('');
+    }
+  };
+
   if (loading) {
     return (
       <div className="hk-nhi-page">
         <h1 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 12px' }}>{scopeLabel}健保存摺匯入</h1>
         <div style={{ color: '#6b7c8c' }}>正在載入{scopeLabel}的健保署健康存摺資料…</div>
+      </div>
+    );
+  }
+
+  if (overviewError) {
+    return (
+      <div className="hk-nhi-page">
+        <h1 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 12px' }}>{scopeLabel}健保存摺匯入</h1>
+        <div style={{ background: '#fff', border: '1px solid #f2d3cf', borderRadius: 12, padding: 24 }}>
+          <div style={{ fontWeight: 800, color: '#a03a30' }}>{overviewError}</div>
+          <button type="button" onClick={() => void loadOverview()} style={{ ...rowBtn, marginTop: 12 }}>重新載入</button>
+        </div>
       </div>
     );
   }
@@ -193,7 +288,7 @@ export default function NhiImportPage() {
             整理完成後，您的門診、用藥、檢驗、影像等紀錄就會顯示在這裡。
           </div>
           <Link href={uploadHref} style={{ display: 'inline-block', padding: '10px 18px', borderRadius: 8, background: '#3e6b7e', color: '#fff', fontWeight: 700, fontSize: 14 }}>
-            前往上傳資料
+            匯入健保存摺 HTML／ZIP
           </Link>
         </div>
       </div>
@@ -202,10 +297,27 @@ export default function NhiImportPage() {
 
   return (
     <div className="hk-nhi-page">
-      <h1 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 4px' }}>{scopeLabel}健保存摺匯入</h1>
-      <div style={{ color: '#6b7c8c', fontSize: 13, marginBottom: 16 }}>
-        這是從{scopeLabel}的健保署健康存摺匯入的就醫紀錄，由醫療團隊協助整理後呈現。最近就醫：{fmtDate(summary?.latest_visit_date ?? null)}
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 4px' }}>{scopeLabel}健保存摺匯入</h1>
+          <div style={{ color: '#6b7c8c', fontSize: 13, marginBottom: 16 }}>
+            這是從{scopeLabel}的健保署健康存摺匯入的就醫紀錄，由醫療團隊協助整理後呈現。最近就醫：{fmtDate(summary?.latest_visit_date ?? null)}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Link href={timelineHref} className="hk-btn hk-btn-ghost hk-btn-sm">查看三年健康時間軸</Link>
+          <Link href={uploadHref} className="hk-btn hk-btn-primary hk-btn-sm">再次匯入</Link>
+        </div>
       </div>
+
+      {trackingUndo && (
+        <div role="status" aria-live="polite" style={{ background: '#e7f3f5', border: '1px solid #cfe3e8', borderRadius: 10, padding: '10px 14px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: '#315869', fontSize: 13 }}>已更新「{trackingUndo.label}」的個人追蹤狀況，不會改寫正式診斷。</span>
+          <button type="button" className="hk-btn hk-btn-ghost hk-btn-sm" onClick={() => void undoDraftTracking()} disabled={actionBusy === `tracking-${trackingUndo.rowId}`}>
+            復原上次變更
+          </button>
+        </div>
+      )}
 
       {/* Summary strip */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
@@ -264,6 +376,13 @@ export default function NhiImportPage() {
 
           {itemsLoading ? (
             <div style={{ color: '#6b7c8c', padding: 20, textAlign: 'center' }}>載入中…</div>
+          ) : itemsError ? (
+            <div style={{ color: '#a03a30', padding: 20, textAlign: 'center' }}>
+              {itemsError}
+              <div style={{ marginTop: 10 }}>
+                <button type="button" onClick={() => setItemsReloadKey((value) => value + 1)} style={rowBtn}>重新載入</button>
+              </div>
+            </div>
           ) : items.length === 0 ? (
             <div style={{ color: '#6b7c8c', padding: 20, textAlign: 'center' }}>此分區目前沒有紀錄。</div>
           ) : (
@@ -290,6 +409,26 @@ export default function NhiImportPage() {
                         {it.icd10 && <span style={{ marginLeft: 6, fontSize: 11, color: '#93a3af', fontFamily: 'ui-monospace, monospace' }}>{it.icd10}</span>}
                       </div>
                     )}
+                    {it.diagnosis && (
+                      <div style={{ marginTop: 9, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <label style={{ fontSize: 12, fontWeight: 800, color: '#56687a' }}>
+                          我的追蹤狀況
+                          <select
+                            aria-label={`更新${it.diagnosis}的個人追蹤狀況（立即生效）`}
+                            value={it.patient_tracking_state ?? ''}
+                            disabled={actionBusy === `tracking-${it.id}`}
+                            onChange={(event) => { if (event.target.value) void updateDraftTracking(it, event.target.value); }}
+                            style={{ marginLeft: 8, minHeight: 34, border: '1px solid #cfd9e2', borderRadius: 8, padding: '5px 28px 5px 9px', background: '#fff', color: '#22313f' }}
+                          >
+                            <option value="" disabled>選擇目前狀況…</option>
+                            {PATIENT_PROBLEM_TRACKING_OPTIONS.map((option) => (
+                              <option key={option.key} value={option.key}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <span style={{ fontSize: 11, color: '#2e8b57', fontWeight: 800 }}>立即生效</span>
+                      </div>
+                    )}
                     {it.key_medications && (
                       <div style={{ marginTop: 3, fontSize: 12, color: '#56687a' }}>用藥：{it.key_medications}</div>
                     )}
@@ -298,7 +437,7 @@ export default function NhiImportPage() {
                     ) : null}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                       <button type="button" onClick={() => setExpandedId(expandedId === it.id ? null : it.id)} style={rowBtn}>
-                        {expandedId === it.id ? '收合詳情' : '查看 raw / parsed / official'}
+                        {expandedId === it.id ? '收合詳情' : '查看整理狀態與來源'}
                       </button>
                       <button type="button" onClick={() => reportRow(it, 'review_requested')} disabled={actionBusy === `review_requested-${it.id}`} title="送到 CMO 工作台複核，不會改動正式病歷" style={rowBtn}>
                         請醫療團隊複核
@@ -329,25 +468,20 @@ function NhiItemDetail({ item }: { item: NhiItem }) {
   return (
     <div style={{ marginTop: 12, borderTop: '1px solid #e3e9ee', paddingTop: 12 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
-        <LayerBox title="原始匯入資料 Raw Layer" status={item.raw_payload_preview}>
+        <LayerBox title="健保存摺來源資料" status="保留健保署匯入來源；此處只顯示使用者需要的欄位">
           <KV label="日期" value={item.date || item.visit_date || '未記錄'} />
           <KV label="院所/科別" value={[item.hospital || item.facility, item.department].filter(Boolean).join(' · ') || '未記錄'} />
-          <Pre data={item.raw_payload} />
-        </LayerBox>
-        <LayerBox title="解析結果 Parsed Payload" status={item.review_status_label}>
-          <KV label="Draft ID" value={`#${item.id}`} />
-          <KV label="Section" value={item.section} />
-          <Pre data={item.parsed_payload} />
-        </LayerBox>
-        <LayerBox title="醫療團隊整理 Official Layer" status={item.official_layer.label}>
-          <KV label="狀態" value={item.official_layer.status} />
-          <KV label="Linked official object" value={item.linked_official_object?.label || '尚未連到正式物件'} />
-          <KV label="Related Problem" value={item.related_problem?.label || '尚未連到 Problem'} />
-        </LayerBox>
-        <LayerBox title="Patient View / Published Layer" status={item.published_layer.label}>
-          <KV label="Publish status" value={item.publish_status_label} />
-          <KV label="Patient note" value={item.patient_visible_note || '沒有病人可見備註'} />
+          <KV label="分類" value={item.raw_label || item.section} />
           <EvidenceDocumentRow doc={item.source_document} fallbackId={item.source_document_id} />
+        </LayerBox>
+        <LayerBox title="醫療團隊整理狀態" status={item.official_layer.label}>
+          <KV label="整理狀態" value={item.review_status_label} />
+          <KV label="正式健康項目" value={item.linked_official_object?.label || '尚未整理成正式健康項目'} />
+          <KV label="相關疾病" value={item.related_problem?.label || '尚未連結疾病'} />
+        </LayerBox>
+        <LayerBox title="你的可見內容" status={item.published_layer.label}>
+          <KV label="發布狀態" value={item.publish_status_label} />
+          <KV label="醫療團隊備註" value={item.patient_visible_note || '目前沒有補充備註'} />
         </LayerBox>
       </div>
     </div>
@@ -398,14 +532,6 @@ function KV({ label, value }: { label: string; value: string }) {
       <span style={{ color: '#6b7c8c', fontWeight: 800 }}>{label}</span>
       <span style={{ color: '#22313f', textAlign: 'right', wordBreak: 'break-word' }}>{value}</span>
     </div>
-  );
-}
-
-function Pre({ data }: { data: unknown }) {
-  return (
-    <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto', background: '#fff', border: '1px solid #e3e9ee', borderRadius: 8, padding: 8, fontSize: 11, color: '#45596a', margin: '8px 0 0' }}>
-      {JSON.stringify(data, null, 2)}
-    </pre>
   );
 }
 

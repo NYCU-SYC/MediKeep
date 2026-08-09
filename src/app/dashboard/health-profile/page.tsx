@@ -11,6 +11,10 @@ import { cleanPatientProblems, isJunkProblemName } from '../problem-filter';
 import type { PatientChangeRequest } from '@/lib/healthkeepTypes';
 import type { EvidenceDocument } from '@/lib/evidence';
 import { evidenceMeta, evidenceTitle, evidenceUnavailableText } from '@/lib/evidence';
+import {
+  PATIENT_PROBLEM_TRACKING_LABELS as TRACKING_LABELS,
+  PATIENT_PROBLEM_TRACKING_OPTIONS as TRACKING_OPTIONS,
+} from '@/lib/patientStatus';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,18 +36,6 @@ interface MyProblem {
   source_document_id?: string | null;
   evidence_document?: EvidenceDocument | null;
 }
-
-// Patient's own tracking preference — set DIRECTLY, takes effect immediately,
-// never blocks on CMO approval. Distinct from the official `status`.
-const TRACKING_OPTIONS: { key: string; label: string }[] = [
-  { key: 'actively_treating', label: '我還在治療' },
-  { key: 'following', label: '我還在追蹤' },
-  { key: 'doctor_said_no_follow_up', label: '醫師說不用追蹤' },
-  { key: 'no_longer_tracking', label: '我不想再追蹤' },
-  { key: 'resolved_by_self_report', label: '我覺得已經好了' },
-  { key: 'unsure', label: '我不確定' },
-];
-const TRACKING_LABELS: Record<string, string> = Object.fromEntries(TRACKING_OPTIONS.map(o => [o.key, o.label]));
 
 // Local YYYY-MM-DD for a date `days` from today (avoids UTC off-by-one).
 function dateStrFromToday(days: number): string {

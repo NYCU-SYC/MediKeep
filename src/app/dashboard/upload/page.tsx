@@ -6,6 +6,7 @@ import { useActiveMember } from '../member-context';
 import { useToast } from '../toast-context';
 import { api } from '@/lib/api';
 import { memberHref, normalizeMemberName } from '@/lib/members';
+import NhiFirstImportFlow from '@/components/NhiFirstImportFlow';
 
 type Tab = 'manual' | 'file';
 type RecordType = 'blood_pressure' | 'heart_rate' | 'glucose' | 'body_composition' | 'steps' | 'sleep' | 'other';
@@ -324,12 +325,8 @@ export default function UploadPage() {
     if (pendingRecords.length === 0) return;
     setSubmitting(true);
     try {
-      await Promise.all(pendingRecords.map(r =>
-        fetch('/api/records', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+      const results = await Promise.allSettled(pendingRecords.map(r =>
+        api.post('/api/records', {
             member_name: r.member,
             record_type: r.record_type,
             value1: r.value1 || null,
@@ -337,11 +334,21 @@ export default function UploadPage() {
             unit: r.unit || null,
             note: r.note || null,
             recorded_at: r.recorded_at,
-          }),
         })
       ));
-      showToast(`已儲存 ${pendingRecords.length} 筆自我量測紀錄`, 'success');
-      setPendingRecords([]);
+      const failedRecords = pendingRecords.filter((_, index) => results[index]?.status === 'rejected');
+      const savedCount = pendingRecords.length - failedRecords.length;
+      setPendingRecords(failedRecords);
+      if (failedRecords.length > 0) {
+        showToast(
+          savedCount > 0
+            ? `已儲存 ${savedCount} 筆；另有 ${failedRecords.length} 筆失敗，已保留在畫面上可重試`
+            : '儲存失敗，待送紀錄已保留，請稍後重試',
+          'error',
+        );
+        return;
+      }
+      showToast(`已儲存 ${savedCount} 筆自我量測紀錄`, 'success');
       router.push('/dashboard/history');
     } catch {
       showToast('儲存失敗，請重試', 'error');
@@ -356,33 +363,65 @@ export default function UploadPage() {
     if (!member) { showToast('請先選擇要記錄的家庭成員', 'error'); return; }
     setSubmitting(true);
     const ts = new Date(recordedAt).toISOString();
-    const post = (body: object) => fetch('/api/records', {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const post = (body: object) => api.post('/api/records', body);
     try {
+      const now = Date.now();
+      let quickRecords: PendingRecord[];
       if (recordType === 'body_composition') {
-        const calls = [post({ member_name: member, record_type: 'weight', value1, unit: 'kg', note: note || null, recorded_at: ts })];
+        quickRecords = [{
+          tmpId: `quick_${now}_weight`, member, record_type: 'weight',
+          label: '體重', icon: '⚖️', value1, value2: '', unit: 'kg', note, recorded_at: ts,
+        }];
         const hVal = parseFloat(heightCm), wVal = parseFloat(value1);
         if (heightCm.trim() && hVal > 0 && wVal > 0) {
-          calls.push(post({ member_name: member, record_type: 'bmi',
-            value1: (wVal / Math.pow(hVal / 100, 2)).toFixed(1), unit: '', recorded_at: ts }));
+          quickRecords.push({
+            tmpId: `quick_${now}_bmi`, member, record_type: 'bmi',
+            label: 'BMI', icon: '📊', value1: (wVal / Math.pow(hVal / 100, 2)).toFixed(1),
+            value2: '', unit: '', note: '', recorded_at: ts,
+          });
         }
         if (bodyFat.trim()) {
-          calls.push(post({ member_name: member, record_type: 'body_fat', value1: bodyFat, unit: '%', recorded_at: ts }));
+          quickRecords.push({
+            tmpId: `quick_${now}_body_fat`, member, record_type: 'body_fat',
+            label: '體脂率', icon: '🔬', value1: bodyFat,
+            value2: '', unit: '%', note: '', recorded_at: ts,
+          });
         }
-        await Promise.all(calls);
       } else {
-        const calls = [post({
-          member_name: member, record_type: recordType,
-          value1: value1 || null, value2: value2 || null,
-          unit: currentType.fields[0]?.unit || null, note: note || null, recorded_at: ts,
-        })];
+        quickRecords = [{
+          tmpId: `quick_${now}`, member, record_type: recordType,
+          label: currentType.label, icon: currentType.icon,
+          value1, value2, unit: currentType.fields[0]?.unit || '', note, recorded_at: ts,
+        }];
         if (recordType === 'blood_pressure' && pulse.trim()) {
-          calls.push(post({ member_name: member, record_type: 'heart_rate', value1: pulse, unit: 'bpm', recorded_at: ts }));
+          quickRecords.push({
+            tmpId: `quick_${now}_heart_rate`, member, record_type: 'heart_rate',
+            label: '心跳', icon: '💓', value1: pulse,
+            value2: '', unit: 'bpm', note: '', recorded_at: ts,
+          });
         }
-        await Promise.all(calls);
+      }
+      const results = await Promise.allSettled(quickRecords.map(record => post({
+        member_name: record.member,
+        record_type: record.record_type,
+        value1: record.value1 || null,
+        value2: record.value2 || null,
+        unit: record.unit || null,
+        note: record.note || null,
+        recorded_at: record.recorded_at,
+      })));
+      const failedRecords = quickRecords.filter((_, index) => results[index]?.status === 'rejected');
+      if (failedRecords.length > 0) {
+        const savedCount = results.length - failedRecords.length;
+        setPendingRecords(previous => [...previous, ...failedRecords]);
+        setValue1(''); setValue2(''); setBodyFat(''); setPulse(''); setNote('');
+        showToast(
+          savedCount > 0
+            ? `已儲存 ${savedCount} 筆；另有 ${failedRecords.length} 筆失敗，已移到待送清單供重試`
+            : '儲存失敗，紀錄已移到待送清單，請稍後重試',
+          'error',
+        );
+        return;
       }
       showToast('自我量測紀錄已儲存，可在歷史紀錄查看；這不是醫療團隊確認結果', 'success');
       router.push('/dashboard/history');
@@ -463,6 +502,17 @@ export default function UploadPage() {
       setRecentDocs(list.slice(0, 5) as RecentDoc[]);
     } catch { /* 靜默：保留現有狀態 */ }
   }, [uploadedDoc, fileMember]);
+
+  if (searchParams.get('mode') === 'nhi-first') {
+    return (
+      <NhiFirstImportFlow
+        memberName={fileMember}
+        members={members}
+        onMemberChange={selectTargetMember}
+        onBack={() => router.push(memberHref('/dashboard/nhi', fileMember))}
+      />
+    );
+  }
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>

@@ -9,6 +9,11 @@ import { useToast } from '../toast-context';
 import { memberDisplayName, normalizeMemberName, uniqueMemberNames } from '@/lib/members';
 import type { EvidenceDocument } from '@/lib/evidence';
 import { evidenceMeta, evidenceTitle, evidenceUnavailableText } from '@/lib/evidence';
+import {
+  medicationUsageNeedsSafetyNotice,
+  PATIENT_MEDICATION_USAGE_LABELS as USAGE_LABELS,
+  PATIENT_MEDICATION_USAGE_OPTIONS as USAGE_OPTIONS,
+} from '@/lib/patientStatus';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type TreatmentType = 'fixed' | 'chronic' | 'prn';
@@ -33,18 +38,6 @@ type Medication = {
   sourceDocumentId: string | null;
   evidenceDocument: EvidenceDocument | null;
 };
-
-// Patient-reported usage states — set DIRECTLY by the user, take effect immediately.
-const USAGE_OPTIONS: { key: string; label: string }[] = [
-  { key: 'taking', label: '我正在吃' },
-  { key: 'not_taking', label: '我沒有在吃' },
-  { key: 'doctor_stopped', label: '醫師已停藥' },
-  { key: 'course_completed', label: '療程吃完了' },
-  { key: 'self_stopped', label: '我自己先停了' },
-  { key: 'side_effect_stopped', label: '因副作用停用' },
-  { key: 'unsure', label: '我不確定' },
-];
-const USAGE_LABELS: Record<string, string> = Object.fromEntries(USAGE_OPTIONS.map(o => [o.key, o.label]));
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MED_COLORS = ['#f44336', '#e91e63', '#9c27b0', '#2196f3', '#4caf50', '#ff9800', '#00bcd4', '#607d8b'];
@@ -178,6 +171,23 @@ function getDefaultForm(): FormState {
   };
 }
 
+function formFromMedication(medication: Medication): FormState {
+  return {
+    category: medication.category,
+    name: medication.name,
+    generic_name: medication.generic_name,
+    dose: medication.dose,
+    frequency: medication.frequency,
+    freq_is_custom: Boolean(medication.frequency) && !FREQ_PRESETS.includes(medication.frequency),
+    treatment_type: medication.treatment_type,
+    duration_preset: medication.treatment_type === 'fixed' ? 'custom' : '',
+    start_date: medication.start_date || getTaipeiDate(),
+    end_date: medication.end_date,
+    note: medication.note,
+    color: medication.color,
+  };
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function MedicationsPage() {
   const router = useRouter();
@@ -191,6 +201,7 @@ export default function MedicationsPage() {
   const [filterMember, setFilterMember] = useState(() => activeMember || '全部');
   const [formMember, setFormMember] = useState(() => activeMember || memberNames[0] || '');
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState<FormState>(getDefaultForm);
   const [medActionBusy, setMedActionBusy] = useState('');
@@ -238,20 +249,30 @@ export default function MedicationsPage() {
             weekly: '每週一次', asneeded: '需要時服用',
           };
           const items = JSON.parse(legacyV1) as Array<Record<string, unknown>>;
+          const failed: Array<Record<string, unknown>> = [];
           for (const item of items) {
-            await api.post('/api/medications', {
-              drug_name: item.name || item.drug_name || '未知',
-              dose: item.dose || item.dosage || null,
-              frequency: freqMap[String(item.frequency)] ?? item.frequency ?? null,
-              intent: item.frequency === 'asneeded' ? 'prn' : item.end_date ? 'fixed' : 'chronic',
-              started_on: item.start_date || null,
-              is_active: item.active !== false,
-              note: item.note || null,
-              member_name: item.member || activeMember,
-            }).catch(() => {});
+            try {
+              await api.post('/api/medications', {
+                drug_name: item.name || item.drug_name || '未知',
+                dose: item.dose || item.dosage || null,
+                frequency: freqMap[String(item.frequency)] ?? item.frequency ?? null,
+                intent: item.frequency === 'asneeded' ? 'prn' : item.end_date ? 'fixed' : 'chronic',
+                started_on: item.start_date || null,
+                is_active: item.active !== false,
+                note: item.note || null,
+                member_name: item.member || activeMember,
+              });
+            } catch {
+              failed.push(item);
+            }
+          }
+          if (failed.length > 0) {
+            localStorage.setItem('healthkeep_medications_v1', JSON.stringify(failed));
+            showToast(`有 ${failed.length} 筆舊用藥尚未同步，資料已保留，稍後會再試`, 'error');
+          } else {
+            localStorage.removeItem('healthkeep_medications_v1');
           }
         } catch {}
-        localStorage.removeItem('healthkeep_medications_v1');
       }
 
       // One-time localStorage migration from v2
@@ -259,24 +280,34 @@ export default function MedicationsPage() {
       if (legacyV2) {
         try {
           const items = JSON.parse(legacyV2) as Array<Record<string, unknown>>;
+          const failed: Array<Record<string, unknown>> = [];
           for (const item of items) {
-            await api.post('/api/medications', {
-              drug_name: item.name || item.drug_name || '未知',
-              dose: item.dose || item.dosage || null,
-              frequency: item.frequency || null,
-              intent: item.treatment_type || item.intent || 'chronic',
-              started_on: item.start_date || item.started_on || null,
-              is_active: item.active !== undefined ? item.active : true,
-              note: item.note || null,
-              member_name: item.member || activeMember,
-              category: item.category || null,
-              generic_name: item.generic_name || null,
-              end_date: item.end_date || null,
-              color: item.color || null,
-            }).catch(() => {});
+            try {
+              await api.post('/api/medications', {
+                drug_name: item.name || item.drug_name || '未知',
+                dose: item.dose || item.dosage || null,
+                frequency: item.frequency || null,
+                intent: item.treatment_type || item.intent || 'chronic',
+                started_on: item.start_date || item.started_on || null,
+                is_active: item.active !== undefined ? item.active : true,
+                note: item.note || null,
+                member_name: item.member || activeMember,
+                category: item.category || null,
+                generic_name: item.generic_name || null,
+                end_date: item.end_date || null,
+                color: item.color || null,
+              });
+            } catch {
+              failed.push(item);
+            }
+          }
+          if (failed.length > 0) {
+            localStorage.setItem('healthkeep_medications_v2', JSON.stringify(failed));
+            showToast(`有 ${failed.length} 筆舊用藥尚未同步，資料已保留，稍後會再試`, 'error');
+          } else {
+            localStorage.removeItem('healthkeep_medications_v2');
           }
         } catch {}
-        localStorage.removeItem('healthkeep_medications_v2');
       }
 
       // Fetch from backend
@@ -288,7 +319,7 @@ export default function MedicationsPage() {
       } catch {}
     };
     load();
-  }, [activeMember]);
+  }, [activeMember, showToast]);
 
   // Cross-view sync: refetch when a medication row changes on the server
   // (e.g. the CMO accepts a "stopped" request and publishes it).
@@ -323,15 +354,15 @@ export default function MedicationsPage() {
     });
   };
 
-  const addMed = async (e: React.FormEvent<HTMLFormElement>) => {
+  const saveMed = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!effectiveFormMember) {
       showToast('請先選擇這筆藥物屬於哪位家庭成員', 'error');
       return;
     }
-    setMedActionBusy('add');
+    setMedActionBusy('save');
     try {
-      const created = await api.post('/api/medications', {
+      const payload = {
         drug_name: form.name,
         member_name: effectiveFormMember,
         category: form.category || null,
@@ -342,19 +373,47 @@ export default function MedicationsPage() {
         treatment_type: form.treatment_type,
         started_on: form.treatment_type !== 'prn' ? form.start_date : null,
         end_date: form.treatment_type === 'fixed' ? form.end_date : null,
-        is_active: true,
+        ...(!editingId ? { is_active: true } : {}),
         note: form.note || null,
         color: form.color,
-      });
-      setMeds(prev => [fromApi(created), ...prev]);
+      };
+      const saved = editingId
+        ? await api.patch(`/api/medications/${editingId}`, payload)
+        : await api.post('/api/medications', payload);
+      const mapped = fromApi(saved);
+      setMeds(prev => (
+        editingId
+          ? prev.map(medication => medication.id === editingId ? mapped : medication)
+          : [mapped, ...prev]
+      ));
       setForm(getDefaultForm());
       setShowForm(false);
-      showToast('已儲存用藥紀錄', 'success');
+      showToast(editingId ? '用藥紀錄已更新，立即生效' : '已儲存用藥紀錄', 'success');
+      setEditingId(null);
     } catch (err) {
       showToast(medicationErrorMessage(err, '儲存失敗，請稍後再試'), 'error');
     } finally {
       setMedActionBusy('');
     }
+  };
+
+  const openCreate = () => {
+    setFormMember(activeMember || memberNames[0] || '');
+    setEditingId(null);
+    setForm(getDefaultForm());
+    setShowForm(true);
+  };
+
+  const openEdit = (medication: Medication) => {
+    if (isOfficialMedication(medication)) {
+      showToast('正式處方內容需由醫療團隊更新；你仍可直接調整目前實際用藥狀況。', 'error');
+      return;
+    }
+    setFormMember(medication.member);
+    setEditingId(medication.id);
+    setForm(formFromMedication(medication));
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const toggleActive = async (id: string) => {
@@ -403,6 +462,12 @@ export default function MedicationsPage() {
   const setUsageState = async (m: Medication, usage: string) => {
     const previous = m.usageStatus;
     if (usage === previous) return;
+    if (
+      medicationUsageNeedsSafetyNotice(usage)
+      && !confirm('這項回報會立即儲存，但不等於醫師已確認停藥。如有呼吸困難、意識改變或其他嚴重症狀，請立即就醫。要繼續儲存嗎？')
+    ) {
+      return;
+    }
     setMeds(prev => prev.map(x => x.id === m.id ? { ...x, usageStatus: usage } : x));
     try {
       const res = await api.post(`/api/patients/me/medications/${m.id}/usage-state`, {
@@ -518,6 +583,19 @@ export default function MedicationsPage() {
           fontSize: '11px', cursor: official || medActionBusy ? 'not-allowed' : 'pointer', fontWeight: '600',
           opacity: official || toggleBusy ? 0.72 : 1,
         }}>{toggleBusy ? '儲存中…' : m.active ? '用藥中' : '已停藥'}</button>
+        {!official && (
+          <button
+            onClick={() => openEdit(m)}
+            disabled={Boolean(medActionBusy)}
+            style={{
+              padding: '5px 10px', borderRadius: '8px', border: '1px solid #c8d4dc',
+              background: '#fff', color: '#45596a', fontSize: '11px',
+              cursor: medActionBusy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            修改內容
+          </button>
+        )}
         {/* Patient-reported usage — takes effect immediately, no CMO approval */}
         <select
           value={m.usageStatus ?? ''}
@@ -588,10 +666,10 @@ export default function MedicationsPage() {
             <h2 style={{ fontSize: '26px', fontWeight: '800', color: '#111' }}>藥物管理</h2>
             <p style={{ fontSize: '14px', color: '#666', marginTop: '2px' }}>目前顯示：{scopeLabel} · 記錄家庭成員的用藥與處方</p>
           </div>
-          <button onClick={() => { setFormMember(activeMember || memberNames[0] || ''); setShowForm(v => !v); setForm(getDefaultForm()); }} style={{
+          <button onClick={showForm && !editingId ? () => setShowForm(false) : openCreate} style={{
             background: 'var(--primary)', color: '#fff', border: 'none',
             padding: '10px 20px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: 'pointer',
-          }}>+ 新增藥物</button>
+          }}>{showForm && !editingId ? '收合新增表單' : '+ 新增藥物'}</button>
         </div>
 
         {/* No members */}
@@ -607,11 +685,14 @@ export default function MedicationsPage() {
 
         {/* ── Add Form ── */}
         {showForm && members.length > 0 && (
-          <form onSubmit={addMed} style={{
+          <form onSubmit={saveMed} style={{
             background: '#fff', borderRadius: '16px', padding: '24px',
             boxShadow: '0 1px 6px rgba(0,0,0,0.07)', marginBottom: '24px',
           }}>
-            <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '20px' }}>新增用藥紀錄</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '700', margin: 0 }}>{editingId ? '修改我的用藥紀錄' : '新增用藥紀錄'}</h3>
+              <span className="hk-badge hk-b-green">立即生效</span>
+            </div>
 
             <div style={{ marginBottom: '20px' }}>
               <label style={labelStyle}>這筆藥物屬於誰 <span style={{ color: '#f44336' }}>*</span></label>
@@ -823,15 +904,15 @@ export default function MedicationsPage() {
             </div>
 
             <div style={{ display: 'flex', gap: '10px' }}>
-              <button type="submit" disabled={medActionBusy === 'add'} style={{
+              <button type="submit" disabled={medActionBusy === 'save'} style={{
                 background: 'var(--primary)', color: '#fff', border: 'none',
-                padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: medActionBusy === 'add' ? 'wait' : 'pointer',
-                opacity: medActionBusy === 'add' ? 0.72 : 1,
-              }}>{medActionBusy === 'add' ? '儲存中…' : '儲存'}</button>
-              <button type="button" disabled={medActionBusy === 'add'} onClick={() => { setShowForm(false); setForm(getDefaultForm()); }} style={{
+                padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: medActionBusy === 'save' ? 'wait' : 'pointer',
+                opacity: medActionBusy === 'save' ? 0.72 : 1,
+              }}>{medActionBusy === 'save' ? '儲存中…' : editingId ? '儲存修改' : '儲存'}</button>
+              <button type="button" disabled={medActionBusy === 'save'} onClick={() => { setShowForm(false); setEditingId(null); setForm(getDefaultForm()); }} style={{
                 background: '#f8f9fa', color: '#666', border: 'none',
-                padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: medActionBusy === 'add' ? 'not-allowed' : 'pointer',
-                opacity: medActionBusy === 'add' ? 0.72 : 1,
+                padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: medActionBusy === 'save' ? 'not-allowed' : 'pointer',
+                opacity: medActionBusy === 'save' ? 0.72 : 1,
               }}>取消</button>
             </div>
           </form>

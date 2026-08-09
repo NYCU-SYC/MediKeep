@@ -15,6 +15,7 @@ import { vitalFlag, isAbnormal } from './vital-range';
 import { api } from '@/lib/api';
 import { useSync } from '@/lib/sync';
 import { memberHref, memberQueryParams, memberDisplayName, normalizeMemberName } from '@/lib/members';
+import NhiReminderCard from '@/components/NhiReminderCard';
 
 // ── Types (subset of API shapes used by the home) ─────────────────────────────
 type RecordOut = { id: string; member_name: string; record_type: string; value1: string | null; value2: string | null; unit: string | null; note: string | null; recorded_at: string };
@@ -267,6 +268,7 @@ function HomeContent() {
 
   return (
     <div className="hk-home-wrap">
+      <NhiReminderCard />
       {loadError && (
         <div className="hk-card hk-b-amber" style={{ marginBottom: 12, fontSize: 13 }}>
           部分資料載入失敗，顯示的可能不完整。<button className="hk-btn hk-btn-ghost hk-btn-sm" style={{ marginLeft: 8 }} onClick={() => load()}>重試</button>

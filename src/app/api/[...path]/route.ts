@@ -13,7 +13,19 @@ type RouteContext = {
 
 const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const GET_MAX_ATTEMPTS = 3
-const ATTEMPT_TIMEOUT_MS = 20_000
+const READ_ATTEMPT_TIMEOUT_MS = 20_000
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+const DOCUMENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const SAFE_RESPONSE_HEADERS = [
+  'content-disposition',
+  'content-security-policy',
+  'referrer-policy',
+  'x-content-type-options',
+]
+// Local development still supports multipart uploads through this proxy.
+// Production NHI uploads use presigned object-storage URLs, but other binary
+// patient uploads must not be aborted by the ordinary API read timeout.
+const WRITE_ATTEMPT_TIMEOUT_MS = 300_000
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -52,6 +64,7 @@ function forwardRequestHeaders(req: NextRequest) {
     'authorization',
     'content-type',
     'cookie',
+    'idempotency-key',
     'if-none-match',
     'if-modified-since',
   ]
@@ -64,7 +77,7 @@ function forwardRequestHeaders(req: NextRequest) {
   return headers
 }
 
-function forwardResponse(resp: Response, body: ArrayBuffer | null, attempts: number) {
+function proxyResponseHeaders(resp: Response, attempts: number) {
   const headers = new Headers()
   headers.set('Cache-Control', 'no-store')
   headers.set('X-HealthKeep-Api-Proxy', 'generic')
@@ -72,6 +85,17 @@ function forwardResponse(resp: Response, body: ArrayBuffer | null, attempts: num
 
   const setCookie = resp.headers.get('set-cookie')
   if (setCookie) headers.set('Set-Cookie', setCookie)
+
+  for (const key of SAFE_RESPONSE_HEADERS) {
+    const value = resp.headers.get(key)
+    if (value) headers.set(key, value)
+  }
+
+  return headers
+}
+
+function forwardResponse(resp: Response, body: ArrayBuffer | null, attempts: number) {
+  const headers = proxyResponseHeaders(resp, attempts)
 
   if ([204, 304].includes(resp.status)) {
     return new NextResponse(null, {
@@ -89,15 +113,81 @@ function forwardResponse(resp: Response, body: ArrayBuffer | null, attempts: num
   })
 }
 
+function unsafeBackendRedirectResponse(attempts: number) {
+  return NextResponse.json(
+    {
+      error: {
+        code: 'unsafe_backend_redirect',
+        message: 'Backend redirect was refused by the API proxy',
+        details: {},
+      },
+    },
+    {
+      status: 502,
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-HealthKeep-Api-Proxy': 'generic',
+        'X-HealthKeep-Api-Proxy-Attempts': String(attempts),
+      },
+    },
+  )
+}
+
+function isAuthorizedDocumentDownload(path: string[], method: string) {
+  return method === 'GET'
+    && path.length === 3
+    && path[0] === 'documents'
+    && DOCUMENT_ID_PATTERN.test(path[1])
+    && path[2] === 'download'
+}
+
+function trustedStorageRedirect(location: string | null) {
+  if (!location) return null
+
+  let target: URL
+  try {
+    target = new URL(location)
+  } catch {
+    return null
+  }
+  if (target.protocol !== 'https:' || target.username || target.password) return null
+
+  const trustedOrigins = new Set<string>()
+  for (const configured of (process.env.HEALTHKEEP_STORAGE_REDIRECT_ORIGINS || '').split(',')) {
+    const value = configured.trim()
+    if (!value) continue
+    try {
+      const origin = new URL(value)
+      if (origin.protocol === 'https:' && !origin.username && !origin.password) {
+        trustedOrigins.add(origin.origin)
+      }
+    } catch {
+      // Invalid deployment entries are ignored; an empty allowlist fails closed.
+    }
+  }
+  return trustedOrigins.has(target.origin) ? location : null
+}
+
+function forwardStorageRedirect(resp: Response, location: string, attempts: number) {
+  const headers = proxyResponseHeaders(resp, attempts)
+  headers.set('Location', location)
+  return new NextResponse(null, {
+    status: 307,
+    statusText: resp.statusText,
+    headers,
+  })
+}
+
 async function proxy(req: NextRequest, context: RouteContext) {
   const { path } = await context.params
   const method = req.method.toUpperCase()
   const maxAttempts = method === 'GET' ? GET_MAX_ATTEMPTS : 1
   const requestBody = BODY_METHODS.has(method) ? await req.arrayBuffer() : undefined
+  const attemptTimeout = method === 'GET' ? READ_ATTEMPT_TIMEOUT_MS : WRITE_ATTEMPT_TIMEOUT_MS
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS)
+    const timer = setTimeout(() => controller.abort(), attemptTimeout)
 
     try {
       const resp = await fetch(buildBackendUrl(req, path), {
@@ -107,8 +197,19 @@ async function proxy(req: NextRequest, context: RouteContext) {
         // images, DICOM — are not corrupted by a UTF-8 decode/encode round-trip.
         body: requestBody,
         cache: 'no-store',
+        redirect: 'manual',
         signal: controller.signal,
       })
+
+      if (REDIRECT_STATUSES.has(resp.status)) {
+        const location = resp.status === 307 && isAuthorizedDocumentDownload(path, method)
+          ? trustedStorageRedirect(resp.headers.get('location'))
+          : null
+        return location
+          ? forwardStorageRedirect(resp, location, attempt)
+          : unsafeBackendRedirectResponse(attempt)
+      }
+
       const body = [204, 304].includes(resp.status) ? null : await resp.arrayBuffer()
 
       if (method === 'GET' && resp.status >= 500 && attempt < maxAttempts) {

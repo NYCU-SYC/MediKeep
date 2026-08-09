@@ -33,6 +33,19 @@ type Appointment = {
   visit_types: VisitType[];
 };
 
+type PendingReviewResponse = {
+  pending_review: true;
+  change_request?: { id?: string; status?: string };
+};
+
+function isPendingReviewResponse(value: unknown): value is PendingReviewResponse {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && (value as { pending_review?: unknown }).pending_review === true,
+  );
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const VISIT_TYPE_INFO: Record<VisitType, { label: string; icon: string; color: string; bg: string }> = {
   outpatient:      { label: '門診',   icon: '🏥', color: '#2196f3', bg: '#e3f2fd' },
@@ -191,6 +204,7 @@ export default function RemindersPage() {
   }, [activeMember, memberNames]);
   const [showDone, setShowDone] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [expandedConclusion, setExpandedConclusion] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const highlightRef = useRef<HTMLDivElement | null>(null);
@@ -328,6 +342,11 @@ export default function RemindersPage() {
     try {
       setAppts(prev => prev.map(a => a.id === id ? { ...a, done: !appt.done, status: !appt.done ? 'completed' : 'active' } : a));
       const updated = await api.patch(`/api/patients/me/reminders/${id}`, { is_done: !appt.done });
+      if (isPendingReviewResponse(updated)) {
+        setAppts(prev => prev.map(a => a.id === id ? appt : a));
+        showToast('這是醫療團隊建立的提醒；已送出更新請求，正式內容尚未變更', 'info');
+        return;
+      }
       setAppts(prev => prev.map(a => a.id === id ? { ...a, ...fromApi(updated), done: !appt.done } : a));
       // Auto-expand conclusion when marking as done
       if (!appt.done) setExpandedConclusion(id);
@@ -340,15 +359,27 @@ export default function RemindersPage() {
   const updateConclusion = async (id: string, conclusion: string) => {
     try {
       const updated = await api.patch(`/api/patients/me/reminders/${id}`, { conclusion });
+      if (isPendingReviewResponse(updated)) {
+        showToast('已送出給醫療團隊，正式提醒尚未變更', 'info');
+        return;
+      }
       setAppts(prev => prev.map(a => a.id === id ? { ...a, ...fromApi(updated), conclusion } : a));
-    } catch {}
+    } catch {
+      showToast('更新就醫紀錄失敗', 'error');
+    }
   };
 
   const updateVisitTypes = async (id: string, types: VisitType[]) => {
     try {
       const updated = await api.patch(`/api/patients/me/reminders/${id}`, { visit_types: types });
+      if (isPendingReviewResponse(updated)) {
+        showToast('已送出給醫療團隊，正式提醒尚未變更', 'info');
+        return;
+      }
       setAppts(prev => prev.map(a => a.id === id ? { ...a, ...fromApi(updated), visit_types: types } : a));
-    } catch {}
+    } catch {
+      showToast('更新就醫類型失敗', 'error');
+    }
   };
 
   const deleteAppt = async (id: string) => {
@@ -356,7 +387,12 @@ export default function RemindersPage() {
     if (!old) return;
     setAppts(prev => prev.filter(a => a.id !== id));
     try {
-      await api.delete(`/api/patients/me/reminders/${id}`);
+      const deleted = await api.delete(`/api/patients/me/reminders/${id}`);
+      if (isPendingReviewResponse(deleted)) {
+        setAppts(prev => prev.some(a => a.id === old.id) ? prev : [old, ...prev]);
+        showToast('這是醫療團隊建立的提醒；已送出移除請求，正式提醒仍保留', 'info');
+        return;
+      }
       showToast('已刪除提醒', 'info', {
         label: 'Undo',
         durationMs: 10000,
@@ -375,11 +411,11 @@ export default function RemindersPage() {
     }
   };
 
-  const addAppt = async (e: React.FormEvent<HTMLFormElement>) => {
+  const saveAppt = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const memberColor = members.find(m => m.name === form.member)?.color ?? '#607d8b';
     try {
-      const created = await api.post('/api/patients/me/reminders', {
+      const payload = {
         type: form.type,
         title: form.title,
         member_name: form.member,
@@ -394,17 +430,31 @@ export default function RemindersPage() {
         color: memberColor,
         conclusion: form.conclusion || null,
         visit_types: form.visit_types.length ? form.visit_types : null,
-      });
-      setAppts(prev => [...prev, fromApi(created)]);
-      showToast('已新增提醒', 'success', {
-        label: 'Undo',
-        durationMs: 10000,
-        onClick: async () => {
-          const createdId = String((created as { id: string | number }).id);
-          await api.delete(`/api/patients/me/reminders/${createdId}`);
-          setAppts(prev => prev.filter(a => a.id !== createdId));
-        },
-      });
+      };
+      const saved = editingId
+        ? await api.patch(`/api/patients/me/reminders/${editingId}`, payload)
+        : await api.post('/api/patients/me/reminders', payload);
+      if (isPendingReviewResponse(saved)) {
+        showToast('已送出給醫療團隊，正式提醒尚未變更', 'info');
+        return;
+      }
+      const mapped = fromApi(saved);
+      setAppts(prev => editingId
+        ? prev.map(appt => appt.id === editingId ? mapped : appt)
+        : [...prev, mapped]);
+      if (editingId) {
+        showToast('提醒已更新，立即生效', 'success');
+      } else {
+        showToast('已新增提醒', 'success', {
+          label: 'Undo',
+          durationMs: 10000,
+          onClick: async () => {
+            const createdId = String((saved as { id: string | number }).id);
+            await api.delete(`/api/patients/me/reminders/${createdId}`);
+            setAppts(prev => prev.filter(a => a.id !== createdId));
+          },
+        });
+      }
       setForm({
         member: activeMember || memberNames[0] || '', type: 'follow_up',
         title: '', clinic: '', doctor: '', room: '',
@@ -412,9 +462,44 @@ export default function RemindersPage() {
         conclusion: '', visit_types: [],
       });
       setShowForm(false);
+      setEditingId(null);
     } catch {
-      showToast('新增提醒失敗', 'error');
+      showToast(editingId ? '更新提醒失敗' : '新增提醒失敗', 'error');
     }
+  };
+
+  const openCreate = () => {
+    setEditingId(null);
+    setForm({
+      member: activeMember || memberNames[0] || '', type: 'follow_up',
+      title: '', clinic: '', doctor: '', room: '',
+      date: '', time: '09:00', note: '',
+      conclusion: '', visit_types: [],
+    });
+    setShowForm(true);
+  };
+
+  const openEdit = (appt: Appointment) => {
+    if (!appt.isPatientManaged) {
+      showToast('醫療團隊建立的提醒只能回報變更；你的自建提醒可直接修改', 'info');
+      return;
+    }
+    setEditingId(appt.id);
+    setForm({
+      member: appt.member,
+      type: appt.type,
+      title: appt.title,
+      clinic: appt.clinic,
+      doctor: appt.doctor,
+      room: appt.room,
+      date: appt.date,
+      time: appt.time,
+      note: appt.note,
+      conclusion: appt.conclusion,
+      visit_types: appt.visit_types,
+    });
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const toggleVisitType = (types: VisitType[], t: VisitType): VisitType[] =>
@@ -523,10 +608,16 @@ export default function RemindersPage() {
                 fontSize: '11px', cursor: 'pointer',
               }}>{isExpanded ? '收起' : '就醫紀錄'}</button>
             )}
+            {a.isPatientManaged && (
+              <button onClick={() => openEdit(a)} style={{
+                padding: '6px 10px', borderRadius: '8px', border: '1px solid var(--gray-200)',
+                background: '#fff', color: '#45596a', fontSize: '12px', cursor: 'pointer',
+              }}>修改</button>
+            )}
             <button onClick={() => deleteAppt(a.id)} style={{
               padding: '6px 10px', borderRadius: '8px', border: '1px solid var(--gray-200)',
               background: '#fff', color: '#f44336', fontSize: '12px', cursor: 'pointer',
-            }}>刪除</button>
+            }}>{a.isPatientManaged ? '刪除' : '請求移除'}</button>
           </div>
         </div>
 
@@ -600,10 +691,10 @@ export default function RemindersPage() {
             <h2 style={{ fontSize: '26px', fontWeight: '800', color: '#111' }}>提醒中心</h2>
             <p style={{ fontSize: '14px', color: '#666', marginTop: '2px' }}>目前顯示：{scopeLabel} · {upcoming.length} 個即將到來的提醒</p>
           </div>
-          <button onClick={() => setShowForm(v => !v)} style={{
+          <button onClick={showForm && !editingId ? () => setShowForm(false) : openCreate} style={{
             background: 'var(--primary)', color: '#fff', border: 'none',
             padding: '10px 20px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: 'pointer',
-          }}>+ 新增提醒</button>
+          }}>{showForm && !editingId ? '收合新增表單' : '+ 新增提醒'}</button>
         </div>
 
         {/* CMO 追蹤項目（由醫療團隊建立，對應改版 §5.2 F / §6.2 流程④） */}
@@ -697,11 +788,14 @@ export default function RemindersPage() {
 
         {/* ── Add Form ── */}
         {showForm && members.length > 0 && (
-          <form onSubmit={addAppt} style={{
+          <form onSubmit={saveAppt} style={{
             background: '#fff', borderRadius: '16px', padding: '24px',
             boxShadow: 'var(--shadow-sm)', marginBottom: '24px',
           }}>
-            <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '20px' }}>新增提醒</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '700', margin: 0 }}>{editingId ? '修改我的提醒' : '新增提醒'}</h3>
+              <span className="hk-badge hk-b-green">立即生效</span>
+            </div>
 
             {/* Row 1: member + title */}
             <div className="grid-2col" style={{ marginBottom: '16px' }}>
@@ -833,8 +927,8 @@ export default function RemindersPage() {
               <button type="submit" style={{
                 background: 'var(--primary)', color: '#fff', border: 'none',
                 padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer',
-              }}>儲存</button>
-              <button type="button" onClick={() => setShowForm(false)} style={{
+              }}>{editingId ? '儲存修改' : '儲存'}</button>
+              <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }} style={{
                 background: '#f8f9fa', color: '#666', border: 'none',
                 padding: '10px 24px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer',
               }}>取消</button>

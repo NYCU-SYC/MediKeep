@@ -6,6 +6,8 @@ import { useActiveMember } from '../member-context';
 import { RECORD_TYPE_META, getTypeMeta } from '../record-types';
 import { useSync } from '@/lib/sync';
 import { memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
+import { api } from '@/lib/api';
+import { useToast } from '../toast-context';
 
 type RecordOut = {
   id: string;
@@ -15,6 +17,14 @@ type RecordOut = {
   value2: string | null;
   unit: string | null;
   note: string | null;
+  recorded_at: string;
+};
+
+type RecordEditForm = {
+  value1: string;
+  value2: string;
+  unit: string;
+  note: string;
   recorded_at: string;
 };
 
@@ -169,7 +179,15 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
 }
 
+function toDatetimeLocal(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
 export default function HistoryPage() {
+  const { showToast } = useToast();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -185,6 +203,9 @@ export default function HistoryPage() {
   const [filterMember, setFilterMember] = useState(() => activeMember || '全部');
   const [filterType, setFilterType] = useState('全部');
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<RecordEditForm | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
   const [recordsLoadError, setRecordsLoadError] = useState(false);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
@@ -263,10 +284,46 @@ export default function HistoryPage() {
     if (!confirm('確定要刪除這筆紀錄嗎？這會 soft delete，系統仍會保留 audit/history。')) return;
     setDeleting(id);
     try {
-      await fetch(`/api/records/${id}`, { method: 'DELETE', credentials: 'include' });
+      await api.delete(`/api/records/${id}`);
       setRecords(prev => prev.filter(r => r.id !== id));
+      showToast('已移除這筆自我紀錄', 'success');
+    } catch {
+      showToast('移除失敗，紀錄仍保留在清單中', 'error');
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const startEditing = (record: RecordOut) => {
+    setEditingId(record.id);
+    setEditForm({
+      value1: record.value1 ?? '',
+      value2: record.value2 ?? '',
+      unit: record.unit ?? '',
+      note: record.note ?? '',
+      recorded_at: toDatetimeLocal(record.recorded_at),
+    });
+  };
+
+  const saveEditing = async (record: RecordOut) => {
+    if (!editForm || editingId !== record.id) return;
+    setEditBusy(true);
+    try {
+      const updated = await api.patch(`/api/records/${record.id}`, {
+        value1: editForm.value1 || null,
+        value2: editForm.value2 || null,
+        unit: editForm.unit || null,
+        note: editForm.note || null,
+        recorded_at: editForm.recorded_at ? new Date(editForm.recorded_at).toISOString() : record.recorded_at,
+      }) as RecordOut;
+      setRecords((current) => current.map((row) => row.id === record.id ? updated : row));
+      setEditingId(null);
+      setEditForm(null);
+      showToast('自我紀錄已更新，立即生效', 'success');
+    } catch {
+      showToast('更新失敗，原紀錄仍保留', 'error');
+    } finally {
+      setEditBusy(false);
     }
   };
 
@@ -571,9 +628,10 @@ export default function HistoryPage() {
                   return (
                     <div key={r.id} style={{
                       background: '#fff', borderRadius: '12px', padding: '14px 16px',
-                      boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', gap: '14px',
+                      boxShadow: 'var(--shadow-sm)',
                       opacity: deleting === r.id ? 0.5 : 1, transition: 'opacity 0.2s',
                     }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                       <div style={{
                         width: '40px', height: '40px', borderRadius: '12px', flexShrink: 0,
                         background: `${meta.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -594,6 +652,13 @@ export default function HistoryPage() {
                       <div style={{ textAlign: 'right', flexShrink: 0 }}>
                         <div style={{ fontSize: '13px', color: '#999' }}>{formatTime(r.recorded_at)}</div>
                         <button
+                          onClick={() => startEditing(r)}
+                          disabled={deleting === r.id}
+                          style={{ fontSize: '11px', color: '#45596a', border: 'none', background: 'none', cursor: 'pointer', marginTop: '4px', marginRight: 8 }}
+                        >
+                          修改
+                        </button>
+                        <button
                           onClick={() => handleDelete(r.id)}
                           disabled={deleting === r.id}
                           style={{ fontSize: '11px', color: '#ccc', border: 'none', background: 'none', cursor: 'pointer', marginTop: '4px' }}
@@ -601,6 +666,64 @@ export default function HistoryPage() {
                           刪除
                         </button>
                       </div>
+                      </div>
+                      {editingId === r.id && editForm && (
+                        <div style={{ borderTop: '1px solid var(--gray-100)', marginTop: 12, paddingTop: 12 }}>
+                          <div className="grid-2col" style={{ gap: 10 }}>
+                            <label style={editLabelStyle}>
+                              主要數值
+                              <input
+                                value={editForm.value1}
+                                onChange={(event) => setEditForm((current) => current ? { ...current, value1: event.target.value } : current)}
+                                style={editInputStyle}
+                              />
+                            </label>
+                            {r.record_type === 'blood_pressure' && (
+                              <label style={editLabelStyle}>
+                                第二數值
+                                <input
+                                  value={editForm.value2}
+                                  onChange={(event) => setEditForm((current) => current ? { ...current, value2: event.target.value } : current)}
+                                  style={editInputStyle}
+                                />
+                              </label>
+                            )}
+                            <label style={editLabelStyle}>
+                              單位
+                              <input
+                                value={editForm.unit}
+                                onChange={(event) => setEditForm((current) => current ? { ...current, unit: event.target.value } : current)}
+                                style={editInputStyle}
+                              />
+                            </label>
+                            <label style={editLabelStyle}>
+                              記錄時間
+                              <input
+                                type="datetime-local"
+                                value={editForm.recorded_at}
+                                onChange={(event) => setEditForm((current) => current ? { ...current, recorded_at: event.target.value } : current)}
+                                style={editInputStyle}
+                              />
+                            </label>
+                            <label style={editLabelStyle}>
+                              備註
+                              <input
+                                value={editForm.note}
+                                onChange={(event) => setEditForm((current) => current ? { ...current, note: event.target.value } : current)}
+                                style={editInputStyle}
+                              />
+                            </label>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                            <button type="button" onClick={() => void saveEditing(r)} disabled={editBusy} className="hk-btn hk-btn-primary hk-btn-sm" style={{ width: 'auto' }}>
+                              {editBusy ? '儲存中…' : '儲存修改'}
+                            </button>
+                            <button type="button" onClick={() => { setEditingId(null); setEditForm(null); }} className="hk-btn hk-btn-ghost hk-btn-sm">
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -613,3 +736,21 @@ export default function HistoryPage() {
     </div>
   );
 }
+
+const editLabelStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 5,
+  color: '#56687a',
+  fontSize: 12,
+  fontWeight: 750,
+};
+
+const editInputStyle: React.CSSProperties = {
+  width: '100%',
+  border: '1px solid #c8d4dc',
+  borderRadius: 8,
+  padding: '8px 10px',
+  background: '#fff',
+  color: '#22313f',
+  font: 'inherit',
+};

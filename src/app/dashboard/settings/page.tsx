@@ -288,7 +288,7 @@ export default function SettingsPage() {
 
   const updateIdentityAccess = async (identity: FamilyAccessIdentity, scope: 'family' | 'member' | 'none', memberId?: string | null) => {
     if (scope === 'member' && !memberId) {
-      setFamilyAccessError('選擇「只看特定成員」時，必須綁定一位家庭成員。');
+      setFamilyAccessError('選擇「只能編輯特定成員」時，必須綁定一位家庭成員。');
       return;
     }
     setSavingAccessId(identity.id);
@@ -299,9 +299,9 @@ export default function SettingsPage() {
         family_member_id: scope === 'member' ? memberId : null,
       }) as FamilyAccessInfo;
       setFamilyAccess(updated);
-      showToast('家庭健康資料授權已更新', 'success');
+      showToast('家庭健康資料編輯權限已更新', 'success');
     } catch (error) {
-      const message = requestErrorMessage(error, '家庭健康資料授權更新失敗');
+      const message = requestErrorMessage(error, '家庭健康資料編輯權限更新失敗');
       setFamilyAccessError(message);
       showToast(message, 'error');
     } finally {
@@ -493,9 +493,11 @@ export default function SettingsPage() {
     ? inviteStatusCopy(familyInfo?.join_code_status)
     : { label: '僅 owner 可查看', bg: '#eef2f5', fg: '#6b7c8c' };
   const canViewFamilyHealthData = familyInfo?.permissions?.can_view_family_health_data === true;
-  const healthScopeText = !canViewFamilyHealthData
-    ? '尚未授權健康資料'
-    : '可查看全家健康資料';
+  const editScopeText = familyInfo?.health_data_scope === 'family'
+    ? '可新增或修改全家庭的使用者回報資料'
+    : familyInfo?.health_data_scope === 'member'
+      ? `只能新增或修改${familyInfo.family_member_name ? `「${familyInfo.family_member_name}」` : '已綁定成員'}的使用者回報資料`
+      : '僅可查看，不能新增或修改使用者回報資料';
   const identityTitle = familyInfoLoading
     ? '載入中...'
     : familyInfo
@@ -651,7 +653,8 @@ export default function SettingsPage() {
           <div style={{ border: '1px solid var(--gray-200)', borderRadius: '12px', padding: '14px', background: '#fff' }}>
             <div style={{ fontSize: '12px', color: '#6b7c8c', fontWeight: 800, marginBottom: 6 }}>資料權限</div>
             <div style={{ fontSize: '12px', color: '#45596a', lineHeight: 1.7 }}>
-              看家庭健康資料：{canViewFamilyHealthData ? '允許' : '未開放'}<br />
+              查看家庭健康資料：{canViewFamilyHealthData ? '同家庭成員皆可' : '權限狀態異常'}<br />
+              新增/修改回報資料：{editScopeText}<br />
               新增/編輯家庭成員：{familyInfo?.permissions?.can_manage_family_members ? 'Owner only' : '不可操作'}<br />
               管理加入碼：{familyInfo?.permissions?.can_manage_join_code ? 'Owner only' : '不可操作'}
             </div>
@@ -659,7 +662,7 @@ export default function SettingsPage() {
         </div>
 
         <div style={{ border: '1px solid #d5e7ec', background: '#e7f3f5', borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 900, color: '#1e3a8a', marginBottom: 8 }}>健康資料可見範圍</div>
+          <div style={{ fontSize: '13px', fontWeight: 900, color: '#1e3a8a', marginBottom: 8 }}>健康資料編輯範圍</div>
           {canManageMemberAccess ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {familyAccessLoading && (
@@ -710,9 +713,9 @@ export default function SettingsPage() {
                       }}
                       style={{ ...inputStyle, background: lockedOwner ? '#f6f9fa' : '#fff' }}
                     >
-                      <option value="none">不顯示健康資料</option>
-                      <option value="member" disabled={(familyAccess?.members ?? []).length === 0}>只看特定成員</option>
-                      <option value="family">可看全家庭健康資料</option>
+                      <option value="none">僅查看，不可新增或修改</option>
+                      <option value="member" disabled={(familyAccess?.members ?? []).length === 0}>只能編輯特定成員</option>
+                      <option value="family">可編輯全家庭回報資料</option>
                     </select>
                     <select
                       value={identity.family_member_id || ''}
@@ -729,12 +732,12 @@ export default function SettingsPage() {
                 );
               })}
               <p style={{ fontSize: '12px', color: '#56687a', lineHeight: 1.65, margin: '4px 0 0' }}>
-                新加入的家庭成員預設不能看健康資料。Owner 可授權全家庭，或只綁定到某一位家庭成員；CMO 未發布內容仍不會出現在病人端或家庭端。
+                同一家庭的成員都可查看全家健康資料。新加入者預設只能查看；Owner 可另外開放全家庭編輯，或只允許編輯一位家庭成員的使用者回報資料。CMO 未發布內容仍不會出現在病人端或家庭端。
               </p>
             </div>
           ) : (
             <div style={{ border: '1px solid #cfe3e8', borderRadius: '10px', background: '#fff', padding: '12px', fontSize: '13px', color: '#45596a', lineHeight: 1.7 }}>
-              目前健康資料範圍：{healthScopeText}
+              查看範圍：全家庭。編輯範圍：{editScopeText}
             </div>
           )}
         </div>

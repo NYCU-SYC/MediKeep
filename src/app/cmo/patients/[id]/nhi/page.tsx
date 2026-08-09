@@ -10,7 +10,7 @@ import { RowActionsMenu, type RowActionGroup } from '../_components/RowActionsMe
 type SectionKey =
   | 'outpatient' | 'inpatient' | 'med' | 'surgery'
   | 'imaging' | 'lab' | 'vaccine' | 'covid'
-  | 'tcm' | 'dental'
+  | 'tcm' | 'dental' | 'advance_directive'
 type DraftStatus = 'pending' | 'accepted' | 'rejected'
 type TriageStatus = 'pending' | 'linked' | 'dismissed' | 'rejected'
 type SourceTriageAction = 'link_to_problem' | 'dismiss' | 'reject' | 'request_missing_data'
@@ -68,6 +68,7 @@ const SECTIONS: Array<{ key: SectionKey; label: string; subtitle: string; icon: 
   { key: 'covid',      label: 'COVID-19',     subtitle: '疫苗與檢測', icon: '🦠' },
   { key: 'tcm',        label: '中醫門診',     subtitle: '中醫就醫', icon: '🌿' },
   { key: 'dental',     label: '牙醫門診',     subtitle: '牙科就醫', icon: '🦷' },
+  { key: 'advance_directive', label: '器捐／安寧意願', subtitle: '器官捐贈與安寧意願', icon: '📜' },
 ]
 
 const STATUS_META: Record<DraftStatus, { label: string; color: string; bg: string }> = {

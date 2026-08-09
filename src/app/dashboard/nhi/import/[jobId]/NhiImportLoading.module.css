@@ -1,0 +1,175 @@
+.page {
+  width: min(100%, 860px);
+  margin: 0 auto;
+}
+
+.card {
+  padding: clamp(20px, 4vw, 34px);
+}
+
+.heading {
+  color: var(--hk-ink);
+  font-size: clamp(22px, 3vw, 30px);
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.heading:focus {
+  outline: 3px solid rgb(62 107 126 / 0.28);
+  outline-offset: 5px;
+}
+
+.description {
+  margin-top: 8px;
+  color: var(--hk-ink-2);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: 3px solid #dbe7eb;
+  border-top-color: var(--hk-teal);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+.paused {
+  border-color: #d4bd75;
+  background: var(--hk-amber-soft);
+}
+
+.statusText {
+  color: var(--hk-ink);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.progressTrack {
+  height: 12px;
+  margin-top: 18px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8eff2;
+}
+
+.progressBar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #3e6b7e, #5c9e9e);
+  transition: width 0.25s ease;
+}
+
+.progressMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--hk-ink-3);
+  font-size: 12px;
+}
+
+.details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.detail {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--hk-line);
+  border-radius: 10px;
+  background: #fbfcfd;
+}
+
+.detailLabel {
+  color: var(--hk-ink-3);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.detailValue {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: var(--hk-ink);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.alert {
+  margin-top: 20px;
+  padding: 13px 14px;
+  border: 1px solid #f2d3cf;
+  border-radius: 10px;
+  background: var(--hk-red-soft);
+  color: var(--hk-red);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.notice {
+  margin-top: 20px;
+  padding: 13px 14px;
+  border: 1px solid #efdfae;
+  border-radius: 10px;
+  background: var(--hk-amber-soft);
+  color: var(--hk-amber);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.action {
+  min-height: 42px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 600px) {
+  .details {
+    grid-template-columns: 1fr;
+  }
+
+  .progressMeta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .actions {
+    flex-direction: column;
+  }
+
+  .action {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+
+  .progressBar {
+    transition: none;
+  }
+}
