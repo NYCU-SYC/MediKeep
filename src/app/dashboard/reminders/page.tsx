@@ -7,7 +7,31 @@ import { api } from '@/lib/api';
 import { useToast } from '../toast-context';
 import { useSync } from '@/lib/sync';
 import type { ReminderType, ReminderSource } from '@/lib/healthkeepTypes';
-import { memberDisplayName, normalizeMemberName as normalizeMemberParam, uniqueMemberNames } from '@/lib/members';
+import { memberDisplayName, memberHref, normalizeMemberName as normalizeMemberParam, uniqueMemberNames } from '@/lib/members';
+import { migrateLegacyReminders, type LegacyReminder } from './legacy-migration';
+import { ConfirmDialog } from '../_components/Shared';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bed,
+  Bell,
+  Check,
+  ClipboardCheck,
+  Clock,
+  FileText,
+  Hospital,
+  MapPin,
+  MessageCircle,
+  Microscope,
+  Paperclip,
+  Pill,
+  ShieldCheck,
+  Stethoscope,
+  Syringe,
+  TrendingUp,
+  UsersRound,
+  type LucideIcon,
+} from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type VisitType = 'outpatient' | 'hospitalization' | 'medication' | 'examination';
@@ -38,6 +62,11 @@ type PendingReviewResponse = {
   change_request?: { id?: string; status?: string };
 };
 
+type ReminderDeleteResponse = {
+  deleted?: boolean;
+  deleted_at?: string | null;
+};
+
 function isPendingReviewResponse(value: unknown): value is PendingReviewResponse {
   return Boolean(
     value
@@ -47,35 +76,71 @@ function isPendingReviewResponse(value: unknown): value is PendingReviewResponse
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const VISIT_TYPE_INFO: Record<VisitType, { label: string; icon: string; color: string; bg: string }> = {
-  outpatient:      { label: '門診',   icon: '🏥', color: '#2196f3', bg: '#e3f2fd' },
-  hospitalization: { label: '住院',   icon: '🛏',  color: '#f44336', bg: '#fff0f0' },
-  medication:      { label: '用藥',   icon: '💊', color: '#4caf50', bg: '#f0fff4' },
-  examination:     { label: '檢查',   icon: '🔬', color: '#9c27b0', bg: '#f3e5f5' },
+const VISIT_TYPE_INFO: Record<VisitType, { label: string; icon: LucideIcon; color: string; bg: string }> = {
+  outpatient:      { label: '門診',   icon: Hospital, color: '#2196f3', bg: '#e3f2fd' },
+  hospitalization: { label: '住院',   icon: Bed, color: '#f44336', bg: '#fff0f0' },
+  medication:      { label: '用藥',   icon: Pill, color: '#4caf50', bg: '#f0fff4' },
+  examination:     { label: '檢查',   icon: Microscope, color: '#9c27b0', bg: '#f3e5f5' },
 };
 
-const REMINDER_TYPE_INFO: Record<ReminderType, { label: string; icon: string; color: string; bg: string }> = {
-  follow_up:         { label: '回診',     icon: '🏥', color: '#3e6b7e', bg: '#e7f3f5' },
-  health_check:      { label: '健檢',     icon: '🧾', color: '#3e6b7e', bg: '#e7f4ec' },
-  screening:         { label: '預防',     icon: '🛡️', color: '#7a5fc0', bg: '#f0ecfa' },
-  vaccine:           { label: '疫苗',     icon: '💉', color: '#a97614', bg: '#fdf1e0' },
-  medication_refill: { label: '藥物',     icon: '💊', color: '#2e8b57', bg: '#e7f4ec' },
-  measurement:       { label: '量測',     icon: '📈', color: '#c0453a', bg: '#faecea' },
-  document_upload:   { label: '文件上傳', icon: '📎', color: '#56687a', bg: '#f6f9fa' },
-  custom:            { label: '自訂',     icon: '🔔', color: '#6b7c8c', bg: '#eef2f5' },
+const REMINDER_TYPE_INFO: Record<ReminderType, { label: string; icon: LucideIcon; color: string; bg: string }> = {
+  follow_up:         { label: '回診',     icon: Hospital, color: '#3e6b7e', bg: '#e7f3f5' },
+  health_check:      { label: '健檢',     icon: ClipboardCheck, color: '#3e6b7e', bg: '#e7f4ec' },
+  screening:         { label: '預防',     icon: ShieldCheck, color: '#7a5fc0', bg: '#f0ecfa' },
+  vaccine:           { label: '疫苗',     icon: Syringe, color: '#a97614', bg: '#fdf1e0' },
+  medication_refill: { label: '藥物',     icon: Pill, color: '#2e8b57', bg: '#e7f4ec' },
+  measurement:       { label: '量測',     icon: TrendingUp, color: '#c0453a', bg: '#faecea' },
+  document_upload:   { label: '文件上傳', icon: Paperclip, color: '#56687a', bg: '#f6f9fa' },
+  custom:            { label: '自訂',     icon: Bell, color: '#6b7c8c', bg: '#eef2f5' },
 };
 
-const SOURCE_LABEL: Record<ReminderSource, string> = {
-  patient_created: 'User created',
-  cmo_created: 'CMO created',
-  system_rule: 'System rule',
-  imported: 'Imported',
+const SOURCE_LABELS: Record<string, string> = {
+  patient_created: '我新增',
+  self: '我新增',
+  cmo_created: '醫療團隊建立',
+  cmo: '醫療團隊建立',
+  cmo_admin: '醫療團隊建立',
+  medical_team: '醫療團隊建立',
+  system_rule: '系統提醒',
+  system: '系統提醒',
+  imported: '匯入資料',
+  nhi_import: '匯入資料',
+  document_import: '文件整理',
 };
+
+function reminderSourceLabel(value?: string | null): string {
+  const key = String(value ?? '').trim().toLocaleLowerCase().replace(/[\s-]+/g, '_');
+  return key ? SOURCE_LABELS[key] ?? '其他來源' : '其他來源';
+}
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 function normalizeMemberName(member?: string | null): string {
   const value = (member ?? '').trim();
-  return value === 'self' ? '本人' : value;
+  const key = value.toLocaleLowerCase().replace(/[\s-]+/g, '_');
+  if (key === 'self' || key === 'patient') return '本人';
+  if (key === 'owner' || key === 'family_owner' || key === 'family_manager') return '家庭管理者';
+  if (key === 'cmo' || key === 'cmo_admin' || key === 'medical_team') return '醫療團隊';
+  return value;
+}
+
+function newRetryOperationKey(action: string, resourceId: string): string {
+  const nonce = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `healthkeep-${action}-${resourceId}-${nonce}`;
+}
+
+function retainedOperationKey(
+  keys: Map<string, string>,
+  logicalOperation: string,
+  action: string,
+  resourceId: string,
+): string {
+  const existing = keys.get(logicalOperation);
+  if (existing) return existing;
+  const created = newRetryOperationKey(action, resourceId);
+  keys.set(logicalOperation, created);
+  return created;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -117,6 +182,10 @@ function UrgencyBadge({ days }: { days: number }) {
   return <span style={{ background: '#f0f4f8', color: '#666', fontSize: '11px', padding: '2px 8px', borderRadius: '20px' }}>還有 {days} 天</span>;
 }
 
+function ReminderMetaIcon({ icon: IconComponent, size = 14 }: { icon: LucideIcon; size?: number }) {
+  return <IconComponent size={size} aria-hidden="true" focusable="false" />;
+}
+
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '10px 14px', borderRadius: '8px',
@@ -149,7 +218,7 @@ export default function RemindersPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { showToast } = useToast();
-  const { members, activeMember, setActiveMember } = useActiveMember();
+  const { members, activeMember, setActiveMember, canWriteMember, writeAccessReason } = useActiveMember();
   const memberNames = useMemo(() => uniqueMemberNames(members.map(m => m.name)), [members]);
   const scopeLabel = memberDisplayName(activeMember, members.length > 1 ? '全家' : '本人');
   const filterOptions = ['全部', ...memberNames];
@@ -159,7 +228,11 @@ export default function RemindersPage() {
   const [missingRequests, setMissingRequests] = useState<CmoMissingDataRequest[]>([]);
   const [missingReplies, setMissingReplies] = useState<Record<string, string>>({});
   const [missingReplyBusy, setMissingReplyBusy] = useState('');
-  const [cmoTasksError, setCmoTasksError] = useState(false);
+  const [followUpsError, setFollowUpsError] = useState('');
+  const [missingRequestsError, setMissingRequestsError] = useState('');
+  const [remindersLoading, setRemindersLoading] = useState(true);
+  const [remindersError, setRemindersError] = useState('');
+  const [migrationError, setMigrationError] = useState('');
   const visibleCmoFollowUps = useMemo(
     () => cmoFollowUps.filter((t) => !CLOSED_CMO_FOLLOW_UP_STATUSES.has(t.status)),
     [cmoFollowUps],
@@ -170,23 +243,28 @@ export default function RemindersPage() {
   );
   const loadCmoTasks = useCallback(() => {
     let alive = true;
-    setCmoTasksError(false);
+    setFollowUpsError('');
+    setMissingRequestsError('');
     const params: Record<string, string> = {};
     if (activeMember) params.member = activeMember;
     const queryParams = Object.keys(params).length ? params : undefined;
     // 401 redirects to login inside the api wrapper; only real (network/server)
     // failures set the error flag so the UI can distinguish "load failed" from
     // "no CMO tasks" instead of silently showing nothing.
-    const onErr = (err: unknown) => {
+    const shouldReportError = (err: unknown) => {
       const status = (err as { status?: number } | null)?.status;
-      if (alive && status !== 401) setCmoTasksError(true);
+      return alive && status !== 401;
     };
     api.get('/api/patients/me/follow-ups', queryParams)
       .then((r) => { if (alive) setCmoFollowUps(Array.isArray(r) ? (r as CmoFollowUp[]) : []); })
-      .catch(onErr);
+      .catch((err) => {
+        if (shouldReportError(err)) setFollowUpsError('醫療團隊追蹤項目暫時無法更新。已保留上次成功載入的內容，請稍後重試。');
+      });
     api.get('/api/patients/me/missing-data-requests', queryParams)
       .then((r) => { if (alive) setMissingRequests(Array.isArray(r) ? (r as CmoMissingDataRequest[]) : []); })
-      .catch(onErr);
+      .catch((err) => {
+        if (shouldReportError(err)) setMissingRequestsError('補件與資料請求暫時無法更新。已保留上次成功載入的內容，請稍後重試。');
+      });
     return () => { alive = false; };
   }, [activeMember]);
   useEffect(() => loadCmoTasks(), [loadCmoTasks]);
@@ -208,6 +286,9 @@ export default function RemindersPage() {
   const [expandedConclusion, setExpandedConclusion] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const highlightRef = useRef<HTMLDivElement | null>(null);
+  const deleteOperationKeysRef = useRef<Map<string, string>>(new Map());
+  const undoDeleteOperationKeysRef = useRef<Map<string, string>>(new Map());
+  const [pendingDelete, setPendingDelete] = useState<Appointment | null>(null);
   const [form, setForm] = useState<NewAppt>({
     member: activeMember || memberNames[0] || '', type: 'follow_up',
     title: '', clinic: '', doctor: '', room: '',
@@ -218,6 +299,12 @@ export default function RemindersPage() {
   const sync = useSync();
   const highlightParam = searchParams.get('highlight');
   const requestedMemberParam = searchParams.get('member');
+
+  const requireWrite = (member: string | null | undefined) => {
+    if (canWriteMember(member)) return true;
+    showToast(writeAccessReason(member) ?? '目前身份為唯讀，無法修改提醒。', 'info');
+    return false;
+  };
 
   // Deep links from dashboard summary cards can target the exact reminder row.
   useEffect(() => {
@@ -245,12 +332,18 @@ export default function RemindersPage() {
 
   // Fetch the authoritative reminder list from the server (single source of truth).
   const loadReminders = useCallback(async () => {
+    setRemindersLoading(true);
+    setRemindersError('');
     try {
       const params: Record<string, string> = {};
       if (activeMember) params.member = activeMember;
       const data = await api.get('/api/patients/me/reminders', Object.keys(params).length ? params : undefined);
       setAppts((data as unknown[]).map(fromApi));
-    } catch {}
+    } catch {
+      setRemindersError('暫時無法載入提醒。畫面不會把連線問題當成沒有提醒，請稍後重試。');
+    } finally {
+      setRemindersLoading(false);
+    }
   }, [activeMember]);
 
   useEffect(() => {
@@ -259,27 +352,23 @@ export default function RemindersPage() {
       const legacy = localStorage.getItem('healthkeep_reminders_v1');
       if (legacy) {
         try {
-          const items = JSON.parse(legacy) as Array<Record<string, unknown>>;
-          for (const item of items) {
-            await api.post('/api/patients/me/reminders', {
-              type: item.type || item.reminder_type || 'follow_up',
-              title: item.title || '提醒',
-              scheduled_date: item.date || item.scheduled_date || null,
-              repeat_type: item.repeat || item.repeat_type || 'none',
-              is_done: item.done || item.is_done || false,
-              note: item.note || null,
-              member_name: item.member || activeMember,
-              clinic: item.clinic || null,
-              doctor: item.doctor || null,
-              room: item.room || null,
-              time: item.time || null,
-              color: item.color || null,
-              conclusion: item.conclusion || null,
-              visit_types: item.visit_types || null,
-            }).catch(() => {});
+          const parsed = JSON.parse(legacy);
+          if (!Array.isArray(parsed)) throw new Error('legacy reminder payload must be an array');
+          const result = await migrateLegacyReminders(
+            parsed as LegacyReminder[],
+            activeMember,
+            (payload, idempotencyKey) => api.post('/api/patients/me/reminders', payload, { idempotencyKey }),
+          );
+          if (result.remaining.length > 0) {
+            localStorage.setItem('healthkeep_reminders_v1', JSON.stringify(result.remaining));
+            setMigrationError(`已搬移 ${result.migrated} 筆舊提醒，另有 ${result.remaining.length} 筆尚未搬移；原資料已保留，可稍後重試。`);
+          } else {
+            localStorage.removeItem('healthkeep_reminders_v1');
+            setMigrationError('');
           }
-        } catch {}
-        localStorage.removeItem('healthkeep_reminders_v1');
+        } catch {
+          setMigrationError('舊提醒目前無法安全搬移；原資料仍保留在這個裝置，請稍後重試。');
+        }
       }
       await loadReminders();
     };
@@ -305,7 +394,7 @@ export default function RemindersPage() {
     try {
       await api.post(`/api/patients/me/missing-data-requests/${request.id}/reply`, { response_text });
       setMissingReplies((prev) => ({ ...prev, [request.id]: '' }));
-      showToast('已送出給 CMO，醫療團隊會再次審閱。');
+      showToast('已送出給醫療團隊，對方會再次審閱。');
       loadCmoTasks();
     } catch {
       showToast('送出失敗，請稍後再試。');
@@ -331,12 +420,16 @@ export default function RemindersPage() {
   useEffect(() => {
     if (!highlightId) return;
     const frame = window.requestAnimationFrame(() => {
-      highlightRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const target = highlightRef.current;
+      target?.focus({ preventScroll: true });
+      target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [highlightId, upcoming.length, done.length, filterMember, showDone]);
 
   const toggleDone = async (id: string) => {
+    const target = appts.find((item) => item.id === id);
+    if (!requireWrite(target?.member)) return;
     const appt = appts.find(a => a.id === id);
     if (!appt) return;
     try {
@@ -357,6 +450,8 @@ export default function RemindersPage() {
   };
 
   const updateConclusion = async (id: string, conclusion: string) => {
+    const target = appts.find((item) => item.id === id);
+    if (!requireWrite(target?.member)) return;
     try {
       const updated = await api.patch(`/api/patients/me/reminders/${id}`, { conclusion });
       if (isPendingReviewResponse(updated)) {
@@ -370,6 +465,8 @@ export default function RemindersPage() {
   };
 
   const updateVisitTypes = async (id: string, types: VisitType[]) => {
+    const target = appts.find((item) => item.id === id);
+    if (!requireWrite(target?.member)) return;
     try {
       const updated = await api.patch(`/api/patients/me/reminders/${id}`, { visit_types: types });
       if (isPendingReviewResponse(updated)) {
@@ -382,28 +479,62 @@ export default function RemindersPage() {
     }
   };
 
+  async function undoDeletedAppt(id: string, deletedAt?: string | null) {
+    const logicalOperation = `${id}:${deletedAt || 'deleted'}`;
+    const idempotencyKey = retainedOperationKey(
+      undoDeleteOperationKeysRef.current,
+      logicalOperation,
+      'undo-delete-reminder',
+      id,
+    );
+    try {
+      const restored = await api.post(
+        `/api/patients/me/reminders/${id}/undo-delete`,
+        undefined,
+        { idempotencyKey },
+      );
+      undoDeleteOperationKeysRef.current.delete(logicalOperation);
+      deleteOperationKeysRef.current.delete(id);
+      setAppts(prev => prev.some(a => a.id === id) ? prev : [fromApi(restored), ...prev]);
+      showToast('提醒已復原', 'success');
+    } catch {
+      showToast('復原失敗，提醒仍留在最近刪除中', 'error', {
+        label: '重試復原',
+        durationMs: 10000,
+        onClick: () => void undoDeletedAppt(id, deletedAt),
+      });
+    }
+  }
+
   const deleteAppt = async (id: string) => {
+    const target = appts.find((item) => item.id === id);
+    if (!requireWrite(target?.member)) return;
     const old = appts.find(a => a.id === id);
     if (!old) return;
+    const idempotencyKey = retainedOperationKey(
+      deleteOperationKeysRef.current,
+      id,
+      'delete-reminder',
+      id,
+    );
     setAppts(prev => prev.filter(a => a.id !== id));
     try {
-      const deleted = await api.delete(`/api/patients/me/reminders/${id}`);
+      const deleted = await api.delete(
+        `/api/patients/me/reminders/${id}`,
+        { idempotencyKey },
+      );
       if (isPendingReviewResponse(deleted)) {
+        deleteOperationKeysRef.current.delete(id);
         setAppts(prev => prev.some(a => a.id === old.id) ? prev : [old, ...prev]);
         showToast('這是醫療團隊建立的提醒；已送出移除請求，正式提醒仍保留', 'info');
         return;
       }
+      deleteOperationKeysRef.current.delete(id);
+      const deletedAt = (deleted as ReminderDeleteResponse | null)?.deleted_at;
       showToast('已刪除提醒', 'info', {
-        label: 'Undo',
+        label: '復原',
         durationMs: 10000,
-        onClick: async () => {
-          try {
-            const restored = await api.post(`/api/patients/me/reminders/${id}/undo-delete`);
-            setAppts(prev => [fromApi(restored), ...prev]);
-          } catch {
-            setAppts(prev => [old, ...prev]);
-          }
-        },
+        onClick: () => void undoDeletedAppt(id, deletedAt),
       });
     } catch {
       setAppts(prev => [old, ...prev]);
@@ -413,6 +544,7 @@ export default function RemindersPage() {
 
   const saveAppt = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!requireWrite(form.member)) return;
     const memberColor = members.find(m => m.name === form.member)?.color ?? '#607d8b';
     try {
       const payload = {
@@ -446,12 +578,26 @@ export default function RemindersPage() {
         showToast('提醒已更新，立即生效', 'success');
       } else {
         showToast('已新增提醒', 'success', {
-          label: 'Undo',
+          label: '復原',
           durationMs: 10000,
           onClick: async () => {
             const createdId = String((saved as { id: string | number }).id);
-            await api.delete(`/api/patients/me/reminders/${createdId}`);
-            setAppts(prev => prev.filter(a => a.id !== createdId));
+            const idempotencyKey = retainedOperationKey(
+              deleteOperationKeysRef.current,
+              createdId,
+              'delete-reminder',
+              createdId,
+            );
+            try {
+              await api.delete(
+                `/api/patients/me/reminders/${createdId}`,
+                { idempotencyKey },
+              );
+              deleteOperationKeysRef.current.delete(createdId);
+              setAppts(prev => prev.filter(a => a.id !== createdId));
+            } catch {
+              showToast('移除剛新增的提醒失敗，提醒仍保留', 'error');
+            }
           },
         });
       }
@@ -469,9 +615,11 @@ export default function RemindersPage() {
   };
 
   const openCreate = () => {
+    const target = activeMember || memberNames[0] || '';
+    if (!requireWrite(target)) return;
     setEditingId(null);
     setForm({
-      member: activeMember || memberNames[0] || '', type: 'follow_up',
+      member: target, type: 'follow_up',
       title: '', clinic: '', doctor: '', room: '',
       date: '', time: '09:00', note: '',
       conclusion: '', visit_types: [],
@@ -480,6 +628,7 @@ export default function RemindersPage() {
   };
 
   const openEdit = (appt: Appointment) => {
+    if (!requireWrite(appt.member)) return;
     if (!appt.isPatientManaged) {
       showToast('醫療團隊建立的提醒只能回報變更；你的自建提醒可直接修改', 'info');
       return;
@@ -513,7 +662,7 @@ export default function RemindersPage() {
     const isHighlighted = highlightId === a.id;
 
     return (
-      <div ref={isHighlighted ? highlightRef : undefined} style={{
+      <div ref={isHighlighted ? highlightRef : undefined} tabIndex={isHighlighted ? -1 : undefined} style={{
         background: '#fff', borderRadius: '14px', boxShadow: 'var(--shadow-sm)',
         borderLeft: `4px solid ${a.done ? '#ccc' : a.color}`,
         outline: isHighlighted ? '2px solid #3e6b7e' : 'none',
@@ -538,8 +687,8 @@ export default function RemindersPage() {
           <div style={{ flex: 1 }}>
             {/* Title + badges */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '11px', background: typeInfo.bg, color: typeInfo.color, padding: '2px 8px', borderRadius: '20px', fontWeight: 700 }}>
-                {typeInfo.icon} {typeInfo.label}
+              <span style={{ fontSize: '11px', background: typeInfo.bg, color: typeInfo.color, padding: '2px 8px', borderRadius: '20px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <ReminderMetaIcon icon={typeInfo.icon} size={13} />{typeInfo.label}
               </span>
               <span style={{
                 fontSize: '15px', fontWeight: '700',
@@ -550,23 +699,23 @@ export default function RemindersPage() {
                 {a.member}
               </span>
               <span style={{ fontSize: '10px', background: a.source === 'patient_created' ? '#e7f4ec' : '#eef2ff', color: a.source === 'patient_created' ? '#2e8b57' : '#3730a3', padding: '2px 8px', borderRadius: '20px', fontWeight: 700 }}>
-                {SOURCE_LABEL[a.source] ?? a.source}
+                {reminderSourceLabel(a.source)}
               </span>
-              {a.isVerified && <span style={{ fontSize: '10px', background: '#d1fae5', color: '#065f46', padding: '2px 8px', borderRadius: '20px', fontWeight: 700 }}>CMO verified</span>}
+              {a.isVerified && <span style={{ fontSize: '12px', background: '#d1fae5', color: '#065f46', padding: '3px 8px', borderRadius: '20px', fontWeight: 700 }}>醫療團隊已確認</span>}
               {!a.done && <UrgencyBadge days={days} />}
             </div>
 
             {/* Clinic + details row */}
-            <div style={{ fontSize: '13px', color: '#777', lineHeight: 1.6 }}>
-              <span>📍 {a.clinic}</span>
-              {a.doctor && <span> · 👨‍⚕️ {a.doctor}</span>}
-              {a.room && <span> · 診間：{a.room}</span>}
-              <span> · ⏰ {a.time}</span>
+            <div style={{ fontSize: '13px', color: '#777', lineHeight: 1.6, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px 12px' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><MapPin size={14} aria-hidden="true" />{a.clinic}</span>
+              {a.doctor && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Stethoscope size={14} aria-hidden="true" />{a.doctor}</span>}
+              {a.room && <span>診間：{a.room}</span>}
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Clock size={14} aria-hidden="true" />{a.time}</span>
             </div>
 
             {/* Pre-visit note */}
             {a.note && (
-              <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>📝 {a.note}</div>
+              <div style={{ fontSize: '12px', color: '#999', marginTop: '4px', display: 'flex', alignItems: 'flex-start', gap: 4 }}><FileText size={14} aria-hidden="true" style={{ marginTop: 1, flexShrink: 0 }} />{a.note}</div>
             )}
 
             {/* Visit type tags */}
@@ -577,8 +726,8 @@ export default function RemindersPage() {
                   return (
                     <span key={t} style={{
                       fontSize: '11px', background: info.bg, color: info.color,
-                      padding: '2px 8px', borderRadius: '20px', fontWeight: '600',
-                    }}>{info.icon} {info.label}</span>
+                      padding: '2px 8px', borderRadius: '20px', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: 4,
+                    }}><ReminderMetaIcon icon={info.icon} size={12} />{info.label}</span>
                   );
                 })}
               </div>
@@ -586,8 +735,8 @@ export default function RemindersPage() {
 
             {/* Conclusion preview (when done) */}
             {a.done && a.conclusion && !isExpanded && (
-              <div style={{ fontSize: '12px', color: '#666', marginTop: '6px', fontStyle: 'italic' }}>
-                💬 {a.conclusion.length > 60 ? a.conclusion.slice(0, 60) + '...' : a.conclusion}
+              <div style={{ fontSize: '12px', color: '#666', marginTop: '6px', fontStyle: 'italic', display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                <MessageCircle size={14} aria-hidden="true" style={{ marginTop: 1, flexShrink: 0 }} />{a.conclusion.length > 60 ? a.conclusion.slice(0, 60) + '...' : a.conclusion}
               </div>
             )}
           </div>
@@ -598,8 +747,8 @@ export default function RemindersPage() {
               padding: '6px 10px', borderRadius: '8px', border: '1px solid var(--gray-200)',
               background: a.done ? '#4caf50' : '#fff',
               color: a.done ? '#fff' : '#555',
-              fontSize: '12px', cursor: 'pointer', fontWeight: '600',
-            }}>{a.done ? '✓ 完成' : '標為完成'}</button>
+              fontSize: '12px', cursor: 'pointer', fontWeight: '600', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+            }}>{a.done ? <><Check size={14} aria-hidden="true" />完成</> : '標為完成'}</button>
             {a.done && (
               <button onClick={() => setExpandedConclusion(isExpanded ? null : a.id)} style={{
                 padding: '6px 10px', borderRadius: '8px', border: '1px solid var(--gray-200)',
@@ -614,7 +763,9 @@ export default function RemindersPage() {
                 background: '#fff', color: '#45596a', fontSize: '12px', cursor: 'pointer',
               }}>修改</button>
             )}
-            <button onClick={() => deleteAppt(a.id)} style={{
+            <button onClick={() => {
+              if (requireWrite(a.member)) setPendingDelete(a);
+            }} style={{
               padding: '6px 10px', borderRadius: '8px', border: '1px solid var(--gray-200)',
               background: '#fff', color: '#f44336', fontSize: '12px', cursor: 'pointer',
             }}>{a.isPatientManaged ? '刪除' : '請求移除'}</button>
@@ -640,15 +791,16 @@ export default function RemindersPage() {
                   const isOn = a.visit_types.includes(t);
                   return (
                     <button key={t} type="button"
+                      aria-pressed={isOn}
                       onClick={() => updateVisitTypes(a.id, toggleVisitType(a.visit_types, t))}
                       style={{
                         padding: '5px 12px', borderRadius: '20px', border: '1.5px solid',
                         borderColor: isOn ? info.color : '#ddd',
                         background: isOn ? info.bg : '#fff',
                         color: isOn ? info.color : '#666',
-                        fontSize: '12px', cursor: 'pointer',
+                        fontSize: '12px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
                         fontWeight: isOn ? '700' : '400',
-                      }}>{info.icon} {info.label}</button>
+                      }}><ReminderMetaIcon icon={info.icon} size={12} />{info.label}</button>
                   );
                 })}
               </div>
@@ -681,23 +833,52 @@ export default function RemindersPage() {
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '28px' }}>
-          <button onClick={() => router.back()} style={{
+          <button onClick={() => router.push(memberHref('/dashboard', activeMember))} aria-label="返回儀表板" style={{
             width: '44px', height: '44px', borderRadius: '10px', background: '#fff',
             border: '1px solid var(--gray-200)', fontSize: '18px', cursor: 'pointer',
             color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center',
             flexShrink: 0, boxShadow: 'var(--shadow-sm)',
-          }}>←</button>
+          }}><ArrowLeft size={20} aria-hidden="true" /></button>
           <div style={{ flex: 1 }}>
-            <h2 style={{ fontSize: '26px', fontWeight: '800', color: '#111' }}>提醒中心</h2>
+            <h1 style={{ fontSize: '26px', fontWeight: '800', color: '#111', margin: 0 }}>待辦與提醒</h1>
             <p style={{ fontSize: '14px', color: '#666', marginTop: '2px' }}>目前顯示：{scopeLabel} · {upcoming.length} 個即將到來的提醒</p>
           </div>
-          <button onClick={showForm && !editingId ? () => setShowForm(false) : openCreate} style={{
+          <button onClick={showForm && !editingId ? () => setShowForm(false) : openCreate} disabled={!showForm && !canWriteMember(activeMember || memberNames[0] || '')} title={!canWriteMember(activeMember || memberNames[0] || '') ? (writeAccessReason(activeMember || memberNames[0] || '') ?? '目前身份為唯讀') : undefined} style={{
             background: 'var(--primary)', color: '#fff', border: 'none',
-            padding: '10px 20px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: 'pointer',
+            padding: '10px 20px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: !showForm && !canWriteMember(activeMember || memberNames[0] || '') ? 'not-allowed' : 'pointer', opacity: !showForm && !canWriteMember(activeMember || memberNames[0] || '') ? 0.55 : 1,
           }}>{showForm && !editingId ? '收合新增表單' : '+ 新增提醒'}</button>
         </div>
 
-        {/* CMO 追蹤項目（由醫療團隊建立，對應改版 §5.2 F / §6.2 流程④） */}
+        {migrationError && (
+          <div role="alert" style={{ background: '#fdf1e0', border: '1px solid #fed7aa', borderRadius: 12, padding: '12px 14px', marginBottom: 16, color: '#8a4c08', lineHeight: 1.55 }}>
+            {migrationError}
+          </div>
+        )}
+
+        {remindersLoading && appts.length === 0 && (
+          <div role="status" aria-live="polite" className="hk-card" style={{ marginBottom: 16 }}>正在載入你的提醒…</div>
+        )}
+
+        {remindersError && (
+          <div role="alert" className="hk-card" style={{ marginBottom: 16, border: '1px solid #fecdd3', background: '#fff7f7' }}>
+            <div style={{ color: '#8f2f2a', lineHeight: 1.55 }}>{remindersError}</div>
+            <button type="button" className="hk-btn hk-btn-outline" style={{ marginTop: 10, minHeight: 44 }} onClick={() => void loadReminders()}>
+              重新載入提醒
+            </button>
+          </div>
+        )}
+
+        {followUpsError && (
+          <div role="alert" className="hk-card" style={{ marginBottom: 16, border: '1px solid #fed7aa', background: '#fffbeb' }}>
+            <strong style={{ color: '#8a4c08' }}>醫療團隊追蹤項目載入不完整</strong>
+            <div style={{ color: '#8a4c08', lineHeight: 1.55, marginTop: 4 }}>{followUpsError}</div>
+            <button type="button" className="hk-btn hk-btn-outline" style={{ marginTop: 10, minHeight: 44 }} onClick={loadCmoTasks}>
+              重新載入追蹤項目
+            </button>
+          </div>
+        )}
+
+        {/* 醫療團隊追蹤項目 */}
         {visibleCmoFollowUps.length > 0 && (
           <div style={{ background: '#fff', borderRadius: '16px', padding: '18px 20px', boxShadow: 'var(--shadow-sm)', marginBottom: '20px', borderLeft: '4px solid var(--primary)' }}>
             <div style={{ fontSize: '12px', fontWeight: 800, color: '#93a3af', letterSpacing: '0.5px', marginBottom: '12px' }}>醫療團隊的追蹤項目</div>
@@ -705,7 +886,7 @@ export default function RemindersPage() {
               {visibleCmoFollowUps.map((t) => (
                 <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start', padding: '10px 0', borderBottom: '1px solid #eef2f5' }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: '15px', color: '#22313f' }}>{t.item}{t.status === 'done' ? ' ✓' : ''}</div>
+                    <div style={{ fontWeight: 700, fontSize: '15px', color: '#22313f', display: 'flex', alignItems: 'center', gap: 5 }}>{t.item}{t.status === 'done' && <Check size={15} aria-label="已完成" />}</div>
                     <div style={{ fontSize: '13px', color: '#56687a', marginTop: '2px' }}>{t.reason}</div>
                     <div style={{ fontSize: '12px', color: '#93a3af', marginTop: '3px' }}>建議時間：{t.suggested_date || '依醫療團隊安排'}</div>
                   </div>
@@ -716,13 +897,23 @@ export default function RemindersPage() {
                 </div>
               ))}
             </div>
-            <div style={{ fontSize: '11px', color: '#93a3af', marginTop: '10px' }}>這些是 CMO 醫療團隊為你安排的追蹤；標示「需補資料」者，可到「上傳」補件。</div>
+            <div style={{ fontSize: '13px', color: '#56687a', marginTop: '10px' }}>這些是醫療團隊為你安排的追蹤；標示「需補資料」者，可直接前往上傳。</div>
+          </div>
+        )}
+
+        {missingRequestsError && (
+          <div role="alert" className="hk-card" style={{ marginBottom: 16, border: '1px solid #fed7aa', background: '#fffbeb' }}>
+            <strong style={{ color: '#8a4c08' }}>補件與資料請求載入不完整</strong>
+            <div style={{ color: '#8a4c08', lineHeight: 1.55, marginTop: 4 }}>{missingRequestsError}</div>
+            <button type="button" className="hk-btn hk-btn-outline" style={{ marginTop: 10, minHeight: 44 }} onClick={loadCmoTasks}>
+              重新載入補件請求
+            </button>
           </div>
         )}
 
         {visibleMissingRequests.length > 0 && (
           <div style={{ background: '#fff', borderRadius: '16px', padding: '18px 20px', boxShadow: 'var(--shadow-sm)', marginBottom: '20px', borderLeft: '4px solid #ee9d3f' }}>
-            <div style={{ fontSize: '12px', fontWeight: 800, color: '#a97614', letterSpacing: '0.5px', marginBottom: '12px' }}>CMO 要你補的資料</div>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: '#8a5b10', letterSpacing: '0.2px', marginBottom: '12px' }}>醫療團隊請你補充的資料</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {visibleMissingRequests.map((request) => {
                 const waiting = request.status === 'waiting_for_user' || request.status === 'open';
@@ -734,15 +925,16 @@ export default function RemindersPage() {
                         <div style={{ fontWeight: 800, fontSize: '15px', color: '#22313f' }}>{request.title}</div>
                         <div style={{ fontSize: '13px', color: '#56687a', marginTop: '4px' }}>為什麼需要：{request.reason}</div>
                         {request.instructions && <div style={{ fontSize: '13px', color: '#56687a', marginTop: '3px' }}>怎麼補：{request.instructions}</div>}
-                        <div style={{ fontSize: '12px', color: '#93a3af', marginTop: '4px' }}>期限：{request.due_date || '依 CMO 團隊安排'}</div>
+                        <div style={{ fontSize: '13px', color: '#56687a', marginTop: '4px' }}>期限：{request.due_date || '依醫療團隊安排'}</div>
                       </div>
                       <span style={{ fontSize: '11px', fontWeight: 800, padding: '4px 10px', borderRadius: '999px', background: responded ? '#dcefe3' : '#fdf1e0', color: responded ? '#2e8b57' : '#b06a10', flexShrink: 0 }}>
-                        {responded ? '已送出，等待 CMO' : '待補資料'}
+                        {responded ? '已送出，等待醫療團隊' : '待補資料'}
                       </span>
                     </div>
                     {waiting && (
                       <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
                         <textarea
+                          aria-label={`回覆「${request.title}」`}
                           value={missingReplies[request.id] || ''}
                           onChange={(event) => setMissingReplies((prev) => ({ ...prev, [request.id]: event.target.value }))}
                           placeholder="補充說明，例如：我已上傳報告，檢查日期是 2026/6/1，院所是..."
@@ -750,9 +942,9 @@ export default function RemindersPage() {
                           style={{ ...inputStyle, resize: 'vertical' }}
                         />
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          <button type="button" onClick={() => router.push('/dashboard/upload')} style={{ background: '#fff', border: '1px solid var(--gray-300)', color: '#45596a', borderRadius: '8px', padding: '8px 12px', fontWeight: 700, cursor: 'pointer' }}>去上傳資料</button>
+                          <button type="button" onClick={() => router.push(memberHref('/dashboard/upload', activeMember))} style={{ background: '#fff', border: '1px solid var(--gray-300)', color: '#45596a', borderRadius: '8px', padding: '8px 12px', fontWeight: 700, cursor: 'pointer' }}>去上傳資料</button>
                           <button type="button" disabled={missingReplyBusy === request.id} onClick={() => submitMissingReply(request)} style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 12px', fontWeight: 800, cursor: missingReplyBusy === request.id ? 'wait' : 'pointer', opacity: missingReplyBusy === request.id ? 0.72 : 1 }}>
-                            {missingReplyBusy === request.id ? '送出中…' : '送出給 CMO'}
+                            {missingReplyBusy === request.id ? '送出中…' : '送出給醫療團隊'}
                           </button>
                         </div>
                       </div>
@@ -767,22 +959,15 @@ export default function RemindersPage() {
           </div>
         )}
 
-        {/* CMO tasks failed to load (distinct from "no tasks") */}
-        {cmoTasksError && visibleCmoFollowUps.length === 0 && visibleMissingRequests.length === 0 && (
-          <div style={{ background: '#fdf1e0', border: '1px solid #fed7aa', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px', color: '#b06a10', fontSize: '13px' }}>
-            暫時無法載入 CMO 醫療團隊的追蹤與補資料任務，請稍後重新整理。你的提醒不受影響。
-          </div>
-        )}
-
         {/* No members */}
         {members.length === 0 && (
           <div style={{ textAlign: 'center', padding: '60px', background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)' }}>
-            <div style={{ fontSize: '48px', marginBottom: '12px' }}>👨‍👩‍👧‍👦</div>
+            <div aria-hidden="true" style={{ width: 58, height: 58, borderRadius: 18, background: '#e7f3f5', color: '#33596a', display: 'grid', placeItems: 'center', margin: '0 auto 14px' }}><UsersRound size={32} /></div>
             <div style={{ fontWeight: '700', color: '#333', marginBottom: '8px' }}>請先新增家庭成員</div>
-            <button onClick={() => router.push('/dashboard/settings')} style={{
+            <button onClick={() => router.push(memberHref('/dashboard/settings', activeMember))} style={{
               color: 'var(--primary)', border: 'none', background: 'none',
-              cursor: 'pointer', fontWeight: '600', fontSize: '14px',
-            }}>前往設定 →</button>
+              cursor: 'pointer', fontWeight: '600', fontSize: '14px', display: 'inline-flex', alignItems: 'center', gap: 5,
+            }}>前往設定 <ArrowRight size={16} aria-hidden="true" /></button>
           </div>
         )}
 
@@ -903,7 +1088,7 @@ export default function RemindersPage() {
                         fontSize: '13px', cursor: 'pointer',
                         fontWeight: isOn ? '700' : '400',
                         display: 'flex', alignItems: 'center', gap: '4px',
-                      }}>{info.icon} {info.label}</button>
+                      }}><ReminderMetaIcon icon={info.icon} size={14} />{info.label}</button>
                   );
                 })}
               </div>
@@ -942,16 +1127,16 @@ export default function RemindersPage() {
             <div className="desktop-only" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               {filterOptions.map(m => (
                 <button key={m} onClick={() => selectMemberFilter(m)} style={{
-                  padding: '6px 14px', borderRadius: '20px', border: '1px solid',
+                  minHeight: 44, padding: '8px 14px', borderRadius: '20px', border: '1px solid',
                   borderColor: filterMember === m ? 'var(--primary)' : 'var(--gray-200)',
                   background: filterMember === m ? 'var(--primary)' : '#fff',
                   color: filterMember === m ? '#fff' : '#555',
                   fontSize: '13px', cursor: 'pointer',
-                }}>{m}</button>
+                }} aria-pressed={filterMember === m}>{m}</button>
               ))}
             </div>
-            <button onClick={() => setShowDone(v => !v)} style={{
-              padding: '6px 14px', borderRadius: '20px', border: '1px solid var(--gray-200)',
+            <button onClick={() => setShowDone(v => !v)} aria-expanded={showDone} style={{
+              minHeight: 44, padding: '8px 14px', borderRadius: '20px', border: '1px solid var(--gray-200)',
               background: showDone ? '#f0f4f8' : '#fff', color: '#666', fontSize: '13px', cursor: 'pointer',
             }}>{showDone ? '隱藏已完成' : '顯示已完成'}</button>
           </div>
@@ -964,7 +1149,7 @@ export default function RemindersPage() {
           const info = REMINDER_TYPE_INFO[type];
           return (
             <div key={type} style={{ marginBottom: '28px' }}>
-              <span style={sectionLabel}>{info.icon} {info.label} · {list.length}</span>
+              <span style={{ ...sectionLabel, display: 'flex', alignItems: 'center', gap: 5 }}><ReminderMetaIcon icon={info.icon} size={14} />{info.label} · {list.length}</span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {list.map(a => <ApptCard key={a.id} a={a} />)}
               </div>
@@ -983,17 +1168,33 @@ export default function RemindersPage() {
         )}
 
         {/* Empty state */}
-        {members.length > 0 && upcoming.length === 0 && (!showDone || done.length === 0) && (
+        {members.length > 0 && !remindersLoading && !remindersError && upcoming.length === 0 && (!showDone || done.length === 0) && (
           <div style={{ textAlign: 'center', padding: '60px', background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)' }}>
-            <div style={{ fontSize: '48px', marginBottom: '12px' }}>🎉</div>
             <div style={{ fontWeight: '700', color: '#333', marginBottom: '8px' }}>{scopeLabel}尚無提醒</div>
             <button onClick={() => setShowForm(true)} style={{
               color: 'var(--primary)', border: 'none', background: 'none',
-              cursor: 'pointer', fontWeight: '600', fontSize: '14px',
-            }}>新增回診或健檢提醒 →</button>
+              cursor: 'pointer', fontWeight: '600', fontSize: '14px', display: 'inline-flex', alignItems: 'center', gap: 5,
+            }}>新增回診或健檢提醒 <ArrowRight size={16} aria-hidden="true" /></button>
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          const target = pendingDelete;
+          setPendingDelete(null);
+          if (target) void deleteAppt(target.id);
+        }}
+        title={pendingDelete ? `${pendingDelete.isPatientManaged ? '刪除' : '請求移除'}「${pendingDelete.title}」？` : '確認移除提醒'}
+        description={pendingDelete
+          ? pendingDelete.isPatientManaged
+            ? `這會將「${pendingDelete.title}」移到最近刪除，不會立即永久清除。完成後可透過通知中的「復原」取回。`
+            : '這是醫療團隊建立的提醒。送出後只會提出移除請求，正式提醒會保留到醫療團隊確認。'
+          : undefined}
+        confirmLabel={pendingDelete?.isPatientManaged ? '移到最近刪除' : '送出移除請求'}
+        danger={Boolean(pendingDelete?.isPatientManaged)}
+      />
     </div>
   );
 }

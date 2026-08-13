@@ -18,6 +18,7 @@ const STAGE_LABELS: Record<string, string> = {
   codex_parsing: '解析健保資料',
   validating: '驗證資料格式',
   importing: '寫入健康資料',
+  organizing_encounters: '整理就醫重點',
   running: '正在整理資料',
   processing: '正在整理資料',
   completed: '匯入完成',
@@ -41,7 +42,18 @@ function stateLabel(state: string): string {
 
 function stageLabel(stage: string): string {
   const normalized = stage.trim().toLowerCase()
-  return STAGE_LABELS[normalized] || stage
+  return STAGE_LABELS[normalized] || '正在處理匯入'
+}
+
+function buildCompletedImportRedirect(
+  completedJobId: string,
+  currentSearch = '',
+  currentHash = '',
+): string {
+  const preserved = new URLSearchParams(currentSearch.startsWith('?') ? currentSearch.slice(1) : currentSearch)
+  preserved.set('import', completedJobId)
+  const hash = currentHash ? (currentHash.startsWith('#') ? currentHash : `#${currentHash}`) : ''
+  return `/dashboard/timeline?${preserved.toString()}${hash}`
 }
 
 function isLeaseExpired(job: NhiImportJob | null, now: number): boolean {
@@ -118,7 +130,11 @@ export default function NhiImportLoadingPage() {
         setPaused(false)
 
         if (normalizedState(next) === 'completed') {
-          router.replace(`/dashboard/timeline?import=${encodeURIComponent(next.id)}`)
+          router.replace(buildCompletedImportRedirect(
+            next.id,
+            window.location.search,
+            window.location.hash,
+          ))
           return
         }
         if (!isTerminal(next) && !isLeaseExpired(next, Date.now())) schedule(() => void load())
@@ -172,6 +188,7 @@ export default function NhiImportLoadingPage() {
 
   const terminal = isTerminal(job)
   const state = normalizedState(job)
+  const complianceBlocked = job?.error_code === 'compliance_not_approved'
   const leaseExpired = isLeaseExpired(job, now)
   const canRetry = Boolean(job && (leaseExpired || (job.retryable && ['stalled', 'failed', 'partial', 'needs_review'].includes(state))))
   const progress = job ? Math.max(0, Math.min(100, job.progress)) : 0
@@ -269,12 +286,14 @@ export default function NhiImportLoadingPage() {
         {job && ['failed', 'stalled'].includes(state) && (
           <div className={styles.alert} role="alert">
             {job.error_message || '匯入工作已停止。請確認資料後重新嘗試。'}
-            {job.error_code && <span>（{job.error_code}）</span>}
+            {job.error_code && <span>（系統已記錄原因，重新嘗試後仍失敗時可提供工作編號給客服。）</span>}
           </div>
         )}
         {job && ['partial', 'needs_review'].includes(state) && (
           <div className={styles.notice} role="status">
-            這次匯入已停止，請先查看目前結果；若要再次處理，可使用重新嘗試。
+            {complianceBlocked
+              ? '本機檔案解析已完成，真實健康資料尚未傳送給 Codex。管理者完成資料保留與合規設定後，才能重新嘗試 AI 整理。'
+              : '這次匯入已停止，請先查看目前結果；若要再次處理，可使用重新嘗試。'}
             {job.imported_sections && job.imported_sections.length > 0 && (
               <div>已匯入區段：{job.imported_sections.join('、')}</div>
             )}

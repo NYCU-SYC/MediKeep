@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { ApiError, api } from '@/lib/api';
+import { safeInternalActionUrl } from '@/lib/internalRoutes';
 import { useToast } from '../toast-context';
 import { useSync } from '@/lib/sync';
 import { useActiveMember } from '../member-context';
@@ -12,9 +14,22 @@ import type { PatientChangeRequest } from '@/lib/healthkeepTypes';
 import type { EvidenceDocument } from '@/lib/evidence';
 import { evidenceMeta, evidenceTitle, evidenceUnavailableText } from '@/lib/evidence';
 import {
+  PATIENT_CONDITION_STATUS_LABELS as CONDITION_STATUS_LABELS,
+  PATIENT_MEDICATION_USAGE_LABELS as MEDICATION_USAGE_LABELS,
   PATIENT_PROBLEM_TRACKING_LABELS as TRACKING_LABELS,
   PATIENT_PROBLEM_TRACKING_OPTIONS as TRACKING_OPTIONS,
 } from '@/lib/patientStatus';
+import { AccessibleDialog } from '../_components/Shared';
+import LegacyHealthRedirect from '../health/LegacyHealthRedirect';
+
+// The previous implementation remains compiled for an explicit code-level rollback,
+// but no normal User route or navigation can enable it.
+const USE_LEGACY_HEALTH_PROFILE_ROLLBACK = false;
+
+export default function HealthProfileCompatibilityPage() {
+  if (USE_LEGACY_HEALTH_PROFILE_ROLLBACK) return <LegacyHealthProfilePage />;
+  return <LegacyHealthRedirect target="/dashboard/health" label="健康" />;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -55,6 +70,23 @@ interface Medication {
   frequency?: string | null;
   status?: string;
   is_active?: boolean;
+  patient_reported_usage_status?: string | null;
+  source?: string | null;
+  is_patient_managed?: boolean;
+  is_verified?: boolean;
+}
+
+interface ManagedCondition {
+  id: number;
+  member_name?: string | null;
+  display_name: string;
+  icd10_code?: string | null;
+  status: string;
+  onset_date?: string | null;
+  note?: string | null;
+  source?: string | null;
+  is_patient_managed?: boolean;
+  is_verified?: boolean;
 }
 
 interface Reminder {
@@ -95,7 +127,7 @@ const FEEDBACK_OPTIONS: Array<{ key: FeedbackKind; label: string; requestedActio
 
 const REQUEST_STATUS_META: Record<string, { label: string; help: string; bg: string; color: string; border: string }> = {
   draft: { label: '回報草稿', help: '尚未送交醫療團隊。', bg: '#f6f9fa', color: '#56687a', border: '#e3e9ee' },
-  pending_review: { label: '已送交醫療團隊', help: 'CMO 會先審查，不會直接覆蓋正式病歷。', bg: '#e7f3f5', color: '#33596a', border: '#cfe3e8' },
+  pending_review: { label: '已送交醫療團隊', help: '醫療團隊會先審查，不會直接覆蓋正式病歷。', bg: '#e7f3f5', color: '#33596a', border: '#cfe3e8' },
   needs_clarification: { label: '需要你補充', help: '醫療團隊需要更多資訊後才會繼續整理。', bg: '#fdf1e0', color: '#b06a10', border: '#fed7aa' },
   needs_secondary_review: { label: '醫療團隊二次確認中', help: '這筆內容還不會直接發布到正式摘要。', bg: '#fefce8', color: '#a97614', border: '#efdfae' },
   accepted: { label: '已確認', help: '醫療團隊已處理這次回報。', bg: '#e7f4ec', color: '#2e8b57', border: '#bfe0cd' },
@@ -119,7 +151,6 @@ type CategoryKey = 'treating' | 'following' | 'screening' | 'resolved';
 interface CategoryDef {
   key: CategoryKey;
   label: string;
-  icon: string;
   dot: string;
   border: string;
   badgeBg: string;
@@ -131,7 +162,6 @@ const CATEGORIES: Record<CategoryKey, CategoryDef> = {
   treating: {
     key: 'treating',
     label: '治療中',
-    icon: '🔴',
     dot: '#c0453a',
     border: '#c0453a',
     badgeBg: '#faecea',
@@ -141,7 +171,6 @@ const CATEGORIES: Record<CategoryKey, CategoryDef> = {
   following: {
     key: 'following',
     label: '追蹤中',
-    icon: '🟣',
     dot: '#9333ea',
     border: '#9333ea',
     badgeBg: '#f3e8ff',
@@ -151,7 +180,6 @@ const CATEGORIES: Record<CategoryKey, CategoryDef> = {
   screening: {
     key: 'screening',
     label: '健檢預防',
-    icon: '🟡',
     dot: '#eab308',
     border: '#eab308',
     badgeBg: '#fdf6e3',
@@ -161,7 +189,6 @@ const CATEGORIES: Record<CategoryKey, CategoryDef> = {
   resolved: {
     key: 'resolved',
     label: '已痊癒',
-    icon: '⚪',
     dot: '#93a3af',
     border: '#c8d4dc',
     badgeBg: '#e3e9ee',
@@ -356,6 +383,9 @@ function ProblemCard({
 
   return (
     <div
+      id={`problem-${p.id}`}
+      data-problem-id={p.id}
+      tabIndex={-1}
       style={{
         background: '#fff',
         borderRadius: '14px',
@@ -387,7 +417,7 @@ function ProblemCard({
           )}
           {p.is_verified && !isResolved && (
             <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', background: '#d1fae5', color: '#065f46', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-              CMO 已確認
+              醫療團隊已確認
             </span>
           )}
           {pendingRequest && (
@@ -407,7 +437,6 @@ function ProblemCard({
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px', color: '#45596a' }}>
         {meds.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-            <span style={{ flexShrink: 0, opacity: 0.7 }}>💊</span>
             <span style={{ lineHeight: 1.5 }}>
               {meds.slice(0, 4).map(m => m.drug_name_layman || m.drug_name).join('、')}
               {meds.length > 4 && <span style={{ color: '#93a3af' }}> 等 {meds.length} 種</span>}
@@ -416,7 +445,6 @@ function ProblemCard({
         )}
         {nextVisit && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-            <span style={{ flexShrink: 0, opacity: 0.7 }}>📅</span>
             <span>
               下次回診：<strong style={{ color: '#22313f' }}>{formatDate(nextVisit.remind_at || nextVisit.due_date)}</strong>
               {nextVisit.title && <span style={{ color: '#93a3af' }}> · {nextVisit.title}</span>}
@@ -489,7 +517,7 @@ function ProblemCard({
               borderRadius: '8px', cursor: 'pointer',
             }}
           >
-            📋 複製白話摘要
+            複製白話摘要
           </button>
           {!pendingRequest ? (
             <button
@@ -656,7 +684,7 @@ function ProblemCard({
             </label>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
-            <div style={{ fontSize: 11, color: '#b06a10', lineHeight: 1.5 }}>送出後會進入 CMO 工作佇列；正式摘要不會在 QA 前被直接覆蓋。</div>
+            <div style={{ fontSize: 11, color: '#b06a10', lineHeight: 1.5 }}>送出後會交由醫療團隊處理；正式摘要不會在確認前被直接覆蓋。</div>
             <button
               onClick={submitFeedback}
               disabled={!feedbackNote.trim() || submittingFeedback}
@@ -812,17 +840,17 @@ function MetricsRow({ records }: { records: RecordOut[] }) {
 
   const items = [
     {
-      key: 'blood_pressure', label: '血壓', icon: '❤️', color: '#f44336',
+      key: 'blood_pressure', label: '血壓', color: '#f44336',
       value: latest.blood_pressure?.value1 && latest.blood_pressure?.value2
         ? `${latest.blood_pressure.value1}/${latest.blood_pressure.value2}` : null,
       unit: 'mmHg',
     },
     {
-      key: 'glucose', label: '血糖', icon: '🩸', color: '#ff9800',
+      key: 'glucose', label: '血糖', color: '#ff9800',
       value: latest.glucose?.value1 || null, unit: 'mg/dL',
     },
     {
-      key: 'weight', label: '體重', icon: '⚖️', color: '#2196f3',
+      key: 'weight', label: '體重', color: '#2196f3',
       value: latest.weight?.value1 || null, unit: 'kg',
     },
   ];
@@ -838,7 +866,7 @@ function MetricsRow({ records }: { records: RecordOut[] }) {
           boxShadow: '0 1px 2px rgba(0,0,0,0.04)', border: '1px solid #eef2f5',
           display: 'flex', alignItems: 'center', gap: '10px',
         }}>
-          <span style={{ fontSize: '18px' }}>{it.icon}</span>
+          <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: '50%', background: it.color, flexShrink: 0 }} />
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: '10px', color: '#93a3af', fontWeight: 600, letterSpacing: '0.3px' }}>{it.label}</div>
             <div style={{ fontSize: '15px', fontWeight: 800, color: it.value ? '#22313f' : '#c8d4dc', lineHeight: 1.2 }}>
@@ -868,28 +896,49 @@ function HealthProfileLoadingSkeleton() {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-export default function HealthProfilePage() {
+function LegacyHealthProfilePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { showToast } = useToast();
   const sync = useSync();
-  const { activeMember, setActiveMember, members } = useActiveMember();
+  const { activeMember, setActiveMember, members, canWriteMember, writeAccessReason } = useActiveMember();
   const [problems, setProblems] = useState<MyProblem[]>([]);
+  const [conditions, setConditions] = useState<ManagedCondition[]>([]);
   const [meds, setMeds] = useState<Medication[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [requests, setRequests] = useState<PatientChangeRequest[]>([]);
   const [records, setRecords] = useState<RecordOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [problemLoadFailed, setProblemLoadFailed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [copyMsg, setCopyMsg] = useState<string | null>(null);
+  const [problemDialogOpen, setProblemDialogOpen] = useState(false);
+  const [newProblemName, setNewProblemName] = useState('');
+  const [creatingProblem, setCreatingProblem] = useState(false);
+  const newProblemInputRef = useRef<HTMLInputElement>(null);
   const scopeLabel = memberDisplayName(activeMember, members.length > 1 ? '全家' : '本人');
   const requestedMemberParam = searchParams.get('member');
+  const requestedProblemParam = searchParams.get('problem');
 
   useEffect(() => {
     if (requestedMemberParam === null) return;
     setActiveMember(normalizeMemberName(requestedMemberParam));
   }, [requestedMemberParam, setActiveMember]);
+
+  useEffect(() => {
+    if (!requestedProblemParam || loading) return;
+    const timer = window.setTimeout(() => {
+      const target = document.getElementById(`problem-${requestedProblemParam}`);
+      if (!target) return;
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.style.outline = '3px solid #3e6b7e';
+      target.style.outlineOffset = '3px';
+      window.setTimeout(() => { target.style.outline = ''; target.style.outlineOffset = ''; }, 2200);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [requestedProblemParam, loading, problems.length]);
 
   useEffect(() => {
     let alive = true;
@@ -898,30 +947,64 @@ export default function HealthProfilePage() {
     const params = memberQueryParams(activeMember);
     Promise.all([
       loadSection<MyProblem[]>('健康摘要', api.get('/api/patients/me/problems', params), []),
+      loadSection<ManagedCondition[]>('我的病況', api.get('/api/conditions', params), []),
       loadSection<Medication[]>('用藥資料', api.get('/api/medications', params), []),
       loadSection<Reminder[]>('提醒資料', api.get('/api/patients/me/reminders', params), []),
       loadSection<PatientChangeRequest[]>('回報狀態', api.get('/api/patients/me/change-requests'), []),
       loadSection<RecordOut[]>('近期量測', api.get('/api/records', { ...(params ?? {}), limit: '20' }), []),
-    ]).then(([pData, mData, rData, reqData, recData]) => {
+    ]).then(([pData, cData, mData, rData, reqData, recData]) => {
       if (!alive) return;
-      setLoadError([pData, mData, rData, reqData, recData].map((item) => item.error).filter(Boolean).join('；'));
-      setProblems(cleanPatientProblems(Array.isArray(pData.data) ? pData.data : []));
-      setMeds(Array.isArray(mData.data) ? mData.data.filter((m: Medication) => m.is_active !== false && m.status !== 'discontinued') : []);
-      setReminders(Array.isArray(rData.data) ? rData.data : []);
-      setRequests(Array.isArray(reqData.data) ? reqData.data : []);
-      setRecords(Array.isArray(recData.data) ? recData.data : []);
+      setLoadError([pData, cData, mData, rData, reqData, recData].map((item) => item.error).filter(Boolean).join('；'));
+      setProblemLoadFailed(Boolean(pData.error));
+      // Update each resource independently. A failed refresh must never erase
+      // data that was already loaded successfully for that resource.
+      if (!pData.error && Array.isArray(pData.data)) setProblems(cleanPatientProblems(pData.data));
+      if (!cData.error && Array.isArray(cData.data)) setConditions(cData.data);
+      if (!mData.error && Array.isArray(mData.data)) {
+        setMeds(mData.data.filter((m: Medication) => m.is_active !== false && m.status !== 'discontinued'));
+      }
+      if (!rData.error && Array.isArray(rData.data)) setReminders(rData.data);
+      if (!reqData.error && Array.isArray(reqData.data)) setRequests(reqData.data);
+      if (!recData.error && Array.isArray(recData.data)) setRecords(recData.data);
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [activeMember, reloadToken]);
 
-  // Cross-view sync: refetch problems when the medical team publishes/reconciles.
+  // Cross-view sync: refetch the formal layer and the User's own health layer.
   useEffect(() => {
     if (sync.version === 0) return;
     let alive = true;
-    api.get('/api/patients/me/problems', memberQueryParams(activeMember)).then(d => { if (alive && Array.isArray(d)) setProblems(cleanPatientProblems(d)); }).catch(() => {});
+    const params = memberQueryParams(activeMember);
+    Promise.allSettled([
+      api.get('/api/patients/me/problems', params),
+      api.get('/api/conditions', params),
+      api.get('/api/medications', params),
+    ]).then(([problemResult, conditionResult, medicationResult]) => {
+      if (!alive) return;
+      const refreshErrors: string[] = [];
+      if (problemResult.status === 'fulfilled' && Array.isArray(problemResult.value)) setProblems(cleanPatientProblems(problemResult.value));
+      else if (problemResult.status === 'rejected') refreshErrors.push(`健康摘要：${problemResult.reason instanceof Error ? problemResult.reason.message : '無法載入'}`);
+      if (conditionResult.status === 'fulfilled' && Array.isArray(conditionResult.value)) setConditions(conditionResult.value as ManagedCondition[]);
+      else if (conditionResult.status === 'rejected') refreshErrors.push(`我的病況：${conditionResult.reason instanceof Error ? conditionResult.reason.message : '無法載入'}`);
+      if (medicationResult.status === 'fulfilled' && Array.isArray(medicationResult.value)) {
+        setMeds((medicationResult.value as Medication[]).filter((m) => m.is_active !== false && m.status !== 'discontinued'));
+      } else if (medicationResult.status === 'rejected') refreshErrors.push(`用藥資料：${medicationResult.reason instanceof Error ? medicationResult.reason.message : '無法載入'}`);
+      setProblemLoadFailed(problemResult.status === 'rejected');
+      setLoadError(refreshErrors.join('；'));
+    });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeMember, sync.viewVersions.patient_problem_detail, sync.viewVersions.patient_dashboard]);
+  }, [activeMember, sync.viewVersions.patient_problem_detail, sync.viewVersions.patient_dashboard, sync.viewVersions.patient_conditions, sync.viewVersions.patient_medications]);
+
+  const managedConditions = useMemo(
+    () => conditions.filter((condition) => condition.is_patient_managed || condition.source === 'nhi_user_managed' || condition.source === 'patient_created'),
+    [conditions],
+  );
+  const managedMedications = useMemo(
+    () => meds.filter((medication) => medication.is_patient_managed || medication.source === 'nhi_user_managed' || medication.source === 'patient_created'),
+    [meds],
+  );
+  const hasSelfManagedHealth = managedConditions.length > 0 || managedMedications.length > 0;
 
   const grouped = useMemo(() => {
     const g: Record<CategoryKey, MyProblem[]> = { treating: [], following: [], screening: [], resolved: [] };
@@ -946,12 +1029,17 @@ export default function HealthProfilePage() {
 
   function openRequest(req: PatientChangeRequest) {
     const destination = req.status === 'needs_clarification'
-      ? req.action_url || `/dashboard/clarifications/${req.id}`
-      : req.action_url || '/dashboard/history';
+      ? safeInternalActionUrl(req.action_url, `/dashboard/clarifications/${req.id}`)
+      : safeInternalActionUrl(req.action_url, '/dashboard/history');
     router.push(memberHref(destination, activeMember));
   }
 
   async function reportIssue(p: MyProblem, feedback: ProblemFeedbackPayload) {
+    const targetMember = p.member_name || activeMember || '本人';
+    if (!canWriteMember(targetMember)) {
+      showToast(writeAccessReason(targetMember) ?? '目前身份為唯讀，無法送出回報。', 'info');
+      return;
+    }
     const existing = pendingByProblem.get(String(p.id));
     if (existing) {
       if (existing.status === 'needs_clarification') openRequest(existing);
@@ -989,6 +1077,11 @@ export default function HealthProfilePage() {
   }
 
   async function requestStateChange(p: MyProblem, status: MyProblem['status']) {
+    const targetMember = p.member_name || activeMember || '本人';
+    if (!canWriteMember(targetMember)) {
+      showToast(writeAccessReason(targetMember) ?? '目前身份為唯讀，無法送出狀態變更。', 'info');
+      return;
+    }
     if (status === p.status) return;
     const existing = pendingByProblem.get(String(p.id));
     if (existing) {
@@ -1021,14 +1114,19 @@ export default function HealthProfilePage() {
     }
   }
 
-  // Patient tracking preference — immediate overlay, no CMO approval (two-layer model).
+  // Patient tracking preference — immediate overlay, without medical-team approval (two-layer model).
   async function setTrackingState(p: MyProblem, state: string) {
+    const targetMember = p.member_name || activeMember || '本人';
+    if (!canWriteMember(targetMember)) {
+      showToast(writeAccessReason(targetMember) ?? '目前身份為唯讀，無法更新追蹤狀態。', 'info');
+      return;
+    }
     const previous = p.patient_tracking_state ?? null;
     if (state === previous) return;
     setProblems(prev => prev.map(x => x.id === p.id ? { ...x, patient_tracking_state: state } : x));
     try {
       await api.post(`/api/patients/me/problems/${p.id}/tracking-state`, { tracking_state: state });
-      showToast(`已更新：你目前標記「${TRACKING_LABELS[state] ?? state}」`, 'success',
+      showToast(`已更新：你目前標記「${TRACKING_LABELS[state] ?? '狀態已記錄'}」`, 'success',
         previous ? { label: '改回', durationMs: 8000, onClick: () => setTrackingState({ ...p, patient_tracking_state: state }, previous) } : undefined);
       sync.refreshNow();
     } catch {
@@ -1049,6 +1147,11 @@ export default function HealthProfilePage() {
   }
 
   async function addProblemReminder(p: MyProblem, date: string) {
+    const targetMember = p.member_name || activeMember || '本人';
+    if (!canWriteMember(targetMember)) {
+      showToast(writeAccessReason(targetMember) ?? '目前身份為唯讀，無法新增提醒。', 'info');
+      return;
+    }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(new Date(`${date}T00:00:00`).getTime())) {
       showToast('請選擇有效的回診日期', 'error');
       return;
@@ -1065,7 +1168,7 @@ export default function HealthProfilePage() {
       }) as Reminder;
       setReminders(prev => [created, ...prev]);
       showToast(`已新增回診提醒（${date}），可在「回診紀錄」查看`, 'success', {
-        label: 'Undo',
+        label: '復原',
         durationMs: 10000,
         onClick: async () => {
           await api.delete(`/api/patients/me/reminders/${created.id}`);
@@ -1078,18 +1181,31 @@ export default function HealthProfilePage() {
     }
   }
 
+  function openProblemCreateDialog() {
+    const targetMember = activeMember || '本人';
+    if (!canWriteMember(targetMember)) {
+      showToast(writeAccessReason(targetMember) ?? '目前身份為唯讀，無法新增健康項目。', 'info');
+      return;
+    }
+    setNewProblemName('');
+    setProblemDialogOpen(true);
+  }
+
   async function requestProblemCreate() {
-    const name = window.prompt('請輸入想補充的健康狀況或症狀', '');
-    if (!name?.trim()) return;
+    const name = newProblemName.trim();
+    if (!name || creatingProblem) return;
+    setCreatingProblem(true);
     try {
       const created = await api.post('/api/patients/me/problems/request-create', {
-        display_name: name.trim(),
-        display_layman: name.trim(),
+        display_name: name,
+        display_layman: name,
         status: 'following',
         is_suspected: true,
         patient_note: `${activeMember ? `對象：${activeMember}。` : ''}使用者自我回報，待醫療團隊確認。`,
       }) as PatientChangeRequest;
       setRequests(prev => [created, ...prev]);
+      setProblemDialogOpen(false);
+      setNewProblemName('');
       showToast('已送交醫療團隊確認', 'success', {
         label: '撤回',
         durationMs: 10000,
@@ -1097,6 +1213,8 @@ export default function HealthProfilePage() {
       });
     } catch {
       showToast('送出失敗，請稍後再試', 'error');
+    } finally {
+      setCreatingProblem(false);
     }
   }
 
@@ -1107,7 +1225,7 @@ export default function HealthProfilePage() {
     lines.push(`## ${p.display_layman || p.display_name}`);
     if (p.icd10_code) lines.push(`- 醫學名稱：${p.display_name} (${p.icd10_code})`);
     lines.push(`- 狀態：${p.is_suspected ? '疑似 / 追蹤中' : statusLabel(p.status)}`);
-    if (p.tier) lines.push(`- 嚴重度：T${p.tier}`);
+    if (p.tier) lines.push(`- 重要程度：第 ${p.tier} 級`);
     lines.push(`- 來源文件：${problemEvidenceText(p)}`);
     if (meds_p.length > 0) lines.push(`- 用藥：${meds_p.map(m => m.drug_name_layman || m.drug_name).join('、')}`);
     if (next) lines.push(`- 下次回診：${formatFullDate(next.remind_at || next.due_date || next.scheduled_date)}${next.title ? ` (${next.title})` : ''}`);
@@ -1120,7 +1238,7 @@ export default function HealthProfilePage() {
     const lines: string[] = [];
     lines.push(`## ${p.display_name} (${p.icd10_code || 'no code'})`);
     lines.push(`- 狀態: ${statusLabel(p.status)}`);
-    lines.push(`- 嚴重度: Tier ${p.tier}`);
+    lines.push(`- 重要程度: 第 ${p.tier} 級`);
     lines.push(`- Evidence: ${problemEvidenceText(p)}`);
     lines.push(`- 發病: ${p.onset_date || '未記錄'}`);
     if (p.resolution_date) lines.push(`- 痊癒日期: ${p.resolution_date}`);
@@ -1203,17 +1321,17 @@ export default function HealthProfilePage() {
             width: '42px', height: '42px', borderRadius: '12px',
             background: 'linear-gradient(135deg, #10b981, #059669)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '22px', flexShrink: 0,
+            color: '#fff', fontSize: '12px', fontWeight: 850, flexShrink: 0,
             boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)',
-          }}>
-            🩺
+          }} aria-hidden="true">
+            健康
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <h1 style={{ fontSize: '18px', fontWeight: 800, color: '#064e3b', margin: 0, lineHeight: 1.2 }}>
-              {scopeLabel}的醫師健康摘要
+              {scopeLabel}的健康檔案
             </h1>
             <p style={{ fontSize: '12px', color: '#2e8b57', margin: '3px 0 0' }}>
-              用藥、提醒、生命徵象與 Problem 摘要皆依目前成員顯示；醫療團隊發布後會同步到對應成員的健康摘要
+              先管理你目前在意的病況與用藥；醫療團隊確認的摘要會分開顯示，不會覆蓋你的紀錄
             </p>
           </div>
           {!loading && problems.length > 0 && (
@@ -1234,6 +1352,57 @@ export default function HealthProfilePage() {
           )}
         </div>
 
+        {!loading && (
+          <section className="hk-card" aria-labelledby="self-managed-health-title" style={{ marginBottom: 16, borderColor: '#99e6d5', background: 'linear-gradient(135deg,#f0fdfa,#ffffff)' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div className="hk-ctitle" style={{ marginBottom: 6 }}>我的健康管理</div>
+                <h2 id="self-managed-health-title" style={{ margin: 0, fontSize: 19, color: 'var(--hk-ink)' }}>我正在管理</h2>
+                <p style={{ margin: '6px 0 0', color: 'var(--hk-ink-2)', fontSize: 13, lineHeight: 1.65 }}>
+                  這裡包含你從健保存摺加入或自行建立的病況與用藥；狀態可立即修改，不必等待醫療團隊。
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Link className="hk-btn hk-btn-ghost hk-btn-sm" href={memberHref('/dashboard/conditions', activeMember)}>管理我的病況</Link>
+                <Link className="hk-btn hk-btn-ghost hk-btn-sm" href={memberHref('/dashboard/medications', activeMember)}>管理我的用藥</Link>
+              </div>
+            </div>
+
+            {hasSelfManagedHealth ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 10, marginTop: 14 }}>
+                {managedConditions.map((condition) => (
+                  <Link key={`condition-${condition.id}`} href={memberHref('/dashboard/conditions', activeMember)} style={{ textDecoration: 'none', color: 'inherit', border: '1px solid #ccfbf1', background: '#fff', borderRadius: 12, padding: 12, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                      <span className="hk-badge hk-b-green">我的病況</span>
+                      {condition.source === 'nhi_user_managed' && <span className="hk-badge hk-b-blue">健保存摺</span>}
+                      {!condition.is_verified && <span className="hk-badge hk-b-amber">自我管理／未醫療確認</span>}
+                    </div>
+                    <strong style={{ display: 'block', marginTop: 9, fontSize: 15, color: 'var(--hk-ink)', lineHeight: 1.45 }}>{condition.display_name}</strong>
+                    <span style={{ display: 'block', marginTop: 5, fontSize: 12.5, color: 'var(--hk-ink-2)' }}>{CONDITION_STATUS_LABELS[condition.status] ?? '尚未設定目前狀態'}</span>
+                  </Link>
+                ))}
+                {managedMedications.map((medication) => (
+                  <Link key={`medication-${medication.id}`} href={memberHref('/dashboard/medications', activeMember)} style={{ textDecoration: 'none', color: 'inherit', border: '1px solid #dbeafe', background: '#fff', borderRadius: 12, padding: 12, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                      <span className="hk-badge hk-b-blue">我的用藥</span>
+                      {medication.source === 'nhi_user_managed' && <span className="hk-badge hk-b-blue">健保存摺</span>}
+                      {!medication.is_verified && <span className="hk-badge hk-b-amber">自我管理／未醫療確認</span>}
+                    </div>
+                    <strong style={{ display: 'block', marginTop: 9, fontSize: 15, color: 'var(--hk-ink)', lineHeight: 1.45 }}>{medication.drug_name_layman || medication.drug_name}</strong>
+                    <span style={{ display: 'block', marginTop: 5, fontSize: 12.5, color: 'var(--hk-ink-2)' }}>
+                      {MEDICATION_USAGE_LABELS[medication.patient_reported_usage_status || 'unsure'] ?? '尚未確認目前是否使用'}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <div style={{ marginTop: 14, border: '1px dashed #99e6d5', borderRadius: 12, padding: 14, color: 'var(--hk-ink-2)', fontSize: 13.5, lineHeight: 1.65 }}>
+                目前還沒有你自己管理的項目。可以從健康時間軸加入，或直接新增病況與用藥。
+              </div>
+            )}
+          </section>
+        )}
+
         {loadError && (
           <div style={{ background: '#fdf1e0', border: '1px solid #fed7aa', borderRadius: 12, padding: '12px 14px', color: '#b06a10', fontSize: 13, lineHeight: 1.6, marginBottom: 14 }}>
             <strong>部分資料暫時無法載入。</strong>
@@ -1249,9 +1418,9 @@ export default function HealthProfilePage() {
 
         {/* Daily metrics */}
         {!loading && records.length > 0 && (
-          <div onClick={() => router.push('/dashboard')} style={{ cursor: 'pointer' }}>
+          <Link href={memberHref('/dashboard', activeMember)} aria-label="返回儀表板" style={{ display: 'block', color: 'inherit', textDecoration: 'none' }}>
             <MetricsRow records={records} />
-          </div>
+          </Link>
         )}
 
         {/* Loading */}
@@ -1259,7 +1428,7 @@ export default function HealthProfilePage() {
           <HealthProfileLoadingSkeleton />
         )}
 
-        {!loading && problems.length === 0 && loadError && (
+        {!loading && problems.length === 0 && problemLoadFailed && (
           <div style={{ background: '#faecea', borderRadius: '16px', padding: '36px 28px', textAlign: 'center', border: '1px solid #fecdd3', marginTop: 14 }}>
             <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#8f342b', marginBottom: 8 }}>健康摘要暫時無法載入</h3>
             <p style={{ fontSize: 13, color: '#7f1d1d', lineHeight: 1.7, maxWidth: 460, margin: '0 auto 18px' }}>
@@ -1275,20 +1444,19 @@ export default function HealthProfilePage() {
         )}
 
         {/* Empty (no problems at all) */}
-        {!loading && problems.length === 0 && !loadError && (
+        {!loading && problems.length === 0 && !hasSelfManagedHealth && !problemLoadFailed && (
           <div style={{
             background: '#fff', borderRadius: '16px', padding: '52px 32px',
             textAlign: 'center', border: '1px dashed #c8d4dc',
           }}>
-            <div style={{ fontSize: '48px', marginBottom: '14px' }}>📋</div>
             <h3 style={{ fontSize: '17px', fontWeight: 700, color: '#22313f', marginBottom: '8px' }}>
-              {scopeLabel}還沒有醫師確認的資料
+              {scopeLabel}還沒有健康管理資料
             </h3>
             <p style={{ fontSize: '13px', color: '#6b7c8c', lineHeight: 1.7, maxWidth: '380px', margin: '0 auto 22px' }}>
-              當您上傳健康資料後，醫療團隊會審閱並整理出您的健康狀況摘要
+              你可以先記錄目前在意的病況或用藥；醫療團隊確認的摘要會在之後另外顯示
             </p>
             <button
-              onClick={requestProblemCreate}
+              onClick={openProblemCreateDialog}
               style={{
                 padding: '10px 24px',
                 background: 'linear-gradient(135deg, #10b981, #059669)',
@@ -1299,7 +1467,7 @@ export default function HealthProfilePage() {
               新增自我回報的健康狀況
             </button>
             <button
-              onClick={() => router.push('/dashboard/upload')}
+              onClick={() => router.push(memberHref('/dashboard/upload', activeMember))}
               style={{
                 marginLeft: '10px',
                 padding: '10px 18px',
@@ -1310,6 +1478,13 @@ export default function HealthProfilePage() {
             >
               上傳健康資料
             </button>
+          </div>
+        )}
+
+        {!loading && problems.length === 0 && hasSelfManagedHealth && !loadError && (
+          <div style={{ background: '#f6f9fa', borderRadius: 14, padding: '16px 18px', color: '#56687a', fontSize: 13, lineHeight: 1.65, border: '1px solid #e3e9ee', marginBottom: 16 }}>
+            <strong style={{ color: '#334155' }}>醫療團隊確認的摘要尚未建立。</strong>
+            <div style={{ marginTop: 4 }}>你上方的自主管理病況與用藥仍然有效，可隨時編輯；這不代表資料沒有成功加入。</div>
           </div>
         )}
 
@@ -1345,7 +1520,7 @@ export default function HealthProfilePage() {
                 (e.currentTarget as HTMLButtonElement).style.color = '#56687a';
               }}
             >
-              📋 複製完整健康摘要
+              複製完整健康摘要
             </button>
           </div>
         )}
@@ -1357,7 +1532,7 @@ export default function HealthProfilePage() {
             fontSize: '12px', color: '#6b7c8c', lineHeight: 1.7,
             border: '1px solid #e3e9ee', marginBottom: '20px',
           }}>
-            <div style={{ fontWeight: 700, color: '#56687a', marginBottom: '4px' }}>📌 關於本頁資料</div>
+            <div style={{ fontWeight: 700, color: '#56687a', marginBottom: '4px' }}>關於本頁資料</div>
             這些健康摘要由您的醫師審閱您的紀錄與檢驗結果後整理而成。如有疑問請與您的醫療團隊聯繫。
           </div>
         )}
@@ -1373,6 +1548,39 @@ export default function HealthProfilePage() {
             {copyMsg}
           </div>
         )}
+
+        <AccessibleDialog
+          open={problemDialogOpen}
+          onClose={() => {
+            if (creatingProblem) return;
+            setProblemDialogOpen(false);
+          }}
+          title="新增健康狀況"
+          description="填寫你想補充的病況或症狀。送出後會交由醫療團隊確認，不會直接改寫正式健康摘要。"
+          initialFocusRef={newProblemInputRef}
+        >
+          <form onSubmit={(event) => { event.preventDefault(); void requestProblemCreate(); }}>
+            <label htmlFor="new-health-problem" style={{ display: 'flex', flexDirection: 'column', gap: 7, color: '#45596a', fontSize: 13, fontWeight: 800 }}>
+              健康狀況或症狀
+              <input
+                ref={newProblemInputRef}
+                id="new-health-problem"
+                value={newProblemName}
+                onChange={(event) => setNewProblemName(event.target.value)}
+                placeholder="例：最近常常頭暈"
+                required
+                disabled={creatingProblem}
+                style={{ border: '1px solid #c8d4dc', borderRadius: 10, padding: '10px 12px', fontSize: 15, fontWeight: 500 }}
+              />
+            </label>
+            <div className="hk-dialog-actions" style={{ marginTop: 18 }}>
+              <button type="button" className="hk-btn hk-btn-ghost" disabled={creatingProblem} onClick={() => setProblemDialogOpen(false)}>取消</button>
+              <button type="submit" className="hk-btn hk-btn-primary" disabled={!newProblemName.trim() || creatingProblem}>
+                {creatingProblem ? '送出中…' : '送交醫療團隊'}
+              </button>
+            </div>
+          </form>
+        </AccessibleDialog>
       </div>
     </div>
   );

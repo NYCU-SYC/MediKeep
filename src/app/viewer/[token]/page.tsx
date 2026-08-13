@@ -2,6 +2,16 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
+import {
+  LoaderCircle,
+  Maximize2,
+  Minimize2,
+  RotateCcw,
+  ScanLine,
+  TriangleAlert,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -46,26 +56,27 @@ type ShareInfo = {
   expires_at: string | null;
 };
 
-const MISSING_STORAGE_MESSAGE = '影像原始檔不存在於目前後端環境，請重新上傳 DICOM 或同步 api/uploads/dicom 檔案。';
+const MISSING_STORAGE_MESSAGE = '影像原始檔目前尚未同步完成，請聯絡分享者重新上傳或稍後再試。';
 
 // ── Tool button style ─────────────────────────────────────────────────────────
 
 const TB: React.CSSProperties = {
-  padding: '5px 12px', background: '#2a2a2a', color: '#ddd',
+  width: 44, height: 44, padding: 0, background: '#2a2a2a', color: '#ddd',
   border: '1px solid #444', borderRadius: '6px', cursor: 'pointer',
   fontSize: '12px', fontWeight: '600', flexShrink: 0,
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
 };
 
 function MissingStorageState() {
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 10, background: '#0a0a0a', padding: 24 }}>
-      <div style={{ fontSize: 36 }}>⚠️</div>
+      <TriangleAlert aria-hidden="true" size={36} style={{ color: '#d99a2b' }} />
       <div style={{ color: '#ddd', fontWeight: 800, fontSize: 15 }}>影像原始檔尚未同步</div>
       <div style={{ color: '#888', maxWidth: 520, textAlign: 'center', lineHeight: 1.7, fontSize: 13 }}>
         {MISSING_STORAGE_MESSAGE}
       </div>
-      <div style={{ color: '#555', maxWidth: 520, textAlign: 'center', lineHeight: 1.6, fontSize: 12 }}>
-        分享連結仍可保留索引資訊，但目前無法檢視切片。請聯絡影像擁有者重新上傳或同步後端檔案。
+      <div style={{ color: '#999', maxWidth: 520, textAlign: 'center', lineHeight: 1.6, fontSize: 12 }}>
+        分享連結仍會保留，但目前無法檢視切片；完成重新上傳後即可再次開啟。
       </div>
     </div>
   );
@@ -177,7 +188,7 @@ function DicomViewer({
     }
   };
 
-  if (!inst) return <div style={{ color: '#666', textAlign: 'center', padding: '40px' }}>無影像可顯示</div>;
+  if (!inst) return <div style={{ color: '#999', textAlign: 'center', padding: '40px' }}>無影像可顯示</div>;
 
   const curUrl  = frameUrl(inst.id, appliedWc, appliedWw);
   const prevUrl = sorted[currentIdx - 1] ? frameUrl(sorted[currentIdx - 1].id, appliedWc, appliedWw) : null;
@@ -203,16 +214,16 @@ function DicomViewer({
             )}
             <span style={{ fontSize: '13px', fontWeight: '700', color: '#ddd' }}>{title}</span>
           </div>
-          <div style={{ fontSize: '11px', color: '#555', marginTop: '2px' }}>
+          <div style={{ fontSize: '11px', color: '#999', marginTop: '2px' }}>
             {inst.columns}×{inst.rows} px
           </div>
         </div>
-        <button onClick={() => setZoom(z => Math.min(z * 1.25, 10))} style={TB}>+</button>
-        <span style={{ color: '#777', fontSize: '12px', minWidth: '38px', textAlign: 'center' }}>{Math.round(zoom * 100)}%</span>
-        <button onClick={() => setZoom(z => Math.max(z * 0.8, 0.2))} style={TB}>−</button>
-        <button onClick={resetView} style={TB}>↺</button>
-        <button onClick={() => setFullscreen(v => !v)} style={{ ...TB, background: fullscreen ? '#1565c0' : '#2a2a2a' }}>
-          {fullscreen ? '⊡' : '⊞'}
+        <button type="button" aria-label="放大影像" title="放大影像" onClick={() => setZoom(z => Math.min(z * 1.25, 10))} style={TB}><ZoomIn aria-hidden="true" size={20} /></button>
+        <span style={{ color: '#aaa', fontSize: '12px', minWidth: '38px', textAlign: 'center' }}>{Math.round(zoom * 100)}%</span>
+        <button type="button" aria-label="縮小影像" title="縮小影像" onClick={() => setZoom(z => Math.max(z * 0.8, 0.2))} style={TB}><ZoomOut aria-hidden="true" size={20} /></button>
+        <button type="button" aria-label="重設影像檢視" title="重設影像檢視" onClick={resetView} style={TB}><RotateCcw aria-hidden="true" size={20} /></button>
+        <button type="button" aria-label={fullscreen ? '離開全螢幕' : '進入全螢幕'} title={fullscreen ? '離開全螢幕' : '進入全螢幕'} onClick={() => setFullscreen(v => !v)} style={{ ...TB, background: fullscreen ? '#1565c0' : '#2a2a2a' }}>
+          {fullscreen ? <Minimize2 aria-hidden="true" size={20} /> : <Maximize2 aria-hidden="true" size={20} />}
         </button>
       </div>
 
@@ -227,13 +238,13 @@ function DicomViewer({
       >
         {imageLoading && !imageError && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5, pointerEvents: 'none' }}>
-            <div style={{ color: '#555', fontSize: '13px' }}>載入切片中…</div>
+            <div style={{ color: '#999', fontSize: '13px' }}>載入切片中…</div>
           </div>
         )}
         {imageError && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '8px', zIndex: 5 }}>
-            <span style={{ fontSize: '32px' }}>⚠️</span>
-            <span style={{ color: '#666', fontSize: '13px' }}>無法渲染此切片</span>
+            <TriangleAlert aria-hidden="true" size={32} style={{ color: '#d99a2b' }} />
+            <span style={{ color: '#999', fontSize: '13px' }}>無法渲染此切片</span>
           </div>
         )}
         <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -267,28 +278,28 @@ function DicomViewer({
       <div style={{ background: '#111', borderTop: '1px solid #2a2a2a', padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 }}>
         {sorted.length > 1 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ color: '#555', fontSize: '11px', width: '52px', flexShrink: 0 }}>切片</span>
-            <input type="range" min={0} max={sorted.length - 1} value={currentIdx}
+            <label htmlFor="dicom-slice" style={{ color: '#aaa', fontSize: '11px', width: '52px', flexShrink: 0 }}>切片</label>
+            <input id="dicom-slice" type="range" min={0} max={sorted.length - 1} value={currentIdx}
               onChange={e => { setCurrentIdx(parseInt(e.target.value)); setImageLoading(true); setImageError(false); }}
               style={{ flex: 1, accentColor: '#3e6b7e', cursor: 'pointer' }} />
-            <span style={{ color: '#666', fontSize: '11px', width: '52px', textAlign: 'right', flexShrink: 0 }}>
+            <span style={{ color: '#999', fontSize: '11px', width: '52px', textAlign: 'right', flexShrink: 0 }}>
               {currentIdx + 1}/{sorted.length}
             </span>
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ color: '#555', fontSize: '11px', width: '52px', flexShrink: 0 }}>WC</span>
-          <input type="range" min={-1000} max={3000} value={wc}
+          <label htmlFor="dicom-window-center" style={{ color: '#aaa', fontSize: '11px', width: '52px', flexShrink: 0 }}>窗位</label>
+          <input id="dicom-window-center" type="range" min={-1000} max={3000} value={wc}
             onChange={e => handleWcChange(parseInt(e.target.value))}
             style={{ flex: 1, accentColor: '#4caf50', cursor: 'pointer' }} />
-          <span style={{ color: '#666', fontSize: '11px', width: '52px', textAlign: 'right', flexShrink: 0 }}>{Math.round(wc)}</span>
+          <span style={{ color: '#999', fontSize: '11px', width: '52px', textAlign: 'right', flexShrink: 0 }}>{Math.round(wc)}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ color: '#555', fontSize: '11px', width: '52px', flexShrink: 0 }}>WW</span>
-          <input type="range" min={1} max={4000} value={ww}
+          <label htmlFor="dicom-window-width" style={{ color: '#aaa', fontSize: '11px', width: '52px', flexShrink: 0 }}>窗寬</label>
+          <input id="dicom-window-width" type="range" min={1} max={4000} value={ww}
             onChange={e => handleWwChange(parseInt(e.target.value))}
             style={{ flex: 1, accentColor: '#ff9800', cursor: 'pointer' }} />
-          <span style={{ color: '#666', fontSize: '11px', width: '52px', textAlign: 'right', flexShrink: 0 }}>{Math.round(ww)}</span>
+          <span style={{ color: '#999', fontSize: '11px', width: '52px', textAlign: 'right', flexShrink: 0 }}>{Math.round(ww)}</span>
         </div>
       </div>
     </div>
@@ -303,18 +314,37 @@ export default function PublicViewerPage() {
   const [info, setInfo] = useState<ShareInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [retryable, setRetryable] = useState(false);
+  const [retryAfter, setRetryAfter] = useState<number | null>(null);
+  const [retryAttempt, setRetryAttempt] = useState(0);
   const [selectedSeriesId, setSelectedSeriesId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
     fetch(`/api/dicom/share/${token}/info`)
       .then(r => {
-        if (r.status === 410) throw new Error('此分享連結已過期');
-        if (!r.ok) throw new Error('分享連結不存在或已失效');
+        if (!r.ok) {
+          const rawRetryAfter = r.headers.get('retry-after');
+          const seconds = rawRetryAfter ? Number.parseInt(rawRetryAfter, 10) : Number.NaN;
+          const parsedRetryAfter = Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+          const message = r.status === 410
+            ? '此分享連結已過期或已被撤銷'
+            : r.status === 429
+              ? `目前查詢次數過多${parsedRetryAfter ? `，約 ${parsedRetryAfter} 秒後可重試` : ''}`
+              : [502, 503].includes(r.status)
+                ? '影像服務暫時無法使用，請稍後重試'
+                : '分享連結不存在或已失效';
+          const failure = new Error(message) as Error & { retryable?: boolean; retryAfter?: number | null };
+          failure.retryable = [429, 502, 503].includes(r.status);
+          failure.retryAfter = parsedRetryAfter;
+          throw failure;
+        }
         return r.json();
       })
       .then((data: ShareInfo) => {
         setInfo(data);
+        setRetryable(false);
+        setRetryAfter(null);
         // Auto-select first series
         if (data.share_type === 'series' && data.series) {
           setSelectedSeriesId(data.series.id);
@@ -322,34 +352,52 @@ export default function PublicViewerPage() {
           setSelectedSeriesId((data.study.series.find((s) => s.storage_available !== false) ?? data.study.series[0]).id);
         }
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : '無法載入'))
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : '無法載入');
+        setRetryable(e instanceof TypeError || Boolean((e as { retryable?: boolean })?.retryable));
+        setRetryAfter((e as { retryAfter?: number | null })?.retryAfter ?? null);
+      })
       .finally(() => setLoading(false));
-  }, [token]);
+  }, [retryAttempt, token]);
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a' }}>
+      <main aria-busy="true" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a' }}>
         <div style={{ textAlign: 'center', color: '#aaa' }}>
-          <div style={{ fontSize: '28px', marginBottom: '8px' }}>🩻</div>
-          <div style={{ fontSize: '13px' }}>載入影像中…</div>
+          <LoaderCircle aria-hidden="true" className="hk-viewer-spinner" size={32} style={{ margin: '0 auto 10px' }} />
+          <h1 style={{ fontSize: '16px', margin: 0 }}>正在載入分享影像</h1>
+          <style>{`
+            .hk-viewer-spinner { animation: viewer-spin 0.8s linear infinite; }
+            @keyframes viewer-spin { to { transform: rotate(360deg); } }
+            @media (prefers-reduced-motion: reduce) { .hk-viewer-spinner { animation: none; } }
+          `}</style>
         </div>
-      </div>
+      </main>
     );
   }
 
   if (error) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '16px', height: '100vh', background: '#0a0a0a' }}>
-        <div style={{ fontSize: '40px' }}>⚠️</div>
-        <div style={{ color: '#888', fontSize: '16px', fontWeight: '600' }}>{error}</div>
-        <div style={{ color: '#555', fontSize: '13px', textAlign: 'center', maxWidth: '320px' }}>
-          此連結可能已過期或輸入有誤。請向影像擁有者索取新連結。
+      <main style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '16px', height: '100vh', background: '#0a0a0a', padding: 24 }}>
+        <TriangleAlert aria-hidden="true" size={40} style={{ color: '#d99a2b' }} />
+        <h1 style={{ color: '#ddd', fontSize: '20px', margin: 0 }}>無法開啟分享影像</h1>
+        <div role="alert" style={{ color: '#aaa', fontSize: '16px', fontWeight: '600' }}>{error}</div>
+        <div style={{ color: '#999', fontSize: '13px', textAlign: 'center', maxWidth: '320px' }}>
+          {retryable ? (retryAfter ? `服務稍後可恢復，建議約 ${retryAfter} 秒後再試。` : '服務稍後可恢復，請保留此畫面並重新嘗試。') : '此連結可能已過期、撤銷或輸入有誤。請向影像擁有者索取新連結。'}
         </div>
-      </div>
+        {retryable && <button type="button" onClick={() => { setLoading(true); setError(''); setRetryAttempt((value) => value + 1); }} style={{ border: '1px solid #555', borderRadius: 8, background: '#222', color: '#ddd', padding: '9px 13px', minHeight: 44, fontWeight: 800, cursor: 'pointer' }}>重新載入</button>}
+      </main>
     );
   }
 
-  if (!info) return null;
+  if (!info) {
+    return (
+      <main style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, height: '100vh', background: '#0a0a0a', color: '#ddd' }}>
+        <TriangleAlert aria-hidden="true" size={36} style={{ color: '#d99a2b' }} />
+        <h1 style={{ fontSize: 20, margin: 0 }}>無法顯示分享影像</h1>
+      </main>
+    );
+  }
 
   // ── Study share: show series selector + viewer ──────────────────────────────
   if (info.share_type === 'study' && info.study) {
@@ -358,19 +406,19 @@ export default function PublicViewerPage() {
     const activeSeries = allSeries.find(s => s.id === selectedSeriesId) ?? allSeries[0];
 
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0a0a0a' }}>
+      <main style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0a0a0a' }}>
         {/* Study header */}
         <div style={{
           background: '#111', borderBottom: '1px solid #222',
           padding: '10px 16px', flexShrink: 0,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '20px' }}>🩻</span>
+            <ScanLine aria-hidden="true" size={22} style={{ color: '#8bbbd5' }} />
             <div>
-              <div style={{ fontSize: '14px', fontWeight: '700', color: '#ddd' }}>
+              <h1 style={{ fontSize: '18px', fontWeight: '700', color: '#ddd', margin: 0 }}>
                 {study.study_description || (study.modality ? `${study.modality} 影像` : '影像檢查')}
-              </div>
-              <div style={{ fontSize: '11px', color: '#666' }}>
+              </h1>
+              <div style={{ fontSize: '11px', color: '#999' }}>
                 {formatDicomDate(study.study_date)}
                 {study.series.length > 1 ? ` · ${study.series.length} 個序列` : ''}
                 {info.expires_at && (
@@ -386,12 +434,12 @@ export default function PublicViewerPage() {
           {allSeries.length > 1 && (
             <div style={{ display: 'flex', gap: '6px', marginTop: '10px', overflowX: 'auto', paddingBottom: '2px' }}>
               {allSeries.map(s => (
-                <button key={s.id} onClick={() => setSelectedSeriesId(s.id)} style={{
+                <button key={s.id} type="button" aria-pressed={selectedSeriesId === s.id} onClick={() => setSelectedSeriesId(s.id)} style={{
                   padding: '5px 12px', borderRadius: '6px', border: '1px solid',
                   borderColor: selectedSeriesId === s.id ? '#1565c0' : '#333',
                   background: selectedSeriesId === s.id ? '#1565c0' : '#1a1a1a',
                   color: s.storage_available === false ? '#a97614' : (selectedSeriesId === s.id ? '#fff' : '#888'),
-                  fontSize: '12px', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap',
+                  fontSize: '12px', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap', minHeight: 44,
                 }}>
                   {s.series_description || `序列 ${s.series_number ?? '?'}`}
                   <span style={{ marginLeft: '4px', opacity: 0.7 }}>({s.instance_count})</span>
@@ -414,16 +462,16 @@ export default function PublicViewerPage() {
             modality={activeSeries.modality}
           />
         ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555' }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
             請選擇一個序列
           </div>
         )}
 
         {/* Powered by */}
         <div style={{ background: '#111', borderTop: '1px solid #1a1a1a', padding: '6px 16px', textAlign: 'center', flexShrink: 0 }}>
-          <span style={{ fontSize: '10px', color: '#333' }}>Powered by HealthKeep</span>
+          <span style={{ fontSize: '10px', color: '#8f8f8f' }}>Powered by HealthKeep</span>
         </div>
-      </div>
+      </main>
     );
   }
 
@@ -431,25 +479,25 @@ export default function PublicViewerPage() {
   if (info.share_type === 'series' && info.series) {
     const series = info.series;
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0a0a0a' }}>
+      <main style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0a0a0a' }}>
         {/* Minimal header */}
         <div style={{
           background: '#111', borderBottom: '1px solid #222',
           padding: '8px 14px', flexShrink: 0,
           display: 'flex', alignItems: 'center', gap: '10px',
         }}>
-          <span style={{ fontSize: '18px' }}>🩻</span>
+          <ScanLine aria-hidden="true" size={20} style={{ color: '#8bbbd5' }} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: '13px', fontWeight: '700', color: '#ccc' }}>
+            <h1 style={{ fontSize: '17px', fontWeight: '700', color: '#ddd', margin: 0 }}>
               {series.series_description || `序列 ${series.series_number ?? '?'}`}
-            </div>
+            </h1>
             {info.expires_at && (
-              <div style={{ fontSize: '11px', color: '#555' }}>
+              <div style={{ fontSize: '11px', color: '#999' }}>
                 分享至 {new Date(info.expires_at).toLocaleDateString('zh-TW')}
               </div>
             )}
           </div>
-          <span style={{ fontSize: '10px', color: '#333' }}>HealthKeep</span>
+          <span style={{ fontSize: '10px', color: '#8f8f8f' }}>HealthKeep</span>
         </div>
 
         {series.storage_available === false ? (
@@ -462,13 +510,18 @@ export default function PublicViewerPage() {
             modality={series.modality}
           />
         ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555' }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
             無影像資料
           </div>
         )}
-      </div>
+      </main>
     );
   }
 
-  return null;
+  return (
+    <main style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, height: '100vh', background: '#0a0a0a', color: '#ddd' }}>
+      <TriangleAlert aria-hidden="true" size={36} style={{ color: '#d99a2b' }} />
+      <h1 style={{ fontSize: 20, margin: 0 }}>分享影像格式無法辨識</h1>
+    </main>
+  );
 }

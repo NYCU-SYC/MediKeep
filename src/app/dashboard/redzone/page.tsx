@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useToast } from '../toast-context';
 import { useSync } from '@/lib/sync';
@@ -9,6 +9,8 @@ import { useActiveMember } from '../member-context';
 import { memberDisplayName, memberHref, memberQueryParams, normalizeMemberName } from '@/lib/members';
 import type { EvidenceDocument } from '@/lib/evidence';
 import { evidenceMeta, evidenceTitle, evidenceUnavailableText } from '@/lib/evidence';
+import { ShieldCheck } from 'lucide-react';
+import LegacyHealthRedirect from '../health/LegacyHealthRedirect';
 
 type RedZoneItem = {
   id: string;
@@ -44,10 +46,26 @@ type RedZonePayload = {
 };
 
 const TIER_META = {
-  tier1: { title: 'Tier 1 · 保命紅區', desc: '看診、急診、檢查前最需要先看到的項目。', color: '#a03a30', bg: '#faecea' },
-  tier2: { title: 'Tier 2 · 重要追蹤', desc: '會影響判斷與照護安排的重要背景。', color: '#a97614', bg: '#fdf6e3' },
-  tier3: { title: 'Tier 3 · 基本資料', desc: '人口統計與生活習慣資料。', color: '#56687a', bg: '#f6f9fa' },
+  tier1: { title: '立即注意事項', desc: '看診、急診或檢查前需要優先確認的資訊。', color: '#a03a30', bg: '#faecea' },
+  tier2: { title: '其他重要背景', desc: '會影響判斷與照護安排的重要背景。', color: '#a97614', bg: '#fdf6e3' },
+  tier3: { title: '基本資料與照護背景', desc: '家庭、生活與其他輔助資訊。', color: '#56687a', bg: '#f6f9fa' },
 };
+
+function sourceLabel(value: string): string {
+  const labels: Record<string, string> = {
+    patient_created: '我新增', patient_reported: '我回報', imported: '健保匯入', nhi_import: '健保匯入',
+    cmo_created: '醫療團隊整理', cmo_entry: '醫療團隊整理', medical_record: '醫療文件整理', document: '文件整理',
+  };
+  return labels[value] || '來源未標示';
+}
+
+function statusLabel(value: string): string {
+  const labels: Record<string, string> = {
+    active: '目前適用', inactive: '目前不適用', resolved: '已結束', pending: '等待確認',
+    following: '持續追蹤', confirmed: '已確認', draft: '整理中',
+  };
+  return labels[value] || '狀態未標示';
+}
 
 const TIER1_MINI_CELLS = [
   { label: '血型', tokens: ['blood_type', 'blood type', '血型'] },
@@ -75,7 +93,7 @@ function fmtDate(value: string | null): string {
   return d.toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' });
 }
 
-export default function RedZonePage() {
+function EmergencyImportantInfoContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { showToast } = useToast();
@@ -89,6 +107,8 @@ export default function RedZonePage() {
   const [selected, setSelected] = useState<RedZoneItem | null>(null);
   const [correctionNote, setCorrectionNote] = useState('');
   const [busy, setBusy] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const [loadRetry, setLoadRetry] = useState(0);
   const scopeLabel = memberDisplayName(activeMember, members.length > 1 ? '全家' : '本人');
   const uploadHref = memberHref('/dashboard/upload', activeMember);
   const requestedMemberParam = searchParams.get('member');
@@ -101,23 +121,24 @@ export default function RedZonePage() {
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    setLoadError('');
     api.get('/api/patients/me/red-zone', memberQueryParams(activeMember))
       .then((payload) => { if (alive) setData(payload as RedZonePayload); })
-      .catch(() => { if (alive) setData(null); })
+      .catch(() => { if (alive) setLoadError('急診資訊暫時無法載入。這不代表目前沒有資料，請重新載入確認。'); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [activeMember, redZoneVersion]);
+  }, [activeMember, loadRetry, redZoneVersion]);
 
   const copyText = async (mode: 'tier1' | 'all_active' | 'emergency_summary') => {
     if (!data) return;
     const text = data.copy[mode];
     if (!text) {
-      showToast(data.copy.disabled_reason || '目前沒有可複製的紅區資料', 'info');
+      showToast(data.copy.disabled_reason || '目前沒有可複製的急診資訊', 'info');
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
-      showToast(mode === 'tier1' ? '已複製 Tier 1 紅區' : mode === 'all_active' ? '已複製所有 active 紅區' : '已複製急診摘要', 'success');
+      showToast(mode === 'tier1' ? '已複製立即注意事項' : mode === 'all_active' ? '已複製所有目前適用資訊' : '已複製急診摘要', 'success');
     } catch {
       showToast('複製失敗，請手動選取文字', 'error');
     }
@@ -157,35 +178,50 @@ export default function RedZonePage() {
   };
 
   if (loading) {
-    return <div className="page-wrap"><div style={{ color: '#6b7c8c' }}>正在載入保命紅區...</div></div>;
+    return <div className="page-wrap"><div role="status" style={{ color: '#6b7c8c' }}>正在載入急診資訊…</div></div>;
   }
 
   const copyState = data?.copy || {
     tier1: '',
     all_active: '',
     emergency_summary: '',
-    disabled_reason: '目前無法載入紅區資料，請重新整理後再試。',
+    disabled_reason: '目前無法載入急診資訊，請重新整理後再試。',
   };
+
+  if (!data && loadError) {
+    return (
+      <div className="page-wrap hk-redzone-page" style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
+        <button onClick={() => router.push(memberHref('/dashboard/emergency', activeMember))} style={backBtn}>← 返回急診資訊</button>
+        <h1 style={titleStyle}>{scopeLabel}的急診重要資訊</h1>
+        <section role="alert" style={{ ...emptyCard, marginTop: 18, borderColor: '#f2d3cf', color: '#8f342b' }}>
+          <h2 style={{ margin: 0, fontSize: 18 }}>資料載入失敗</h2>
+          <p style={{ lineHeight: 1.7 }}>{loadError}</p>
+          <button type="button" onClick={() => setLoadRetry((value) => value + 1)} style={primaryBtn}>重新載入</button>
+        </section>
+      </div>
+    );
+  }
 
   if (!data || data.empty_state) {
     return (
       <div className="page-wrap hk-redzone-page" style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
-        <button onClick={() => router.back()} style={backBtn}>← 返回</button>
+        <button onClick={() => router.push(memberHref('/dashboard/emergency', activeMember))} style={backBtn}>← 返回急診資訊</button>
         <header style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 18 }}>
           <div>
-            <h1 style={titleStyle}>{scopeLabel}保命紅區</h1>
+            <h1 style={titleStyle}>{scopeLabel}的急診重要資訊</h1>
             <p style={{ margin: '4px 0 0', color: '#6b7c8c', fontSize: 14 }}>
-              Active 0 項 · copy modes 目前停用
+              已整理 0 項 · 目前沒有可複製內容
             </p>
           </div>
           <CopyModeButtons copy={copyState} onCopy={copyText} />
         </header>
+        {loadError && <div role="alert" style={{ ...notice, marginBottom: 14, background: '#faecea', borderColor: '#f2d3cf', color: '#8f342b' }}>{loadError}<button type="button" onClick={() => setLoadRetry((value) => value + 1)} style={{ ...secondaryBtn, marginLeft: 10 }}>重新載入</button></div>}
         <section style={emptyCard}>
-          <div style={{ fontSize: 38, marginBottom: 10 }}>🛟</div>
-          <h2 style={{ fontSize: 18, fontWeight: 850, color: '#22313f', margin: 0 }}>{data?.empty_state?.title || '目前尚無保命紅區資料'}</h2>
-          <p style={{ color: '#6b7c8c', lineHeight: 1.7 }}>{data?.empty_state?.why || '醫療團隊尚未整理出 active Tier 1/2/3 項目。'}</p>
+           <ShieldCheck aria-hidden="true" size={38} color="#3e6b7e" style={{ marginBottom: 10 }} />
+           <h2 style={{ fontSize: 18, fontWeight: 850, color: '#22313f', margin: 0 }}>{data?.empty_state?.title || '目前尚無已整理的急診重要資訊'}</h2>
+           <p style={{ color: '#6b7c8c', lineHeight: 1.7 }}>{data?.empty_state?.why || '醫療團隊尚未整理出立即注意事項、重要背景或基本資料。'}</p>
           <p style={{ color: '#93a3af', fontSize: 13, lineHeight: 1.6, marginTop: 0 }}>
-            {copyState.disabled_reason || '沒有 active 紅區項目，因此 Tier 1 / 全部 Active / 急診摘要暫時不能複製。'}
+             {copyState.disabled_reason || '目前沒有可複製的急診重要資訊。'}
           </p>
           <button onClick={() => router.push(data?.empty_state?.cta ? memberHref(data.empty_state.cta, activeMember) : uploadHref)} style={primaryBtn}>
             {data?.empty_state?.next_action || '上傳或補充資料'}
@@ -197,19 +233,20 @@ export default function RedZonePage() {
 
   return (
     <div className="page-wrap hk-redzone-page" style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
-      <button onClick={() => router.back()} style={backBtn}>← 返回</button>
+       <button onClick={() => router.push(memberHref('/dashboard/emergency', activeMember))} style={backBtn}>← 返回急診資訊</button>
       <header style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 18 }}>
         <div>
-          <h1 style={titleStyle}>{scopeLabel}保命紅區</h1>
+           <h1 style={titleStyle}>{scopeLabel}的急診重要資訊</h1>
           <p style={{ margin: '4px 0 0', color: '#6b7c8c', fontSize: 14 }}>
-            Active {data.summary.active_count} 項 · 最後整理 {fmtDate(data.summary.last_reviewed_at)}
+             已整理 {data.summary.active_count} 項 · 最後更新 {fmtDate(data.summary.last_reviewed_at)}
           </p>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-            {data.summary.source_badges.map((source) => <span key={source} style={badge}>{source}</span>)}
+             {data.summary.source_badges.map((source) => <span key={source} style={badge}>{sourceLabel(source)}</span>)}
           </div>
         </div>
         <CopyModeButtons copy={data.copy} onCopy={copyText} />
       </header>
+      {loadError && <div role="alert" style={{ ...notice, marginBottom: 14, background: '#faecea', borderColor: '#f2d3cf', color: '#8f342b' }}>{loadError} 以下保留上次成功載入的內容。<button type="button" onClick={() => setLoadRetry((value) => value + 1)} style={{ ...secondaryBtn, marginLeft: 10 }}>重新載入</button></div>}
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(142px, 1fr))', gap: 10, marginBottom: 18 }}>
         {TIER1_MINI_CELLS.map((cell) => {
@@ -225,12 +262,12 @@ export default function RedZonePage() {
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginBottom: 18 }}>
         <button type="button" onClick={() => router.push(memberHref('/dashboard/conditions', activeMember))} style={{ ...countCard, textAlign: 'left', cursor: 'pointer' }}>
-          <div style={{ fontSize: 12, color: '#a97614', fontWeight: 850 }}>Tier 2 重要追蹤</div>
-          <div style={{ marginTop: 6, color: '#22313f', fontWeight: 850 }}>前往疾病總覽</div>
-          <div style={{ marginTop: 4, color: '#6b7c8c', fontSize: 12 }}>查看已發布 Problem、slots 與 timeline。</div>
+           <div style={{ fontSize: 12, color: '#a97614', fontWeight: 850 }}>其他重要健康背景</div>
+           <div style={{ marginTop: 6, color: '#22313f', fontWeight: 850 }}>查看目前病況</div>
+           <div style={{ marginTop: 4, color: '#6b7c8c', fontSize: 12 }}>查看我管理的病況與醫療團隊已確認內容。</div>
         </button>
-        <button type="button" onClick={() => router.push('/dashboard/settings')} style={{ ...countCard, textAlign: 'left', cursor: 'pointer' }}>
-          <div style={{ fontSize: 12, color: '#56687a', fontWeight: 850 }}>Tier 3 家庭與權限</div>
+        <button type="button" onClick={() => router.push(memberHref('/dashboard/settings', activeMember))} style={{ ...countCard, textAlign: 'left', cursor: 'pointer' }}>
+           <div style={{ fontSize: 12, color: '#56687a', fontWeight: 850 }}>家庭與權限</div>
           <div style={{ marginTop: 6, color: '#22313f', fontWeight: 850 }}>前往家庭與權限</div>
           <div style={{ marginTop: 4, color: '#6b7c8c', fontSize: 12 }}>管理家庭成員、加入碼與權限設定。</div>
         </button>
@@ -247,19 +284,19 @@ export default function RedZonePage() {
             <div style={detailCard}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
                 <div>
-                  <div style={{ fontSize: 12, color: '#93a3af', fontWeight: 800 }}>Tier {selected.tier} · {selected.category}</div>
+                   <div style={{ fontSize: 12, color: '#93a3af', fontWeight: 800 }}>{TIER_META[`tier${selected.tier}` as keyof typeof TIER_META].title}</div>
                   <h2 style={{ margin: '4px 0', fontSize: 18, color: '#22313f' }}>{selected.label}</h2>
                 </div>
                 <button onClick={() => setSelected(null)} style={linkBtn}>關閉</button>
               </div>
               <div style={{ fontSize: 20, fontWeight: 850, color: '#22313f', margin: '10px 0 12px', lineHeight: 1.35 }}>{selected.value}</div>
-              <DetailLine label="狀態" value={selected.status} />
+               <DetailLine label="狀態" value={statusLabel(selected.status)} />
               <DetailLine label="家庭成員" value={memberDisplayName(selected.member_name || activeMember, '未指定成員')} />
-              <DetailLine label="來源" value={selected.source} />
+               <DetailLine label="資料來源" value={sourceLabel(selected.source)} />
               <DetailLine label="已確認" value={selected.is_verified ? '是' : '尚未確認'} />
               <DetailLine label="最後整理" value={fmtDate(selected.last_reviewed_at)} />
               <EvidenceDetail doc={selected.evidence_document ?? null} fallbackId={selected.source_document_id ?? null} />
-              {selected.related_problem_label && <DetailLine label="相關 Problem" value={selected.related_problem_label} />}
+               {selected.related_problem_label && <DetailLine label="相關病況" value={selected.related_problem_label} />}
               {selected.pending_correction && <div style={{ ...notice, marginTop: 10 }}>你已送出更正回報，醫療團隊整理中。</div>}
               <div style={{ borderTop: '1px solid #e3e9ee', marginTop: 14, paddingTop: 14 }}>
                 <div style={{ fontSize: 13, fontWeight: 850, color: '#22313f', marginBottom: 6 }}>回報錯誤或補充</div>
@@ -274,7 +311,7 @@ export default function RedZonePage() {
             <div style={detailCard}>
               <h2 style={{ margin: 0, fontSize: 18, color: '#22313f' }}>點一筆查看詳情</h2>
               <p style={{ color: '#6b7c8c', lineHeight: 1.7, fontSize: 13 }}>
-                每筆紅區都可查看來源、確認狀態與最後整理時間。若內容不對，可以送出更正回報，CMO 端會看到待整理狀態。
+                 每筆資訊都可查看來源、確認狀態與最後整理時間。若內容不對，可以送出更正回報，醫療團隊會看到待整理狀態。
               </p>
             </div>
           )}
@@ -288,6 +325,14 @@ export default function RedZonePage() {
   );
 }
 
+export default function RedZonePage() {
+  const pathname = usePathname();
+  if (pathname === '/dashboard/redzone') {
+    return <LegacyHealthRedirect target="/dashboard/emergency?view=important" label="急診資訊" />;
+  }
+  return <EmergencyImportantInfoContent />;
+}
+
 function CopyModeButtons({ copy, onCopy }: {
   copy: RedZonePayload['copy'];
   onCopy: (mode: 'tier1' | 'all_active' | 'emergency_summary') => void;
@@ -297,18 +342,18 @@ function CopyModeButtons({ copy, onCopy }: {
       <button
         onClick={() => onCopy('tier1')}
         disabled={!copy.tier1}
-        title={!copy.tier1 ? copy.disabled_reason || '沒有 Tier 1 active 項目' : '複製 Tier 1'}
+        title={!copy.tier1 ? copy.disabled_reason || '沒有立即注意事項' : '複製立即注意事項'}
         style={copyBtn(!copy.tier1)}
       >
-        複製 Tier 1
+        複製立即注意事項
       </button>
       <button
         onClick={() => onCopy('all_active')}
         disabled={!copy.all_active}
-        title={!copy.all_active ? copy.disabled_reason || '沒有 active 項目' : '複製所有 active'}
+        title={!copy.all_active ? copy.disabled_reason || '沒有目前適用的資訊' : '複製所有目前適用資訊'}
         style={copyBtn(!copy.all_active)}
       >
-        複製所有 Active
+        複製所有目前適用資訊
       </button>
       <button
         onClick={() => onCopy('emergency_summary')}
@@ -335,7 +380,7 @@ function TierSection({ tierKey, items, onSelect }: { tierKey: 'tier1' | 'tier2' 
       </div>
       {items.length === 0 ? (
         <div style={{ border: '1px dashed #c8d4dc', borderRadius: 10, padding: 12, color: '#6b7c8c', fontSize: 13 }}>
-          目前沒有此 Tier 的 active 資料。若你知道有相關資料，可以上傳文件或等待醫療團隊整理。
+          目前沒有這一類已整理資料。若你知道有相關資訊，可以上傳文件或等待醫療團隊整理。
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
@@ -345,7 +390,7 @@ function TierSection({ tierKey, items, onSelect }: { tierKey: 'tier1' | 'tier2' 
               background: item.pending_correction ? '#fdf1e0' : '#fff', cursor: 'pointer',
             }}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
-                <span style={{ ...badge, background: meta.bg, color: meta.color }}>Tier {item.tier}</span>
+                <span style={{ ...badge, background: meta.bg, color: meta.color }}>{meta.title}</span>
                 <span style={{ ...badge, background: item.is_verified ? '#e7f4ec' : '#fdf6e3', color: item.is_verified ? '#2e8b57' : '#a97614' }}>{item.is_verified ? '已確認' : '待確認'}</span>
                 {item.member_name && <span style={badge}>{item.member_name}</span>}
                 {item.evidence_document?.available && <span style={{ ...badge, background: '#e7f3f5', color: '#33596a' }}>有原始文件</span>}
@@ -353,7 +398,7 @@ function TierSection({ tierKey, items, onSelect }: { tierKey: 'tier1' | 'tier2' 
               </div>
               <div style={{ fontSize: 14, color: '#22313f', fontWeight: 850, lineHeight: 1.4 }}>{item.label}</div>
               <div style={{ fontSize: 13, color: '#56687a', marginTop: 4, lineHeight: 1.45 }}>{item.value}</div>
-              <div style={{ fontSize: 11, color: '#93a3af', marginTop: 8 }}>{item.source} · {fmtDate(item.last_reviewed_at)}</div>
+              <div style={{ fontSize: 11, color: '#93a3af', marginTop: 8 }}>來源：{sourceLabel(item.source)} · {fmtDate(item.last_reviewed_at)}</div>
             </button>
           ))}
         </div>
@@ -373,7 +418,7 @@ function DetailLine({ label, value }: { label: string; value: string }) {
 
 function EvidenceDetail({ doc, fallbackId }: { doc: EvidenceDocument | null; fallbackId: string | null }) {
   if (!doc) {
-    return <DetailLine label="原始文件" value={fallbackId ? `已記錄 ID：${fallbackId}，但尚未建立可檢視連結` : '尚未連結原始文件'} />;
+    return <DetailLine label="原始文件" value={fallbackId ? '已記錄來源文件，但目前無法開啟' : '尚未連結原始文件'} />;
   }
   if (!doc.available || !doc.download_url) {
     return <DetailLine label="原始文件" value={`${evidenceTitle(doc)} · ${evidenceUnavailableText(doc)}`} />;
@@ -393,9 +438,9 @@ const titleStyle: React.CSSProperties = { fontSize: 28, fontWeight: 900, color: 
 const countCard: React.CSSProperties = { background: '#fff', border: '1px solid #e3e9ee', borderRadius: 12, padding: 12, minHeight: 92 };
 const badge: React.CSSProperties = { display: 'inline-flex', borderRadius: 999, padding: '3px 8px', background: '#eef2f5', color: '#56687a', fontSize: 11, fontWeight: 850 };
 const backBtn: React.CSSProperties = { border: '1px solid #e3e9ee', background: '#fff', color: '#45596a', borderRadius: 10, padding: '8px 12px', fontWeight: 800, cursor: 'pointer' };
-const primaryBtn: React.CSSProperties = { border: 'none', background: '#3e6b7e', color: '#fff', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
-const secondaryBtn: React.CSSProperties = { border: '1px solid #c8d4dc', background: '#fff', color: '#45596a', borderRadius: 10, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
-const linkBtn: React.CSSProperties = { border: 'none', background: 'transparent', color: '#3e6b7e', fontWeight: 850, cursor: 'pointer' };
+const primaryBtn: React.CSSProperties = { border: 'none', background: '#3e6b7e', color: '#fff', borderRadius: 10, minHeight: 44, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
+const secondaryBtn: React.CSSProperties = { border: '1px solid #c8d4dc', background: '#fff', color: '#45596a', borderRadius: 10, minHeight: 44, padding: '10px 14px', fontWeight: 850, cursor: 'pointer' };
+const linkBtn: React.CSSProperties = { border: 'none', background: 'transparent', color: '#3e6b7e', minHeight: 44, fontWeight: 850, cursor: 'pointer' };
 const detailCard: React.CSSProperties = { background: '#fff', border: '1px solid #e3e9ee', borderRadius: 14, padding: 16, boxShadow: 'var(--shadow-sm)' };
 const emptyCard: React.CSSProperties = { background: '#fff', border: '1px solid #e3e9ee', borderRadius: 14, padding: 28, textAlign: 'center' };
 const notice: React.CSSProperties = { background: '#fdf1e0', border: '1px solid #fed7aa', color: '#b06a10', borderRadius: 10, padding: 10, fontSize: 12, lineHeight: 1.5 };
@@ -405,6 +450,7 @@ const copyBtn = (disabled: boolean): React.CSSProperties => ({
   background: disabled ? '#f6f9fa' : '#fff',
   color: disabled ? '#93a3af' : '#22313f',
   borderRadius: 10,
+  minHeight: 44,
   padding: '10px 12px',
   fontWeight: 850,
   cursor: disabled ? 'not-allowed' : 'pointer',

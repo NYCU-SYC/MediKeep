@@ -1,12 +1,19 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getPatientSessionToken } from '@/lib/api';
-
-const MAX_FILES = 50;
-const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
-const ALLOWED_HTML = new Set(['html', 'htm']);
+import { ApiError } from '@/lib/api';
+import {
+  completeNhiImportWithManifest,
+  completeNhiOnboarding,
+  createNhiImportWithManifest,
+  getNhiUploadPolicy,
+  getNhiImportJob,
+  NhiOnboardingState,
+  NhiUploadManifest,
+  NhiUploadPolicy,
+  uploadNhiImportTarget,
+} from '@/lib/nhiImports';
 
 type Member = { name: string };
 
@@ -15,23 +22,10 @@ type Props = {
   members: Member[];
   onMemberChange: (memberName: string) => void;
   onBack: () => void;
+  nextPath?: string;
+  onComplete?: (state: NhiOnboardingState) => void;
+  completeOnboarding?: boolean;
 };
-
-type JobResponse = {
-  id?: string | number;
-  job?: { id?: string | number };
-  state?: string;
-  upload_targets?: Array<{
-    id?: string;
-    name?: string | null;
-    status?: string;
-    upload_url?: string;
-    method?: string;
-    headers?: Record<string, string>;
-  }>;
-};
-
-type FileManifest = { name: string; size: number; sha256: string; content_type: string };
 
 function extension(name: string): string {
   const dot = name.lastIndexOf('.');
@@ -43,17 +37,18 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function selectionError(files: File[]): string {
+function selectionError(files: File[], policy: NhiUploadPolicy): string {
   if (files.length === 0) return '請選擇健保存摺 HTML，或包含 HTML 的單一 ZIP。';
-  if (files.length > MAX_FILES) return `一次最多選擇 ${MAX_FILES} 個檔案。`;
+  if (files.length > policy.max_files) return `一次最多選擇 ${policy.max_files} 個檔案。`;
   const total = files.reduce((sum, file) => sum + file.size, 0);
-  if (total > MAX_UPLOAD_BYTES) return '檔案總大小不可超過 50 MB。';
-  const suffixes = files.map((file) => extension(file.name));
-  if (suffixes.some((suffix) => !ALLOWED_HTML.has(suffix) && suffix !== 'zip')) {
+  if (total > policy.max_total_bytes) return `檔案總大小不可超過 ${formatSize(policy.max_total_bytes)}。`;
+  const allowed = new Set(policy.allowed_extensions.map(value => value.replace(/^\./, '').toLowerCase()));
+  const suffixes = files.map(file => extension(file.name));
+  if (suffixes.some(suffix => !allowed.has(suffix))) {
     return 'v1 僅接受 .html、.htm，或單一 .zip；不接受 PDF、影像與 Office 文件。';
   }
   const zipCount = suffixes.filter((suffix) => suffix === 'zip').length;
-  if (zipCount > 0 && (zipCount !== 1 || files.length !== 1)) return 'ZIP 必須單獨上傳，不能與 HTML 混合。';
+  if (policy.zip_must_be_single && zipCount > 0 && (zipCount !== 1 || files.length !== 1)) return 'ZIP 必須單獨上傳，不能與 HTML 混合。';
   const names = files.map((file) => file.name.toLocaleLowerCase());
   if (new Set(names).size !== names.length) return '檔名不可重複，請先重新命名後再選擇。';
   return '';
@@ -94,27 +89,14 @@ async function idempotencyKey(files: File[], memberName: string): Promise<string
   return `nhi-${hex}`;
 }
 
-function responseJobId(payload: JobResponse | null): string {
-  const value = payload?.id ?? payload?.job?.id;
+function apiErrorJobId(error: unknown): string {
+  if (!(error instanceof ApiError) || !error.details || typeof error.details !== 'object') return '';
+  const details = error.details as Record<string, unknown>;
+  const value = details.job_id ?? details.import_job_id;
   return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 }
 
-async function responseError(response: Response): Promise<{ message: string; jobId: string }> {
-  const payload = await response.json().catch(() => null) as {
-    detail?: string | { message?: string; code?: string; job_id?: string | number };
-  } | null;
-  const detail = payload?.detail;
-  if (typeof detail === 'string') return { message: detail, jobId: '' };
-  if (detail && typeof detail === 'object') {
-    return {
-      message: detail.message || (detail.code === 'duplicate_bundle' ? '這份資料已經上傳過。' : '健保資料上傳失敗。'),
-      jobId: detail.job_id === undefined ? '' : String(detail.job_id),
-    };
-  }
-  return { message: '健保資料上傳失敗，請確認網路後重試。', jobId: '' };
-}
-
-export default function NhiFirstImportFlow({ memberName, members, onMemberChange, onBack }: Props) {
+export default function NhiFirstImportFlow({ memberName, members, onMemberChange, onBack, nextPath = '/dashboard', onComplete, completeOnboarding = false }: Props) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -123,57 +105,65 @@ export default function NhiFirstImportFlow({ memberName, members, onMemberChange
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [noFileConfirmed, setNoFileConfirmed] = useState(false);
+  const [uploadPolicy, setUploadPolicy] = useState<NhiUploadPolicy | null>(null);
+  const [policyLoading, setPolicyLoading] = useState(true);
+  const [policyError, setPolicyError] = useState('');
+
+  const loadUploadPolicy = async () => {
+    setPolicyLoading(true);
+    setPolicyError('');
+    try {
+      setUploadPolicy(await getNhiUploadPolicy());
+    } catch {
+      setUploadPolicy(null);
+      setPolicyError('目前無法確認伺服器的檔案限制，因此尚未選擇或上傳任何檔案。');
+    } finally {
+      setPolicyLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadUploadPolicy(); }, []);
 
   const chooseFiles = (next: File[]) => {
-    const problem = selectionError(next);
+    if (!uploadPolicy) {
+      setFiles([]);
+      setError('請先等候伺服器確認檔案限制。');
+      return;
+    }
+    const problem = selectionError(next, uploadPolicy);
     setFiles(problem ? [] : next);
     setConfirmed(false);
+    setNoFileConfirmed(false);
     setError(problem);
     setStatus('');
   };
 
   const startImport = async () => {
-    const problem = selectionError(files);
+    if (!uploadPolicy) { setError('尚未取得伺服器檔案限制，未上傳任何資料。'); return; }
+    const problem = selectionError(files, uploadPolicy);
     if (problem) { setError(problem); return; }
     if (!memberName) { setError('請先選擇這份資料所屬的家庭成員。'); return; }
     if (!confirmed) { setError('請先確認資料所屬成員。'); return; }
     setBusy(true);
     setError('');
+    let createdJobId = '';
     try {
       setStatus('正在檢查檔案格式…');
       for (const file of files) await validateMagic(file);
       const key = await idempotencyKey(files, memberName);
-      const manifest: FileManifest[] = await Promise.all(files.map(async (file) => ({
+      const manifest: NhiUploadManifest[] = await Promise.all(files.map(async (file) => ({
         name: file.name,
         size: file.size,
         sha256: await sha256Hex(file),
         content_type: file.type || (extension(file.name) === 'zip' ? 'application/zip' : 'text/html'),
       })));
-      const token = getPatientSessionToken();
       setStatus('正在建立安全上傳工作…');
-      const response = await fetch('/api/patients/me/nhi-imports', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Idempotency-Key': key,
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ member_name: memberName, files: manifest }),
-      });
-      if (!response.ok) {
-        const failure = await responseError(response);
-        if (response.status === 409 && failure.jobId) {
-          router.push(`/dashboard/nhi/import/${encodeURIComponent(failure.jobId)}`);
-          return;
-        }
-        throw new Error(failure.message);
-      }
-      const payload = await response.json().catch(() => null) as JobResponse | null;
-      const jobId = responseJobId(payload);
-      if (!jobId) throw new Error('伺服器未回傳匯入工作編號，請稍後重試。');
-      if (payload?.state === 'awaiting_upload') {
-        const targets = payload.upload_targets ?? [];
+      const job = await createNhiImportWithManifest(memberName, manifest, key);
+      const jobId = job.id;
+      createdJobId = jobId;
+      if (job.state === 'awaiting_upload') {
+        const targets = job.upload_targets ?? [];
         if (targets.length !== files.length) {
           throw new Error('伺服器回傳的安全上傳目標與所選檔案不一致，請重新選擇後再試。');
         }
@@ -188,53 +178,58 @@ export default function NhiFirstImportFlow({ memberName, members, onMemberChange
             throw new Error('找不到對應的安全上傳目標，請重新開始匯入。');
           }
           setStatus(`正在安全上傳 ${index + 1} / ${targets.length}：${fileForTarget.name}`);
-          const uploadMethod = (target.method || 'POST').toUpperCase();
-          let uploaded: Response;
-          if (uploadMethod === 'PUT') {
-            // A production presigned target is sent directly to private object
-            // storage. Never forward the HealthKeep bearer token off-origin.
-            uploaded = await fetch(target.upload_url, {
-              method: 'PUT',
-              headers: target.headers,
-              body: fileForTarget,
-            });
-          } else {
-            const uploadBody = new FormData();
-            uploadBody.append('file', fileForTarget, fileForTarget.name);
-            uploaded = await fetch(target.upload_url, {
-              method: uploadMethod,
-              credentials: 'include',
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-              body: uploadBody,
-            });
-          }
-          if (!uploaded.ok) {
-            const failure = await responseError(uploaded);
-            throw new Error(failure.message || `${fileForTarget.name} 上傳失敗。`);
-          }
+          await uploadNhiImportTarget(target, fileForTarget);
         }
         setStatus('檔案已上傳，正在驗證雜湊並排入整理佇列…');
-        const completed = await fetch(`/api/patients/me/nhi-imports/${encodeURIComponent(jobId)}/complete`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'Idempotency-Key': `${key}-complete`,
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({
-            files: manifest.map(({ name, sha256 }) => ({ name, sha256 })),
-          }),
-        });
-        if (!completed.ok) {
-          const failure = await responseError(completed);
-          throw new Error(failure.message || '檔案驗證未完成，請稍後重試。');
-        }
+        await completeNhiImportWithManifest(jobId, manifest);
       }
+      // The same server transaction that validates and queues the job marks
+      // onboarding as `import_queued`.  Do not send a second client-authored
+      // completion state: the browser must never claim that an upload was
+      // accepted independently of the durable job.
       router.push(`/dashboard/nhi/import/${encodeURIComponent(jobId)}`);
     } catch (caught) {
+      // The completion request may reach the API even when its response is
+      // interrupted. Recover the durable job before reporting a false upload
+      // failure, so users do not re-upload an already queued bundle.
+      if (createdJobId) {
+        try {
+          const recovered = await getNhiImportJob(createdJobId);
+          if (recovered.state && recovered.state !== 'awaiting_upload') {
+            router.push(`/dashboard/nhi/import/${encodeURIComponent(createdJobId)}`);
+            return;
+          }
+        } catch {
+          // Keep the original actionable error if recovery is unavailable.
+        }
+      }
       setStatus('');
+      const duplicateJobId = apiErrorJobId(caught);
+      if (duplicateJobId) {
+        router.push(`/dashboard/nhi/import/${encodeURIComponent(duplicateJobId)}`);
+        return;
+      }
       setError(caught instanceof Error ? caught.message : '健保資料上傳失敗，請稍後重試。');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const completeNoFile = async () => {
+    if (!noFileConfirmed) {
+      setError('請先勾選確認目前沒有可匯入的檔案。');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setStatus('正在完成首次匯入設定…');
+    try {
+      const state = await completeNhiOnboarding({ completion_method: 'no_file', import_state: 'no_file' });
+      onComplete?.(state);
+      if (!onComplete) router.replace(nextPath);
+    } catch (caught) {
+      setStatus('');
+      setError(caught instanceof Error ? caught.message : '目前無法完成設定，請稍後重試。');
     } finally {
       setBusy(false);
     }
@@ -250,7 +245,7 @@ export default function NhiFirstImportFlow({ memberName, members, onMemberChange
           <div className="hk-badge hk-b-blue" style={{ marginBottom: 8 }}>第一次匯入</div>
           <h1 style={{ margin: 0, fontSize: 26, color: 'var(--hk-ink)' }}>匯入健保存摺資料</h1>
           <p style={{ margin: '9px 0 0', color: 'var(--hk-ink-2)', lineHeight: 1.65, fontSize: 14 }}>
-            選擇官方健保存摺 HTML，或包含這些 HTML 的單一 ZIP。匯入後會自動整理成健康時間軸；AI 整理結果仍會標示為尚未醫療確認。
+            選擇官方健保存摺 HTML，或包含這些 HTML 的單一 ZIP。匯入後會先在私有環境中以規則整理成健康時間軸；所有結果仍會標示為尚未醫療確認。
           </p>
         </div>
 
@@ -270,6 +265,13 @@ export default function NhiFirstImportFlow({ memberName, members, onMemberChange
 
         <section className="hk-card" style={{ marginBottom: 14 }}>
           <h2 style={{ margin: '0 0 10px', fontSize: 17 }}>1. 選擇檔案</h2>
+          {policyLoading && <div role="status" style={{ marginBottom: 10, color: 'var(--hk-ink-2)', fontSize: 13 }}>正在確認伺服器檔案限制…</div>}
+          {policyError && (
+            <div role="alert" style={{ marginBottom: 10, color: 'var(--hk-red)', fontSize: 13 }}>
+              {policyError}
+              <button type="button" className="hk-btn hk-btn-ghost hk-btn-sm" onClick={() => void loadUploadPolicy()} style={{ marginLeft: 8 }}>重新確認</button>
+            </div>
+          )}
           <button
             type="button"
             className="hk-btn hk-btn-ghost"
@@ -282,19 +284,24 @@ export default function NhiFirstImportFlow({ memberName, members, onMemberChange
               setDragging(false);
               chooseFiles(Array.from(event.dataTransfer.files));
             }}
-            disabled={busy}
+            disabled={busy || noFileConfirmed || !uploadPolicy}
           >
             <span>
               <strong style={{ display: 'block', fontSize: 15 }}>拖曳檔案到這裡，或點擊選擇</strong>
-              <span style={{ display: 'block', marginTop: 6, color: 'var(--hk-ink-3)', fontSize: 12 }}>最多 50 個 HTML；或單一 ZIP。總大小上限 50 MB。</span>
+              <span style={{ display: 'block', marginTop: 6, color: 'var(--hk-ink-3)', fontSize: 12 }}>
+                {uploadPolicy
+                  ? `最多 ${uploadPolicy.max_files} 個 HTML；或單一 ZIP。總大小上限 ${formatSize(uploadPolicy.max_total_bytes)}。`
+                  : '取得伺服器限制後即可選擇檔案。'}
+              </span>
             </span>
           </button>
           <input
             ref={inputRef}
             type="file"
             multiple
-            accept=".html,.htm,.zip,text/html,application/zip"
+            accept={uploadPolicy?.accept ?? ''}
             hidden
+            disabled={busy || noFileConfirmed || !uploadPolicy}
             onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))}
           />
           {files.length > 0 && (
@@ -306,7 +313,7 @@ export default function NhiFirstImportFlow({ memberName, members, onMemberChange
                 {files.map((file, index) => (
                   <div key={`${file.name}-${file.size}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '8px 10px', border: '1px solid var(--hk-line)', borderRadius: 8 }}>
                     <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>{file.name}</span>
-                    <button type="button" className="hk-btn hk-btn-ghost hk-btn-sm" onClick={() => chooseFiles(files.filter((_, fileIndex) => fileIndex !== index))} disabled={busy}>移除</button>
+                <button type="button" className="hk-btn hk-btn-ghost hk-btn-sm" onClick={() => chooseFiles(files.filter((_, fileIndex) => fileIndex !== index))} disabled={busy}>移除</button>
                   </div>
                 ))}
               </div>
@@ -316,6 +323,11 @@ export default function NhiFirstImportFlow({ memberName, members, onMemberChange
 
         <section className="hk-card" style={{ marginBottom: 14 }}>
           <h2 style={{ margin: '0 0 10px', fontSize: 17 }}>2. 確認資料所屬</h2>
+          {members.length === 0 ? (
+            <div role="alert" style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, border: '1px solid #efdfae', background: '#fdf6e3', color: '#8a5b11', fontSize: 13, lineHeight: 1.55 }}>
+              尚未建立可選擇的本人資料。請重新整理頁面；若仍未出現，請先回到首頁重新登入。
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
             {members.map((member) => (
               <button
@@ -330,10 +342,13 @@ export default function NhiFirstImportFlow({ memberName, members, onMemberChange
               </button>
             ))}
           </div>
-          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: busy ? 'default' : 'pointer', lineHeight: 1.55, color: 'var(--hk-ink-2)', fontSize: 14 }}>
-            <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy || !memberName || files.length === 0} style={{ marginTop: 4 }} />
-            <span>我確認這些健保存摺資料屬於「{memberName || '尚未選擇'}」，並了解 AI 整理不等於正式醫療診斷。</span>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: busy || !memberName || files.length === 0 ? 'not-allowed' : 'pointer', lineHeight: 1.55, color: 'var(--hk-ink-2)', fontSize: 14 }}>
+            <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy || !memberName || files.length === 0} aria-describedby="nhi-owner-confirmation-help" style={{ marginTop: 4 }} />
+            <span>我確認這些健保存摺資料屬於「{memberName || '尚未選擇'}」，並了解自動整理不等於正式醫療診斷。</span>
           </label>
+          <div id="nhi-owner-confirmation-help" style={{ marginTop: 6, paddingLeft: 26, color: 'var(--hk-ink-3)', fontSize: 12 }}>
+            {!memberName ? '請先選擇上方的家庭成員。' : files.length === 0 ? '請先完成步驟 1 選擇檔案。' : '可以勾選確認並開始匯入。'}
+          </div>
         </section>
 
         <section className="hk-card" style={{ marginBottom: 14 }}>
@@ -348,6 +363,37 @@ export default function NhiFirstImportFlow({ memberName, members, onMemberChange
             {error || status}
           </div>
         </section>
+
+        {completeOnboarding ? <section className="hk-card" style={{ marginBottom: 14, border: '1px solid #d9e4e8' }} aria-labelledby="nhi-no-file-heading">
+          <h2 id="nhi-no-file-heading" style={{ margin: '0 0 8px', fontSize: 17 }}>目前沒有可匯入的檔案</h2>
+          <p style={{ margin: '0 0 12px', color: 'var(--hk-ink-2)', fontSize: 13, lineHeight: 1.65 }}>
+            只有在你確認目前沒有可匯入的健保存摺檔案時，才使用這條路徑。這不代表 HealthKeep 已經有你的健保資料；之後仍可從健保資料頁補匯入。
+          </p>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minHeight: 44, cursor: busy ? 'not-allowed' : 'pointer', color: 'var(--hk-ink-2)', fontSize: 14, lineHeight: 1.55 }}>
+            <input
+              type="checkbox"
+              checked={noFileConfirmed}
+              onChange={(event) => {
+                setNoFileConfirmed(event.target.checked);
+                if (event.target.checked) {
+                  setFiles([]);
+                  setConfirmed(false);
+                  setError('');
+                }
+              }}
+              disabled={busy}
+              aria-describedby="nhi-no-file-help"
+              style={{ marginTop: 4, width: 18, height: 18 }}
+            />
+            <span>我目前沒有可匯入的檔案，了解之後仍可補匯入。</span>
+          </label>
+          <div id="nhi-no-file-help" style={{ marginTop: 8, color: 'var(--hk-ink-3)', fontSize: 12 }}>
+            完成後會直接回到下一步，不會產生匯入工作。
+          </div>
+          <button type="button" className="hk-btn hk-btn-ghost" style={{ marginTop: 12, minHeight: 44 }} onClick={() => void completeNoFile()} disabled={busy || !noFileConfirmed}>
+            {busy ? '正在完成設定…' : '完成設定並繼續'}
+          </button>
+        </section> : null}
       </div>
     </main>
   );

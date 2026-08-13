@@ -21,7 +21,7 @@ import React, {
   useRef,
   useState,
 } from 'react'
-import { api } from '@/lib/api'
+import { api, invalidateApiGetCache } from '@/lib/api'
 
 export type AffectedView =
   | 'patient_dashboard'
@@ -135,6 +135,7 @@ export function SyncProvider({
         const state = (await api.get(path, params)) as SyncState
         if (!alive) return
         if (state.events && state.events.length) {
+          invalidateApiGetCache()
           setViewVersions((prev) => {
             const next = { ...prev }
             for (const ev of state.events) {

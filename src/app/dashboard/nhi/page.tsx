@@ -16,6 +16,24 @@ import { memberDisplayName, memberHref, memberQueryParams, normalizeMemberName }
 import type { EvidenceDocument } from '@/lib/evidence';
 import { evidenceMeta, evidenceTitle, evidenceUnavailableText } from '@/lib/evidence';
 import {
+  CheckCircle2,
+  CircleAlert,
+  CircleMinus,
+  Clock3,
+  FileText,
+  FlaskConical,
+  Hospital,
+  Leaf,
+  Pill,
+  ScanLine,
+  Scissors,
+  ScrollText,
+  Smile,
+  Stethoscope,
+  Syringe,
+  type LucideIcon,
+} from 'lucide-react';
+import {
   PATIENT_PROBLEM_TRACKING_LABELS,
   PATIENT_PROBLEM_TRACKING_OPTIONS,
 } from '@/lib/patientStatus';
@@ -75,6 +93,15 @@ interface NhiItem {
   patient_tracking_state_id?: string | null;
 }
 
+interface NhiSectionResponse {
+  items?: NhiItem[];
+  count?: number;
+  total?: number;
+  page?: number;
+  page_size?: number;
+  has_more?: boolean;
+}
+
 type DraftTrackingUndo = {
   rowId: number;
   stateId: string;
@@ -83,10 +110,18 @@ type DraftTrackingUndo = {
   label: string;
 };
 
-const SECTION_ICON: Record<string, string> = {
-  outpatient: '🩺', inpatient: '🏥', med: '💊', surgery: '🔪',
-  imaging: '🩻', lab: '🧪', vaccine: '💉', covid: '🦠', tcm: '🌿', dental: '🦷',
-  advance_directive: '📜',
+const SECTION_ICON: Record<string, LucideIcon> = {
+  outpatient: Stethoscope,
+  inpatient: Hospital,
+  med: Pill,
+  surgery: Scissors,
+  imaging: ScanLine,
+  lab: FlaskConical,
+  vaccine: Syringe,
+  covid: CircleAlert,
+  tcm: Leaf,
+  dental: Smile,
+  advance_directive: ScrollText,
 };
 
 const STATUS_STYLE: Record<string, { color: string; bg: string }> = {
@@ -95,9 +130,49 @@ const STATUS_STYLE: Record<string, { color: string; bg: string }> = {
   not_used:  { color: '#6b7c8c', bg: '#eef2f5' },
 };
 
+const NHI_PAGE_SIZE = 10;
+
+const SECTION_LABELS: Record<string, string> = {
+  outpatient: '門診紀錄',
+  inpatient: '住院紀錄',
+  med: '用藥紀錄',
+  surgery: '手術紀錄',
+  imaging: '影像紀錄',
+  lab: '檢驗紀錄',
+  vaccine: '疫苗紀錄',
+  covid: '傳染病相關紀錄',
+  tcm: '中醫紀錄',
+  dental: '牙科紀錄',
+  advance_directive: '預立醫療相關紀錄',
+};
+
 function fmtDate(s: string | null): string {
   if (!s) return '日期未記錄';
   return s.replace(/T.*$/, '');
+}
+
+function NhiSectionIcon({ sectionKey, size = 18 }: { sectionKey: string | null; size?: number }) {
+  const SectionIcon = (sectionKey ? SECTION_ICON[sectionKey] : undefined) ?? FileText;
+  return <SectionIcon size={size} aria-hidden="true" focusable="false" />;
+}
+
+function sectionLabel(section: string): string {
+  return SECTION_LABELS[section] || '其他健保就醫紀錄';
+}
+
+function searchableItemText(item: NhiItem): string {
+  return [
+    item.diagnosis,
+    item.facility,
+    item.hospital,
+    item.department,
+    item.key_medications,
+    item.raw_label,
+  ].filter(Boolean).join(' ').toLocaleLowerCase('zh-TW');
+}
+
+function itemDisplayName(item: NhiItem): string {
+  return item.diagnosis?.trim() || `${sectionLabel(item.section)}（${fmtDate(item.visit_date || item.date)}）`;
 }
 
 export default function NhiImportPage() {
@@ -120,6 +195,11 @@ export default function NhiImportPage() {
   const [itemsLoading, setItemsLoading] = useState(false);
   const [itemsError, setItemsError] = useState('');
   const [itemsReloadKey, setItemsReloadKey] = useState(0);
+  const [itemsPage, setItemsPage] = useState(1);
+  const [itemsTotal, setItemsTotal] = useState(0);
+  const [itemsHasMore, setItemsHasMore] = useState(false);
+  const [itemsSearchInput, setItemsSearchInput] = useState('');
+  const [itemsSearch, setItemsSearch] = useState('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [actionBusy, setActionBusy] = useState('');
   const [trackingUndo, setTrackingUndo] = useState<DraftTrackingUndo | null>(null);
@@ -152,26 +232,69 @@ export default function NhiImportPage() {
   useEffect(() => { loadOverview(); }, [loadOverview, nhiVersion]);
 
   useEffect(() => {
+    setItemsPage(1);
+    setItemsSearchInput('');
+    setItemsSearch('');
+    setExpandedId(null);
+  }, [activeMember]);
+
+  useEffect(() => {
     if (!activeSection) return;
     let alive = true;
     setItemsLoading(true);
     setItemsError('');
-    api.get(`/api/patients/me/nhi-imports/${activeSection}`, memberQueryParams(activeMember))
-      .then((d) => { if (alive) setItems(((d as { items?: NhiItem[] })?.items) ?? []); })
+    const requestParams = {
+      ...memberQueryParams(activeMember),
+      page: String(itemsPage),
+      page_size: String(NHI_PAGE_SIZE),
+      ...(itemsSearch ? { search: itemsSearch } : {}),
+    };
+    api.get(`/api/patients/me/nhi-imports/${activeSection}`, requestParams)
+      .then((d) => {
+        if (!alive) return;
+        const response = (d ?? {}) as NhiSectionResponse;
+        const rawItems = Array.isArray(response.items) ? response.items : [];
+        const serverPaginated = typeof response.page === 'number'
+          || typeof response.page_size === 'number'
+          || typeof response.has_more === 'boolean'
+          || typeof response.total === 'number';
+        if (serverPaginated) {
+          const pageItems = rawItems.slice(0, NHI_PAGE_SIZE);
+          const total = typeof response.total === 'number'
+            ? response.total
+            : Math.max(pageItems.length, response.count ?? pageItems.length);
+          setItems(pageItems);
+          setItemsTotal(total);
+          setItemsHasMore(typeof response.has_more === 'boolean'
+            ? response.has_more
+            : itemsPage * NHI_PAGE_SIZE < total);
+        } else {
+          // Compatibility for older local APIs: cap the rendered list even if
+          // the endpoint has not yet started applying page/search parameters.
+          const needle = itemsSearch.toLocaleLowerCase('zh-TW');
+          const filtered = needle
+            ? rawItems.filter((item) => searchableItemText(item).includes(needle))
+            : rawItems;
+          const offset = (itemsPage - 1) * NHI_PAGE_SIZE;
+          setItems(filtered.slice(offset, offset + NHI_PAGE_SIZE));
+          setItemsTotal(filtered.length);
+          setItemsHasMore(offset + NHI_PAGE_SIZE < filtered.length);
+        }
+      })
       .catch(() => {
         if (alive) {
-          setItems([]);
           setItemsError('此分區載入失敗，請重試。');
         }
       })
       .finally(() => { if (alive) setItemsLoading(false); });
     return () => { alive = false; };
-  }, [activeMember, activeSection, nhiVersion, itemsReloadKey]);
+  }, [activeMember, activeSection, itemsPage, itemsReloadKey, itemsSearch, nhiVersion]);
 
   const summary = overview?.summary;
   const sections = useMemo(() => overview?.sections ?? [], [overview]);
   const activeMeta = sections.find((s) => s.key === activeSection) ?? null;
   const reportRow = async (item: NhiItem, status: 'error_reported' | 'review_requested') => {
+    const displayName = itemDisplayName(item);
     setActionBusy(`${status}-${item.id}`);
     try {
       await api.post('/api/patients/me/patient-reported-states', {
@@ -180,16 +303,16 @@ export default function NhiImportPage() {
         source_document_id: item.source_document_id,
         reported_status: status,
         reported_payload: {
-          target_label: item.raw_label,
+          target_label: displayName,
           nhi_draft_id: item.id,
           member_name: item.member_name || activeMember || null,
           section: item.section,
           review_status: item.review_status,
           publish_status: item.publish_status,
         },
-        note: status === 'error_reported' ? `NHI 匯入列可能有誤：${item.raw_label}` : `請醫療團隊複核 NHI 匯入列：${item.raw_label}`,
+        note: status === 'error_reported' ? `健保匯入紀錄可能有誤：${displayName}` : `請醫療團隊複核健保匯入紀錄：${displayName}`,
       });
-      showToast(status === 'error_reported' ? `已回報錯誤 · ${item.raw_label}` : `已送出複核請求 · ${item.raw_label}`, 'success');
+      showToast(status === 'error_reported' ? `已回報錯誤 · ${displayName}` : `已送出複核請求 · ${displayName}`, 'success');
     } catch {
       showToast('送出失敗，請稍後再試', 'error');
     } finally {
@@ -215,7 +338,7 @@ export default function NhiImportPage() {
           section: item.section,
           personal_tracking_only: true,
         },
-        note: `使用者將 NHI 疾病追蹤狀況標記為：${PATIENT_PROBLEM_TRACKING_LABELS[status] ?? status}`,
+        note: `使用者將健保疾病追蹤狀況標記為：${PATIENT_PROBLEM_TRACKING_LABELS[status] ?? '狀態已記錄'}`,
       }) as { id?: string };
       const stateId = response.id || item.patient_tracking_state_id;
       setItems((current) => current.map((row) => row.id === item.id ? {
@@ -226,7 +349,7 @@ export default function NhiImportPage() {
       if (stateId) {
         setTrackingUndo({ rowId: item.id, stateId, previous, next: status, label: item.diagnosis || item.raw_label });
       }
-      showToast(`你的追蹤狀況已更新為「${PATIENT_PROBLEM_TRACKING_LABELS[status] ?? status}」`, 'success');
+      showToast(`你的追蹤狀況已更新為「${PATIENT_PROBLEM_TRACKING_LABELS[status] ?? '狀態已記錄'}」`, 'success');
       sync.refreshNow();
     } catch {
       setItems((current) => current.map((row) => row.id === item.id ? { ...row, patient_tracking_state: previous } : row));
@@ -281,13 +404,13 @@ export default function NhiImportPage() {
       <div className="hk-nhi-page">
         <h1 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 8px' }}>{scopeLabel}健保存摺匯入</h1>
         <div style={{ background: '#fff', border: '1px solid #e3e9ee', borderRadius: 12, padding: 28, textAlign: 'center', marginTop: 12 }}>
-          <div style={{ fontSize: 40, marginBottom: 8 }}>📑</div>
+          <div aria-hidden="true" style={{ width: 56, height: 56, margin: '0 auto 12px', borderRadius: 16, background: '#e7f3f5', color: '#33596a', display: 'grid', placeItems: 'center' }}><FileText size={30} /></div>
           <div style={{ fontWeight: 700, color: '#22313f', marginBottom: 6 }}>{scopeLabel}目前還沒有健保存摺資料</div>
           <div style={{ color: '#6b7c8c', fontSize: 14, lineHeight: 1.7, maxWidth: 460, margin: '0 auto 16px' }}>
             您可以從健保快易通 App 下載「健康存摺」HTML 檔，再上傳給醫療團隊整理。
             整理完成後，您的門診、用藥、檢驗、影像等紀錄就會顯示在這裡。
           </div>
-          <Link href={uploadHref} style={{ display: 'inline-block', padding: '10px 18px', borderRadius: 8, background: '#3e6b7e', color: '#fff', fontWeight: 700, fontSize: 14 }}>
+          <Link href={uploadHref} style={{ display: 'inline-flex', alignItems: 'center', minHeight: 44, padding: '10px 18px', borderRadius: 8, background: '#3e6b7e', color: '#fff', fontWeight: 700, fontSize: 14 }}>
             匯入健保存摺 HTML／ZIP
           </Link>
         </div>
@@ -335,11 +458,11 @@ export default function NhiImportPage() {
       </div>
 
       {/* Status legend (explains the data flow to the patient) */}
-      <div style={{ background: '#e7f3f5', border: '1px solid #cfe3e8', borderRadius: 10, padding: '10px 14px', marginBottom: 18, fontSize: 12.5, color: '#1e3a8a', lineHeight: 1.7 }}>
+      <div style={{ background: '#e7f3f5', border: '1px solid #cfe3e8', borderRadius: 10, padding: '10px 14px', marginBottom: 18, fontSize: 12.5, color: '#1e3a8a', lineHeight: 1.7, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 14px' }}>
         <strong>狀態說明：</strong>
-        <span style={{ marginLeft: 6 }}>🟢 已整理＝醫療團隊已確認並收錄到您的健康檔案</span>
-        ·<span> 🟡 待整理＝已匯入、等待醫療團隊確認</span>
-        ·<span> ⚪ 未採用＝與既有紀錄重複或不需收錄</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><CheckCircle2 size={15} color="#2e8b57" aria-hidden="true" />已整理：醫療團隊已確認並收錄到您的健康檔案</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Clock3 size={15} color="#a97614" aria-hidden="true" />待整理：已匯入、等待醫療團隊確認</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><CircleMinus size={15} color="#6b7c8c" aria-hidden="true" />未採用：與既有紀錄重複或不需收錄</span>
       </div>
 
       <div className="hk-nhi-grid">
@@ -348,13 +471,20 @@ export default function NhiImportPage() {
           {sections.map((s) => {
             const active = s.key === activeSection;
             return (
-              <button key={s.key} type="button" onClick={() => setActiveSection(s.key)}
+              <button key={s.key} type="button" onClick={() => {
+                setActiveSection(s.key);
+                setItemsPage(1);
+                setItemsSearchInput('');
+                setItemsSearch('');
+                setExpandedId(null);
+              }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                  minHeight: 44,
                   padding: '11px 13px', border: 0, borderLeft: active ? '3px solid #3e6b7e' : '3px solid transparent',
                   background: active ? '#e7f3f5' : 'transparent', cursor: 'pointer',
                 }}>
-                <span style={{ fontSize: 18 }}>{SECTION_ICON[s.key] ?? '📄'}</span>
+                <span aria-hidden="true" style={{ color: active ? '#33596a' : '#56687a', display: 'inline-flex' }}><NhiSectionIcon sectionKey={s.key} /></span>
                 <span style={{ flex: 1 }}>
                   <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: '#22313f' }}>{s.label}</span>
                   <span style={{ display: 'block', fontSize: 11, color: '#6b7c8c', marginTop: 1 }}>
@@ -369,10 +499,47 @@ export default function NhiImportPage() {
         {/* Section detail */}
         <div className="hk-nhi-detail-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <span style={{ fontSize: 20 }}>{activeSection ? SECTION_ICON[activeSection] : '📄'}</span>
+            <span aria-hidden="true" style={{ color: '#33596a', display: 'inline-flex' }}><NhiSectionIcon sectionKey={activeSection} size={20} /></span>
             <h2 style={{ fontSize: 17, fontWeight: 800, margin: 0 }}>{activeMeta?.label ?? ''}</h2>
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7c8c' }}>{activeMeta?.total ?? 0} 筆紀錄</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7c8c' }}>{itemsLoading ? (activeMeta?.total ?? 0) : itemsTotal} 筆紀錄</span>
           </div>
+
+          <form
+            role="search"
+            aria-label={`搜尋${activeMeta?.label ?? '此分區'}紀錄`}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const nextSearch = itemsSearchInput.trim();
+              setItemsPage(1);
+              if (nextSearch === itemsSearch) setItemsReloadKey((value) => value + 1);
+              else setItemsSearch(nextSearch);
+            }}
+            style={{ display: 'flex', alignItems: 'end', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}
+          >
+            <label style={{ display: 'grid', gap: 5, flex: '1 1 220px', color: '#56687a', fontSize: 12, fontWeight: 800 }}>
+              搜尋此分區
+              <input
+                value={itemsSearchInput}
+                onChange={(event) => setItemsSearchInput(event.target.value)}
+                placeholder="搜尋疾病、院所或用藥"
+                style={{ minHeight: 44, border: '1px solid #c8d4dc', borderRadius: 8, padding: '9px 11px', color: '#22313f', background: '#fff' }}
+              />
+            </label>
+            <button type="submit" style={rowBtn}>搜尋</button>
+            {itemsSearch && (
+              <button
+                type="button"
+                style={rowBtn}
+                onClick={() => {
+                  setItemsSearchInput('');
+                  setItemsSearch('');
+                  setItemsPage(1);
+                }}
+              >
+                清除搜尋
+              </button>
+            )}
+          </form>
 
           {itemsLoading ? (
             <div style={{ color: '#6b7c8c', padding: 20, textAlign: 'center' }}>載入中…</div>
@@ -403,12 +570,9 @@ export default function NhiImportPage() {
                         {it.review_status_label}
                       </span>
                     </div>
-                    {(it.diagnosis || it.icd10) && (
-                      <div style={{ marginTop: 5, fontSize: 13.5, color: '#22313f' }}>
-                        {it.diagnosis || '—'}
-                        {it.icd10 && <span style={{ marginLeft: 6, fontSize: 11, color: '#93a3af', fontFamily: 'ui-monospace, monospace' }}>{it.icd10}</span>}
-                      </div>
-                    )}
+                    <div style={{ marginTop: 5, fontSize: 13.5, color: '#22313f' }}>
+                      {it.diagnosis || sectionLabel(it.section)}
+                    </div>
                     {it.diagnosis && (
                       <div style={{ marginTop: 9, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <label style={{ fontSize: 12, fontWeight: 800, color: '#56687a' }}>
@@ -418,7 +582,7 @@ export default function NhiImportPage() {
                             value={it.patient_tracking_state ?? ''}
                             disabled={actionBusy === `tracking-${it.id}`}
                             onChange={(event) => { if (event.target.value) void updateDraftTracking(it, event.target.value); }}
-                            style={{ marginLeft: 8, minHeight: 34, border: '1px solid #cfd9e2', borderRadius: 8, padding: '5px 28px 5px 9px', background: '#fff', color: '#22313f' }}
+                            style={{ marginLeft: 8, minHeight: 44, border: '1px solid #cfd9e2', borderRadius: 8, padding: '8px 28px 8px 9px', background: '#fff', color: '#22313f' }}
                           >
                             <option value="" disabled>選擇目前狀況…</option>
                             {PATIENT_PROBLEM_TRACKING_OPTIONS.map((option) => (
@@ -439,10 +603,10 @@ export default function NhiImportPage() {
                       <button type="button" onClick={() => setExpandedId(expandedId === it.id ? null : it.id)} style={rowBtn}>
                         {expandedId === it.id ? '收合詳情' : '查看整理狀態與來源'}
                       </button>
-                      <button type="button" onClick={() => reportRow(it, 'review_requested')} disabled={actionBusy === `review_requested-${it.id}`} title="送到 CMO 工作台複核，不會改動正式病歷" style={rowBtn}>
+                      <button type="button" onClick={() => reportRow(it, 'review_requested')} disabled={actionBusy === `review_requested-${it.id}`} title="送請醫療團隊複核，不會改動正式病歷" style={rowBtn}>
                         請醫療團隊複核
                       </button>
-                      <button type="button" onClick={() => reportRow(it, 'error_reported')} disabled={actionBusy === `error_reported-${it.id}`} title="回報此 row 可能有誤，會寫入 health records activity" style={rowBtn}>
+                      <button type="button" onClick={() => reportRow(it, 'error_reported')} disabled={actionBusy === `error_reported-${it.id}`} title="回報此筆資料可能有誤，會記錄在健康資料活動中" style={rowBtn}>
                         回報錯誤
                       </button>
                       <Link href={uploadHref} style={{ ...rowBtn, textDecoration: 'none' }}>補充文件</Link>
@@ -451,6 +615,33 @@ export default function NhiImportPage() {
                   </div>
                 );
               })}
+              <nav aria-label={`${activeMeta?.label ?? '此分區'}分頁`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
+                <button
+                  type="button"
+                  style={rowBtn}
+                  disabled={itemsPage <= 1 || itemsLoading}
+                  onClick={() => {
+                    setExpandedId(null);
+                    setItemsPage((value) => Math.max(1, value - 1));
+                  }}
+                >
+                  上一頁
+                </button>
+                <span role="status" aria-live="polite" style={{ color: '#6b7c8c', fontSize: 12 }}>
+                  第 {itemsPage} 頁{itemsTotal > 0 ? ` · 共 ${itemsTotal} 筆` : ''}
+                </span>
+                <button
+                  type="button"
+                  style={rowBtn}
+                  disabled={!itemsHasMore || itemsLoading}
+                  onClick={() => {
+                    setExpandedId(null);
+                    setItemsPage((value) => value + 1);
+                  }}
+                >
+                  下一頁
+                </button>
+              </nav>
             </div>
           )}
         </div>
@@ -471,7 +662,7 @@ function NhiItemDetail({ item }: { item: NhiItem }) {
         <LayerBox title="健保存摺來源資料" status="保留健保署匯入來源；此處只顯示使用者需要的欄位">
           <KV label="日期" value={item.date || item.visit_date || '未記錄'} />
           <KV label="院所/科別" value={[item.hospital || item.facility, item.department].filter(Boolean).join(' · ') || '未記錄'} />
-          <KV label="分類" value={item.raw_label || item.section} />
+          <KV label="紀錄分類" value={sectionLabel(item.section)} />
           <EvidenceDocumentRow doc={item.source_document} fallbackId={item.source_document_id} />
         </LayerBox>
         <LayerBox title="醫療團隊整理狀態" status={item.official_layer.label}>
@@ -484,6 +675,19 @@ function NhiItemDetail({ item }: { item: NhiItem }) {
           <KV label="醫療團隊備註" value={item.patient_visible_note || '目前沒有補充備註'} />
         </LayerBox>
       </div>
+      {(item.icd10 || item.raw_label || item.section || item.source_document_id) && (
+        <details style={{ marginTop: 10, border: '1px solid #e3e9ee', borderRadius: 10, padding: '0 12px', background: '#fbfcfd' }}>
+          <summary style={{ minHeight: 44, display: 'flex', alignItems: 'center', color: '#3e6b7e', fontSize: 12, fontWeight: 850, cursor: 'pointer' }}>
+            專業詳細資訊
+          </summary>
+          <div style={{ paddingBottom: 12 }}>
+            {item.icd10 && <KV label="診斷代碼" value={item.icd10} />}
+            {item.raw_label && <KV label="原始匯入分類" value={item.raw_label} />}
+            <KV label="系統分類" value={item.section} />
+            {item.source_document_id && <KV label="來源文件編號" value={item.source_document_id} />}
+          </div>
+        </details>
+      )}
     </div>
   );
 }
@@ -493,7 +697,7 @@ function EvidenceDocumentRow({ doc, fallbackId }: { doc: EvidenceDocument | null
     return (
       <div style={evidenceRow}>
         <span style={evidenceLabel}>原始文件</span>
-        <span style={evidenceText}>{fallbackId ? `已記錄 ID：${fallbackId}，但尚未建立可檢視連結` : '尚未連結原始文件'}</span>
+        <span style={evidenceText}>{fallbackId ? '已記錄原始文件，但尚未建立可檢視連結' : '尚未連結原始文件'}</span>
       </div>
     );
   }
@@ -547,8 +751,12 @@ const evidenceRow: React.CSSProperties = {
 };
 const evidenceLabel: React.CSSProperties = { color: '#6b7c8c', fontWeight: 800, flexShrink: 0 };
 const evidenceText: React.CSSProperties = { color: '#22313f', textAlign: 'right', wordBreak: 'break-word', lineHeight: 1.45 };
-const evidenceLink: React.CSSProperties = { color: '#3e6b7e', textAlign: 'right', wordBreak: 'break-word', lineHeight: 1.45, fontWeight: 850, textDecoration: 'none' };
+const evidenceLink: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', minHeight: 44, color: '#3e6b7e', textAlign: 'right', wordBreak: 'break-word', lineHeight: 1.45, fontWeight: 850, textDecoration: 'none' };
 const rowBtn: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minHeight: 44,
   border: '1px solid #c8d4dc',
   background: '#fff',
   color: '#45596a',

@@ -20,8 +20,17 @@ const SAFE_RESPONSE_HEADERS = [
   'content-disposition',
   'content-security-policy',
   'referrer-policy',
+  'retry-after',
   'x-content-type-options',
+  'x-request-id',
+  'x-robots-tag',
+  'x-total-count',
 ]
+const PROXY_ERROR_HEADERS = {
+  'Cache-Control': 'no-store',
+  'Referrer-Policy': 'no-referrer',
+  'X-Robots-Tag': 'noindex, nofollow, noarchive',
+}
 // Local development still supports multipart uploads through this proxy.
 // Production NHI uploads use presigned object-storage URLs, but other binary
 // patient uploads must not be aborted by the ordinary API read timeout.
@@ -37,13 +46,14 @@ function backendUnavailableResponse(attempts: number) {
       error: {
         code: 'backend_unavailable',
         message: 'Backend service is temporarily unavailable',
+        retryable: true,
         details: {},
       },
     },
     {
       status: 502,
       headers: {
-        'Cache-Control': 'no-store',
+        ...PROXY_ERROR_HEADERS,
         'X-HealthKeep-Api-Proxy-Attempts': String(attempts),
       },
     },
@@ -65,6 +75,8 @@ function forwardRequestHeaders(req: NextRequest) {
     'content-type',
     'cookie',
     'idempotency-key',
+    'x-impact-preview-token',
+    'x-request-id',
     'if-none-match',
     'if-modified-since',
   ]
@@ -119,13 +131,14 @@ function unsafeBackendRedirectResponse(attempts: number) {
       error: {
         code: 'unsafe_backend_redirect',
         message: 'Backend redirect was refused by the API proxy',
+        retryable: false,
         details: {},
       },
     },
     {
       status: 502,
       headers: {
-        'Cache-Control': 'no-store',
+        ...PROXY_ERROR_HEADERS,
         'X-HealthKeep-Api-Proxy': 'generic',
         'X-HealthKeep-Api-Proxy-Attempts': String(attempts),
       },
@@ -134,11 +147,18 @@ function unsafeBackendRedirectResponse(attempts: number) {
 }
 
 function isAuthorizedDocumentDownload(path: string[], method: string) {
-  return method === 'GET'
-    && path.length === 3
+  if (method !== 'GET') return false
+  const authenticatedDocument = path.length === 3
     && path[0] === 'documents'
     && DOCUMENT_ID_PATTERN.test(path[1])
     && path[2] === 'download'
+  const emergencyDocument = path.length === 5
+    && path[0] === 'emergency'
+    && path[1].length >= 8
+    && path[2] === 'documents'
+    && DOCUMENT_ID_PATTERN.test(path[3])
+    && path[4] === 'download'
+  return authenticatedDocument || emergencyDocument
 }
 
 function trustedStorageRedirect(location: string | null) {

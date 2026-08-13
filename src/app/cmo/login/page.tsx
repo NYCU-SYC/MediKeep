@@ -33,8 +33,12 @@ export default function CmoLoginPage() {
         body: JSON.stringify({ email: submittedEmail, password: submittedPassword }),
       })
       if (!res.ok) {
-        const data = await res.json().catch(() => ({ detail: '' }))
-        setError(data?.error?.message || data.detail || '登入失敗，請確認帳號或密碼。')
+        if (res.status === 401 || res.status === 403) {
+          setError('帳號、密碼不正確，或帳號尚未啟用。')
+        } else {
+          await res.json().catch(() => null)
+          setError('登入失敗，請稍後再試。')
+        }
         return
       }
       const data = await res.json().catch(() => ({}))

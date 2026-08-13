@@ -7,6 +7,16 @@ import { useActiveMember } from '../member-context';
 import { api } from '@/lib/api';
 import { useSync } from '@/lib/sync';
 import { memberDisplayName, memberHref, memberQueryParams, normalizeMemberName } from '@/lib/members';
+import LegacyHealthRedirect from '../health/LegacyHealthRedirect';
+
+// The previous implementation remains compiled for an explicit code-level rollback,
+// but no normal User route or navigation can enable it.
+const USE_LEGACY_HEALTH_SUMMARY_ROLLBACK = false;
+
+export default function HealthSummaryCompatibilityPage() {
+  if (USE_LEGACY_HEALTH_SUMMARY_ROLLBACK) return <LegacyHealthSummaryPage />;
+  return <LegacyHealthRedirect target="/dashboard/health" label="健康" />;
+}
 
 type CmoRecommendation = {
   id: string;
@@ -78,6 +88,16 @@ type MedicationOut = {
   note?: string | null;
   is_published?: boolean;
   is_verified?: boolean;
+  is_patient_managed?: boolean;
+  patient_reported_usage_status?: string | null;
+  source?: string | null;
+};
+type ConditionOut = {
+  id: number;
+  display_name: string;
+  status?: string | null;
+  is_patient_managed?: boolean;
+  is_verified?: boolean;
   source?: string | null;
 };
 type NhiOverview = {
@@ -105,7 +125,7 @@ const DOC_STATUS: Record<string, { label: string; cls: string }> = {
   uploaded: { label: '已收到', cls: 'hk-b-blue' },
   queued: { label: '等待處理', cls: 'hk-b-blue' },
   extracting: { label: '整理中', cls: 'hk-b-amber' },
-  needs_review: { label: '等待 CMO 審閱', cls: 'hk-b-amber' },
+  needs_review: { label: '等待醫療團隊審閱', cls: 'hk-b-amber' },
   reviewed: { label: '已審閱', cls: 'hk-b-green' },
   confirmed: { label: '已整理', cls: 'hk-b-green' },
   published: { label: '已發布摘要', cls: 'hk-b-green' },
@@ -140,6 +160,12 @@ function patientSafeText(value?: string | null, fallback = '待醫療團隊整�
   const text = (value ?? '').trim();
   const withoutCodes = text
     .replace(/\b[A-Z]\d{2}(?:\.\d+)?\b/gi, '')
+    .replace(/\bCMO\b/gi, '醫療團隊')
+    .replace(/\bOwner\b/gi, '家庭管理者')
+    .replace(/\bSelf\b/gi, '本人')
+    .replace(/\braw\b/gi, '原始資料')
+    .replace(/醫療團隊\s+(?=已|建議|整理|確認|需要|要求|追蹤)/g, '醫療團隊')
+    .replace(/依\s+醫療團隊/g, '依醫療團隊')
     .replace(/\s+/g, ' ')
     .trim();
   const safe = withoutCodes || fallback;
@@ -194,7 +220,7 @@ function TaskRow({
   );
 }
 
-export default function HealthSummaryPage() {
+function LegacyHealthSummaryPage() {
   const searchParams = useSearchParams();
   const sync = useSync();
   const { activeMember, setActiveMember, members } = useActiveMember();
@@ -206,6 +232,7 @@ export default function HealthSummaryPage() {
   const [missingRequests, setMissingRequests] = useState<MissingDataRequest[]>([]);
   const [docs, setDocs] = useState<DocOut[]>([]);
   const [records, setRecords] = useState<RecordOut[]>([]);
+  const [conditions, setConditions] = useState<ConditionOut[]>([]);
   const [medications, setMedications] = useState<MedicationOut[]>([]);
   const [nhiOverview, setNhiOverview] = useState<NhiOverview | null>(null);
 
@@ -223,6 +250,7 @@ export default function HealthSummaryPage() {
       api.get('/api/patients/me/missing-data-requests', params),
       api.get('/api/documents', params),
       api.get('/api/records', { limit: '20', ...(params ?? {}) }),
+      api.get('/api/conditions', params),
       api.get('/api/medications', params),
       api.get('/api/patients/me/nhi-imports', params),
     ]);
@@ -234,8 +262,9 @@ export default function HealthSummaryPage() {
     setMissingRequests(arr(3) as MissingDataRequest[]);
     setDocs(arr(4) as DocOut[]);
     setRecords(arr(5) as RecordOut[]);
-    setMedications(arr(6) as MedicationOut[]);
-    setNhiOverview((at(7) as NhiOverview) ?? null);
+    setConditions(arr(6) as ConditionOut[]);
+    setMedications(arr(7) as MedicationOut[]);
+    setNhiOverview((at(8) as NhiOverview) ?? null);
     setLoadError(results.some((r) => r.status === 'rejected'));
     setLoaded(true);
   }, [activeMember]);
@@ -260,10 +289,12 @@ export default function HealthSummaryPage() {
   const recentRecords = records.slice(0, 4);
   const topProblems = (summary?.top_problems ?? []).slice(0, 4);
   const visibleMedications = medications.filter((med) => med.is_published).slice(0, 4);
+  const managedConditions = conditions.filter((item) => item.is_patient_managed && !['resolved', 'closed', 'deleted'].includes(item.status || '')).slice(0, 4);
+  const managedMedications = medications.filter((item) => item.is_patient_managed && !['not_taking', 'doctor_stopped', 'course_completed', 'self_stopped', 'side_effect_stopped'].includes(item.patient_reported_usage_status || '')).slice(0, 4);
   const hasNhi = Boolean(nhiOverview?.has_data);
 
   const primaryAction = (() => {
-    if (activeMissing.length > 0) return { label: '完成 CMO 要求的補資料', href: href('/dashboard/reminders') };
+    if (activeMissing.length > 0) return { label: '完成醫療團隊要求的補資料', href: href('/dashboard/reminders') };
     if (activeFollowUps.length > 0) return { label: '查看追蹤提醒', href: href('/dashboard/reminders') };
     if (processingDocs.length > 0) return { label: '查看資料整理進度', href: href('/dashboard/upload', { tab: 'file' }) };
     return { label: '上傳新的報告', href: href('/dashboard/upload', { tab: 'file' }) };
@@ -282,16 +313,16 @@ export default function HealthSummaryPage() {
         <div className="hk-card hk-home-hero" style={{ marginBottom: 14, background: 'linear-gradient(135deg,#ecfeff,#ffffff)', borderColor: '#cffafe' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
             <div style={{ maxWidth: 760 }}>
-              <div className="hk-ctitle" style={{ marginBottom: 8 }}>Health Summary</div>
+              <div className="hk-ctitle" style={{ marginBottom: 8 }}>健康全貌</div>
               <h1 style={{ fontSize: 26, lineHeight: 1.25, margin: 0, color: 'var(--hk-ink)', fontWeight: 900 }}>
                 {scopeLabel}的健康摘要
               </h1>
               <p style={{ margin: '8px 0 0', fontSize: 14, lineHeight: 1.7, color: 'var(--hk-ink-2)' }}>
-                這裡只放 CMO 已整理的重點、你需要做的下一步、補資料任務與最近資料狀態。
+                這裡只放醫療團隊已整理的重點、你需要做的下一步、補資料任務與最近資料狀態。
               </p>
               {recommendation?.published_at && (
                 <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--hk-ink-3)' }}>
-                  CMO 最新發布：{relativeTime(recommendation.published_at)}
+                  醫療團隊最新發布：{relativeTime(recommendation.published_at)}
                 </p>
               )}
             </div>
@@ -302,29 +333,67 @@ export default function HealthSummaryPage() {
         </div>
 
         <div className="hk-home-grid">
-          <main className="hk-home-main">
+          <div className="hk-home-main">
+            <div className="hk-card" data-testid="self-managed-health-summary">
+              <div className="hk-ctitle">
+                我正在管理
+                <Link href={href('/dashboard/health')} style={{ fontSize: 11, color: 'var(--hk-teal)', textDecoration: 'none', fontWeight: 800 }}>查看健康全貌 →</Link>
+              </div>
+              {managedConditions.length > 0 || managedMedications.length > 0 ? (
+                <div style={{ display: 'grid', gap: 12 }}>
+                  {managedConditions.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 12, color: 'var(--hk-ink-3)', fontWeight: 800, marginBottom: 6 }}>我的病況</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                        {managedConditions.map((item) => <span key={item.id} className="hk-badge hk-b-blue">{patientSafeText(item.display_name)}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  {managedMedications.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 12, color: 'var(--hk-ink-3)', fontWeight: 800, marginBottom: 6 }}>我的用藥</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                        {managedMedications.map((item) => <span key={item.id} className="hk-badge hk-b-green">{patientSafeText(item.drug_name)}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <Link href={href('/dashboard/conditions')} className="hk-btn hk-btn-ghost hk-btn-sm">管理病況</Link>
+                    <Link href={href('/dashboard/medications')} className="hk-btn hk-btn-ghost hk-btn-sm">管理用藥</Link>
+                  </div>
+                  <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--hk-ink-3)' }}>
+                    這些是你自行管理的資訊；從健保存摺加入的項目不等於醫療確認，可隨時更新目前狀態。
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--hk-ink-2)' }}>
+                  你可以從健康時間軸加入病況或用藥，也可以直接建立自己的健康項目。
+                </div>
+              )}
+            </div>
+
             <div className="hk-card">
               <div className="hk-ctitle">
-                CMO 最新建議
+                醫療團隊最新建議
                 {recommendation ? <span className="hk-badge hk-b-cmo">已發布</span> : <span className="hk-badge hk-b-blue">等待整理</span>}
               </div>
               {recommendation ? (
                 <div style={{ display: 'grid', gap: 12 }}>
                   <div>
                     <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--hk-ink)', lineHeight: 1.4 }}>
-                      {patientSafeText(recommendation.title, 'CMO 最新建議')}
+                      {patientSafeText(recommendation.title, '醫療團隊最新建議')}
                     </div>
                     <div style={{ fontSize: 13, color: 'var(--hk-ink-3)', marginTop: 4 }}>
-                      Version {recommendation.version}{recommendation.published_at ? ` · ${relativeTime(recommendation.published_at)}` : ''}
+                      版本 {recommendation.version}{recommendation.published_at ? ` · ${relativeTime(recommendation.published_at)}` : ''}
                     </div>
                   </div>
                   <div style={{ fontSize: 14, lineHeight: 1.75, color: 'var(--hk-ink-2)' }}>
-                    {patientSafeText(recommendation.health_summary || recommendation.recommendation, 'CMO 已完成一則健康摘要。')}
+                    {patientSafeText(recommendation.health_summary || recommendation.recommendation, '醫療團隊已完成一則健康摘要。')}
                   </div>
                   <div style={{ border: '1px solid #d5e7ec', background: '#e7f3f5', borderRadius: 12, padding: 12 }}>
                     <div style={{ fontSize: 12, fontWeight: 900, color: '#33596a', marginBottom: 4 }}>下一步</div>
                     <div style={{ fontSize: 14, lineHeight: 1.65, color: 'var(--hk-ink)' }}>
-                      {patientSafeText(recommendation.next_step || recommendation.recommendation, '依 CMO 建議完成下一步')}
+                      {patientSafeText(recommendation.next_step || recommendation.recommendation, '依醫療團隊建議完成下一步')}
                     </div>
                     {recommendation.follow_up_date && (
                       <div style={{ marginTop: 8, fontSize: 12, color: '#33596a', fontWeight: 800 }}>
@@ -335,7 +404,7 @@ export default function HealthSummaryPage() {
                 </div>
               ) : (
                 <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--hk-ink-2)' }}>
-                  CMO 團隊完成整理後，會在這裡顯示白話摘要與下一步。你可以先上傳新的報告或完成補資料任務。
+                  醫療團隊完成整理後，會在這裡顯示白話摘要與下一步。你可以先上傳新的報告或完成補資料任務。
                 </div>
               )}
             </div>
@@ -343,7 +412,7 @@ export default function HealthSummaryPage() {
             <div className="hk-card">
               <div className="hk-ctitle">
                 目前健康重點
-                <Link href={href('/dashboard/health-profile')} style={{ fontSize: 11, color: 'var(--hk-teal)', textDecoration: 'none', fontWeight: 800 }}>詳細資料 →</Link>
+                <Link href={href('/dashboard/health')} style={{ fontSize: 11, color: 'var(--hk-teal)', textDecoration: 'none', fontWeight: 800 }}>健康全貌 →</Link>
               </div>
               {topProblems.length > 0 ? (
                 <div style={{ display: 'grid', gap: 10 }}>
@@ -357,7 +426,7 @@ export default function HealthSummaryPage() {
                           {patientSafeText(problem.display_layman || problem.display_name)}
                         </div>
                         <div style={{ marginTop: 3, fontSize: 12, color: 'var(--hk-ink-3)' }}>
-                          {problem.verified_by_name ? `CMO ${problem.verified_by_name} 已確認` : 'CMO 已整理'}
+                          {problem.verified_by_name ? `醫療團隊 ${problem.verified_by_name} 已確認` : '醫療團隊已整理'}
                           {problem.is_suspected ? ' · 仍需補充資料確認' : ''}
                         </div>
                       </div>
@@ -366,7 +435,7 @@ export default function HealthSummaryPage() {
                 </div>
               ) : (
                 <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--hk-ink-2)' }}>
-                  目前沒有 CMO 已確認的健康重點。若你有新報告，可以先上傳，整理後會更新在這裡。
+                  目前沒有醫療團隊已確認的健康重點。若你有新報告，可以先上傳，整理後會更新在這裡。
                 </div>
               )}
             </div>
@@ -375,7 +444,7 @@ export default function HealthSummaryPage() {
               <div className="hk-ctitle">
                 用藥整理摘要
                 <span className={`hk-badge ${visibleMedications.length ? 'hk-b-cmo' : 'hk-b-blue'}`}>
-                  {visibleMedications.length ? 'CMO 已整理' : '待整理'}
+                  {visibleMedications.length ? '醫療團隊已整理' : '待整理'}
                 </span>
               </div>
               {visibleMedications.length > 0 ? (
@@ -385,26 +454,26 @@ export default function HealthSummaryPage() {
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                         <strong style={{ color: 'var(--hk-ink)' }}>{patientSafeText(med.drug_name, '用藥項目')}</strong>
                         <span className={`hk-badge ${med.is_published ? 'hk-b-green' : 'hk-b-amber'}`}>
-                          {med.is_published ? '已確認可見' : 'CMO 確認中'}
+                          {med.is_published ? '已確認可見' : '醫療團隊確認中'}
                         </span>
                       </div>
                       <div style={{ marginTop: 4, color: 'var(--hk-ink-2)', fontSize: 13, lineHeight: 1.55 }}>
-                        {patientSafeText([med.dose, med.frequency, med.intent].filter(Boolean).join(' · '), '用法或用途待 CMO 補充')}
+                        {patientSafeText([med.dose, med.frequency, med.intent].filter(Boolean).join(' · '), '用法或用途待醫療團隊補充')}
                       </div>
-                      {med.source && <div style={{ marginTop: 3, color: 'var(--hk-ink-3)', fontSize: 12 }}>來源：{med.source === 'cmo_created' ? 'CMO 整理' : '使用者或 NHI 資料'}</div>}
+                      {med.source && <div style={{ marginTop: 3, color: 'var(--hk-ink-3)', fontSize: 12 }}>來源：{med.source === 'cmo_created' ? '醫療團隊整理' : '本人或健保健康存摺資料'}</div>}
                     </div>
                   ))}
                 </div>
               ) : (
                 <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--hk-ink-2)' }}>
-                  目前沒有 CMO 發布的用藥摘要。若 NHI 或處方資料已上傳，整理完成後會出現在這裡。
+                  目前沒有醫療團隊發布的用藥摘要。若健保健康存摺或處方資料已上傳，整理完成後會出現在這裡。
                 </div>
               )}
             </div>
 
             <div className="hk-card">
               <div className="hk-ctitle">
-                NHI 資料來源
+                健保健康存摺來源
                 <span className={`hk-badge ${hasNhi ? 'hk-b-blue' : 'hk-b-amber'}`}>
                   {hasNhi ? `${nhiOverview?.summary.total ?? 0} 筆` : '尚無資料'}
                 </span>
@@ -412,18 +481,18 @@ export default function HealthSummaryPage() {
               {hasNhi ? (
                 <div style={{ display: 'grid', gap: 10 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8 }}>
-                    <MiniStat label="CMO 已整理" value={nhiOverview?.summary.organised ?? 0} />
+                    <MiniStat label="醫療團隊已整理" value={nhiOverview?.summary.organised ?? 0} />
                     <MiniStat label="待整理" value={nhiOverview?.summary.pending ?? 0} />
                     <MiniStat label="未採用" value={nhiOverview?.summary.not_used ?? 0} />
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--hk-ink-2)', lineHeight: 1.65 }}>
-                    這些是 NHI 健康存摺來源狀態。使用者端只顯示 CMO 整理後的重點；原始 NHI 內容可到 NHI 頁面查看。
+                    這些是健保健康存摺來源狀態。這裡只顯示醫療團隊整理後的重點；原始匯入內容可到健保資料頁面查看。
                   </div>
-                  <Link href={href('/dashboard/nhi')} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ width: 'fit-content' }}>查看 NHI 來源狀態</Link>
+                  <Link href={href('/dashboard/nhi')} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ width: 'fit-content' }}>查看健保資料來源狀態</Link>
                 </div>
               ) : (
                 <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--hk-ink-2)' }}>
-                  尚未看到 NHI 健康存摺資料。上傳後，CMO 會先整理成白話健康摘要，再發布給你。
+                  尚未看到健保健康存摺資料。上傳後，醫療團隊會先整理成白話健康摘要，再發布給你。
                 </div>
               )}
             </div>
@@ -460,7 +529,7 @@ export default function HealthSummaryPage() {
                 </>
               )}
             </div>
-          </main>
+          </div>
 
           <aside className="hk-home-side">
             <div className="hk-card">
@@ -473,14 +542,14 @@ export default function HealthSummaryPage() {
               {activeMissing.length > 0 ? activeMissing.slice(0, 3).map((request) => (
                 <TaskRow
                   key={request.id}
-                  title={patientSafeText(request.title, 'CMO 要求的資料')}
-                  desc={patientSafeText(request.instructions || request.reason, '請依 CMO 說明補充資料')}
+                  title={patientSafeText(request.title, '醫療團隊要求的資料')}
+                  desc={patientSafeText(request.instructions || request.reason, '請依醫療團隊說明補充資料')}
                   badge={request.status === 'needs_cmo_review' ? '已回覆，待審閱' : request.due_date ? `期限 ${request.due_date}` : '待補'}
                   badgeCls={request.status === 'needs_cmo_review' ? 'hk-b-green' : 'hk-b-amber'}
                   href={href('/dashboard/reminders', { highlight: `missing-${request.id}` })}
                 />
               )) : (
-                <div style={{ fontSize: 13, color: 'var(--hk-ink-3)' }}>目前沒有 CMO 要求你補的資料。</div>
+                <div style={{ fontSize: 13, color: 'var(--hk-ink-3)' }}>目前沒有醫療團隊要求你補的資料。</div>
               )}
               <Link href={href('/dashboard/reminders')} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ marginTop: 10 }}>查看提醒與補資料</Link>
             </div>
@@ -495,14 +564,14 @@ export default function HealthSummaryPage() {
               {activeFollowUps.length > 0 ? activeFollowUps.slice(0, 3).map((task) => (
                 <TaskRow
                   key={task.id}
-                  title={patientSafeText(task.item || task.reason, 'CMO 追蹤提醒')}
-                  desc={patientSafeText(task.reason, '依 CMO 建議持續追蹤')}
+                  title={patientSafeText(task.item || task.reason, '醫療團隊追蹤提醒')}
+                  desc={patientSafeText(task.reason, '依醫療團隊建議持續追蹤')}
                   badge={task.suggested_date ? `追蹤日 ${task.suggested_date}` : '待追蹤'}
                   badgeCls={task.priority === 'high' ? 'hk-b-red' : task.priority === 'medium' ? 'hk-b-amber' : 'hk-b-blue'}
                   href={href('/dashboard/reminders', { highlight: `followup-${task.id}` })}
                 />
               )) : (
-                <div style={{ fontSize: 13, color: 'var(--hk-ink-3)' }}>目前沒有 CMO 建立的追蹤任務。</div>
+                <div style={{ fontSize: 13, color: 'var(--hk-ink-3)' }}>目前沒有醫療團隊建立的追蹤任務。</div>
               )}
             </div>
 
@@ -519,7 +588,7 @@ export default function HealthSummaryPage() {
                   <TaskRow
                     key={doc.id}
                     title={patientSafeText(doc.file_name, '上傳文件')}
-                    desc="完成後才會進入健康摘要或 CMO 建議。"
+                    desc="完成後才會進入健康摘要或醫療團隊建議。"
                     badge={doc.processing_status_label || meta.label}
                     badgeCls={meta.cls}
                     href={href('/dashboard/upload', { tab: 'file' })}
@@ -540,7 +609,7 @@ export default function HealthSummaryPage() {
             <div className="hk-card" style={{ fontSize: 12.5, lineHeight: 1.7, color: 'var(--hk-ink-3)' }}>
               <strong style={{ color: 'var(--hk-ink)' }}>非診斷提醒</strong>
               <div style={{ marginTop: 5 }}>
-                本頁是 CMO 根據你提供的資料與 NHI 紀錄整理出的健康提醒，不等同醫療診斷。若症狀明顯、惡化或有急症疑慮，請直接就醫。
+                本頁是醫療團隊根據你提供的資料與健保健康存摺紀錄整理出的健康提醒，不等同醫療診斷。若症狀明顯、惡化或有急症疑慮，請直接就醫。
               </div>
             </div>
           </aside>

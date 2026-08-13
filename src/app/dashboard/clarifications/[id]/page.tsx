@@ -4,6 +4,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useToast } from '../../toast-context';
+import { useActiveMember } from '../../member-context';
+import { memberHref } from '@/lib/members';
+import { ConfirmDialog } from '../../_components/Shared';
 
 type ChangeRequest = {
   id: string;
@@ -37,6 +40,67 @@ const ACTION_LABELS: Record<string, string> = {
   upload_document: '上傳文件',
 };
 
+const TARGET_TYPE_LABELS: Record<string, string> = {
+  problem: '醫療團隊確認的病況',
+  condition: '我管理的病況',
+  allergy: '過敏資料',
+  medication_regimen: '目前用藥',
+  medication_event: '用藥紀錄',
+  vaccine: '疫苗紀錄',
+  measurement: '量測紀錄',
+  appointment: '回診提醒',
+  reminder: '提醒',
+  family_medical_history: '家族病史',
+  patient_profile: '基本健康資料',
+  source_document: '健康文件',
+  red_zone: '急診重要資訊',
+  change_request: '資料異動',
+  other: '其他健康資料',
+};
+
+const REQUEST_STATUS_LABELS: Record<string, string> = {
+  draft: '草稿',
+  pending_review: '等待醫療團隊確認',
+  accepted: '醫療團隊已確認',
+  modified_and_accepted: '醫療團隊已修正並確認',
+  rejected: '未採用',
+  withdrawn: '已撤回',
+  needs_clarification: '需要補充',
+  needs_secondary_review: '等待進一步確認',
+  replied: '已回覆',
+  completed: '已完成',
+};
+
+const HEALTH_STATUS_LABELS: Record<string, string> = {
+  ...REQUEST_STATUS_LABELS,
+  active: '目前有效',
+  inactive: '目前未啟用',
+  underlying: '重要病史',
+  following: '持續追蹤',
+  resolved: '已結束',
+  deleted: '已移除',
+  taking: '目前服用',
+  not_taking: '目前未服用',
+  unknown: '尚未確認',
+};
+
+function targetTypeLabel(value?: string | null): string {
+  return value ? TARGET_TYPE_LABELS[value] ?? '其他健康資料' : '其他健康資料';
+}
+
+function requestStatusLabel(value?: string | null): string {
+  return value ? REQUEST_STATUS_LABELS[value] ?? '狀態待確認' : '狀態待確認';
+}
+
+function requestedActionLabel(value?: string | null): string {
+  return value ? ACTION_LABELS[value] ?? '補充相關資料' : '補充相關資料';
+}
+
+function healthStatusLabel(value: unknown): string {
+  const key = String(value ?? '').trim();
+  return key ? HEALTH_STATUS_LABELS[key] ?? '狀態待確認' : '未記錄';
+}
+
 function fmtDate(value?: string | null): string {
   if (!value) return '未記錄';
   const d = new Date(value);
@@ -55,7 +119,10 @@ function textValue(value: unknown): string {
 function payloadText(payload: Record<string, unknown> | null | undefined, keys: string[]): string {
   for (const key of keys) {
     const value = payload?.[key];
-    if (value != null && value !== '') return textValue(value);
+    if (value != null && value !== '') {
+      if (key === 'status' || key === 'to_status' || key.endsWith('_status')) return healthStatusLabel(value);
+      return textValue(value);
+    }
   }
   return '未記錄';
 }
@@ -64,6 +131,7 @@ export default function ClarificationReplyPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { showToast } = useToast();
+  const { activeMember } = useActiveMember();
   const [requestItem, setRequestItem] = useState<ChangeRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [replyText, setReplyText] = useState('');
@@ -74,6 +142,7 @@ export default function ClarificationReplyPage() {
   const [busy, setBusy] = useState('');
   const [loadError, setLoadError] = useState('');
   const [reloadToken, setReloadToken] = useState(0);
+  const [withdrawDialogOpen, setWithdrawDialogOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -163,7 +232,7 @@ export default function ClarificationReplyPage() {
       }) as ChangeRequest;
       setRequestItem(updated);
       showToast(`已送出補充 · ${requestItem.target_label}`, 'success');
-      router.push('/dashboard/history');
+      router.push(memberHref('/dashboard/history', requestItem?.member_name ?? activeMember));
     } catch {
       showToast('送出失敗，請稍後再試', 'error');
     } finally {
@@ -173,13 +242,13 @@ export default function ClarificationReplyPage() {
 
   const withdraw = async () => {
     if (!requestItem || !canWithdraw) return;
-    if (!window.confirm(`撤回這次補充/異動？\n${requestItem.target_label}`)) return;
+    setWithdrawDialogOpen(false);
     setBusy('withdraw');
     try {
       const updated = await api.post(`/api/patients/me/change-requests/${requestItem.id}/withdraw`) as ChangeRequest;
       setRequestItem(updated);
       showToast(`已撤回 · ${requestItem.target_label}`, 'success');
-      router.push('/dashboard/history');
+      router.push(memberHref('/dashboard/history', requestItem?.member_name ?? activeMember));
     } catch {
       showToast('撤回失敗，請稍後再試', 'error');
     } finally {
@@ -202,7 +271,7 @@ export default function ClarificationReplyPage() {
   if (loadError) {
     return (
       <div className="page-wrap" style={{ maxWidth: 860, margin: '0 auto' }}>
-        <button onClick={() => router.back()} style={backBtn}>← 返回</button>
+        <button onClick={() => router.push(memberHref('/dashboard/history', activeMember))} style={backBtn}>← 返回健康歷程</button>
         <section style={{ ...card, borderColor: '#fecdd3', background: '#faecea' }}>
           <h1 style={{ ...title, color: '#8f342b' }}>補充資料暫時無法載入</h1>
           <p style={{ color: '#7f1d1d', lineHeight: 1.7 }}>這可能是 API、登入或權限狀態問題，不代表這筆 request 不存在。錯誤：{loadError}</p>
@@ -215,7 +284,7 @@ export default function ClarificationReplyPage() {
   if (!requestItem) {
     return (
       <div className="page-wrap" style={{ maxWidth: 860, margin: '0 auto' }}>
-        <button onClick={() => router.back()} style={backBtn}>← 返回</button>
+        <button onClick={() => router.push(memberHref('/dashboard/history', activeMember))} style={backBtn}>← 返回健康歷程</button>
         <section style={card}>
           <h1 style={title}>找不到這筆補充資料</h1>
           <p style={{ color: '#6b7c8c' }}>這筆 request 可能已不存在，或目前不屬於你的帳號。</p>
@@ -226,7 +295,7 @@ export default function ClarificationReplyPage() {
 
   return (
     <div className="page-wrap" style={{ maxWidth: 980, margin: '0 auto' }}>
-      <button onClick={() => router.back()} style={backBtn}>← 返回</button>
+      <button onClick={() => router.push(memberHref('/dashboard/history', requestItem?.member_name ?? activeMember))} style={backBtn}>← 返回健康歷程</button>
       <header style={{ marginBottom: 16 }}>
         <h1 style={title}>補充資料</h1>
         <p style={{ color: '#6b7c8c', margin: '4px 0 0', lineHeight: 1.6 }}>
@@ -236,9 +305,9 @@ export default function ClarificationReplyPage() {
 
       <section style={card}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-          <span style={badge}>{requestItem.target_type}</span>
-          <span style={badge}>{requestItem.status}</span>
-          <span style={badge}>{ACTION_LABELS[requestedAction] || requestedAction}</span>
+          <span style={badge}>{targetTypeLabel(requestItem.target_type)}</span>
+          <span style={badge}>{requestStatusLabel(requestItem.status)}</span>
+          <span style={badge}>{requestedActionLabel(requestedAction)}</span>
         </div>
         <h2 style={{ margin: '0 0 8px', fontSize: 18, color: '#22313f' }}>{question}</h2>
         <div style={{ color: '#6b7c8c', fontSize: 13, lineHeight: 1.7 }}>
@@ -246,7 +315,7 @@ export default function ClarificationReplyPage() {
         </div>
         {!canReply && (
           <div style={{ ...notice, marginTop: 12 }}>
-            這筆目前狀態是「{requestItem.status}」，不能再送出補充。你仍可查看已送出的內容與歷史紀錄。
+            這筆目前狀態是「{requestStatusLabel(requestItem.status)}」，不能再送出補充。你仍可查看已送出的內容與歷史紀錄。
           </div>
         )}
       </section>
@@ -277,7 +346,7 @@ export default function ClarificationReplyPage() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
           <button onClick={saveDraft} disabled={!canReply || busy !== ''} title={!canReply ? '目前狀態不能儲存草稿' : '先儲存，稍後再送出'} style={secondaryBtn}>儲存草稿</button>
           <button onClick={submitReply} disabled={!canReply || busy !== ''} title={!canReply ? '目前狀態不能送出' : '送回醫療團隊工作台'} style={primaryBtn}>送出補充</button>
-          <button onClick={withdraw} disabled={!canWithdraw || busy !== ''} title={!canWithdraw ? '已處理或關閉，不能撤回' : '撤回尚未完成的補充/異動'} style={dangerBtn}>撤回</button>
+          <button onClick={() => setWithdrawDialogOpen(true)} disabled={!canWithdraw || busy !== ''} title={!canWithdraw ? '已處理或關閉，不能撤回' : '撤回尚未完成的補充/異動'} style={dangerBtn}>撤回</button>
         </div>
         {busy && (
           <div style={{ ...notice, marginTop: 12, background: '#e7f3f5', borderColor: '#cfe3e8', color: '#33596a' }}>
@@ -292,7 +361,7 @@ export default function ClarificationReplyPage() {
           <InfoTile label="資料項目" value={requestItem.target_label || payloadText(requestItem.current_snapshot, ['display_layman', 'display_name', 'drug_name', 'substance', 'title'])} />
           <InfoTile label="目前正式紀錄" value={payloadText(requestItem.current_snapshot, ['status', 'display_layman', 'display_name', 'drug_name', 'substance', 'title'])} />
           <InfoTile label="你先前提出" value={requestItem.patient_note || payloadText(requestItem.proposed_payload, ['to_status', 'display_layman', 'display_name', 'drug_name', 'substance', 'title'])} />
-          <InfoTile label="醫療團隊需要" value={ACTION_LABELS[requestedAction] || requestedAction} />
+          <InfoTile label="醫療團隊需要" value={requestedActionLabel(requestedAction)} />
         </div>
         {(savedDraft || submittedReply) && (
           <div style={{ ...notice, marginTop: 12, background: submittedReply ? '#e7f4ec' : '#f6f9fa', borderColor: submittedReply ? '#bfe0cd' : '#e3e9ee', color: submittedReply ? '#2e8b57' : '#56687a' }}>
@@ -302,6 +371,16 @@ export default function ClarificationReplyPage() {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={withdrawDialogOpen}
+        onCancel={() => setWithdrawDialogOpen(false)}
+        onConfirm={() => { void withdraw(); }}
+        title="撤回這次補充？"
+        description={`「${requestItem.target_label}」的草稿或待處理回報會被撤回；已建立的正式健康紀錄不會被刪除。`}
+        confirmLabel="確認撤回"
+        danger
+      />
     </div>
   );
 }

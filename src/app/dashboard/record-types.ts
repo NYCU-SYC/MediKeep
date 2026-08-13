@@ -5,15 +5,15 @@
  */
 
 export const RECORD_TYPE_META = {
-  blood_pressure: { label: '血壓',   icon: '❤️',  color: '#f44336', unit: 'mmHg' },
-  heart_rate:     { label: '心跳',   icon: '💓',  color: '#e91e63', unit: 'bpm'  },
-  glucose:        { label: '血糖',   icon: '🩸',  color: '#ff9800', unit: 'mg/dL'},
-  weight:         { label: '體重',   icon: '⚖️',  color: '#2196f3', unit: 'kg'   },
-  bmi:            { label: 'BMI',    icon: '📊',  color: '#00bcd4', unit: ''     },
-  body_fat:       { label: '體脂率', icon: '🔬',  color: '#795548', unit: '%'    },
-  steps:          { label: '步數',   icon: '👟',  color: '#4caf50', unit: '步'   },
-  sleep:          { label: '睡眠',   icon: '😴',  color: '#9c27b0', unit: 'h'    },
-  other:          { label: '其他',   icon: '📝',  color: '#607d8b', unit: ''     },
+  blood_pressure: { label: '血壓',   icon: 'blood_pressure', color: '#f44336', unit: 'mmHg' },
+  heart_rate:     { label: '心跳',   icon: 'heart_rate',     color: '#e91e63', unit: 'bpm'  },
+  glucose:        { label: '血糖',   icon: 'glucose',        color: '#ff9800', unit: 'mg/dL'},
+  weight:         { label: '體重',   icon: 'weight',         color: '#2196f3', unit: 'kg'   },
+  bmi:            { label: 'BMI',    icon: 'bmi',            color: '#00bcd4', unit: ''     },
+  body_fat:       { label: '體脂率', icon: 'body_fat',       color: '#795548', unit: '%'    },
+  steps:          { label: '步數',   icon: 'steps',          color: '#4caf50', unit: '步'   },
+  sleep:          { label: '睡眠',   icon: 'sleep',          color: '#9c27b0', unit: 'h'    },
+  other:          { label: '其他',   icon: 'other',          color: '#607d8b', unit: ''     },
 } as const;
 
 export type RecordTypeKey = keyof typeof RECORD_TYPE_META;

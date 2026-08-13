@@ -1,3 +1,5 @@
+import { safeNextRoute } from './internalRoutes';
+
 export const ALL_MEMBERS = '';
 
 export type MemberLike = {
@@ -32,14 +34,20 @@ export function memberQueryParams(member?: string | null): Record<string, string
 }
 
 export function memberHref(path: string, member?: string | null, extra?: Record<string, string | null | undefined>): string {
-  const params = new URLSearchParams();
+  const safePath = safeNextRoute(path, '/dashboard');
+  const hashIndex = safePath.indexOf('#');
+  const hash = hashIndex >= 0 ? safePath.slice(hashIndex) : '';
+  const withoutHash = hashIndex >= 0 ? safePath.slice(0, hashIndex) : safePath;
+  const queryIndex = withoutHash.indexOf('?');
+  const pathname = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+  const params = new URLSearchParams(queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : '');
   const normalized = normalizeMemberName(member);
   if (normalized) params.set('member', normalized);
   Object.entries(extra ?? {}).forEach(([key, value]) => {
     if (value != null && value !== '') params.set(key, value);
   });
   const query = params.toString();
-  return query ? `${path}?${query}` : path;
+  return query ? `${pathname}?${query}${hash}` : `${pathname}${hash}`;
 }
 
 export function memberHrefWithCurrentSearch(path: string, currentSearch: string, member?: string | null): string {
@@ -51,7 +59,11 @@ export function memberHrefWithCurrentSearch(path: string, currentSearch: string,
     params.delete('member');
   }
   const query = params.toString();
-  return query ? `${path}?${query}` : path;
+  const safePath = safeNextRoute(path, '/dashboard');
+  const hashIndex = safePath.indexOf('#');
+  const hash = hashIndex >= 0 ? safePath.slice(hashIndex) : '';
+  const withoutHash = hashIndex >= 0 ? safePath.slice(0, hashIndex) : safePath;
+  return query ? `${withoutHash}?${query}${hash}` : `${withoutHash}${hash}`;
 }
 
 export function uniqueMemberNames(...groups: Array<Array<string | null | undefined> | undefined>): string[] {

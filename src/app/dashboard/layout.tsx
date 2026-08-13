@@ -1,58 +1,122 @@
 'use client';
 
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { RefObject, Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { FamilyMember, MemberProvider, useActiveMember } from './member-context';
+import { FamilyMember, MemberProvider, useActiveMember, UserAccessSnapshot } from './member-context';
 import { ToastProvider } from './toast-context';
-import { api, setPatientSessionToken } from '@/lib/api';
+import { api, ApiError, setPatientSessionToken } from '@/lib/api';
 import { SyncProvider } from '@/lib/sync';
 import { ALL_MEMBERS, memberHref, normalizeMemberName } from '@/lib/members';
 import { Icon, HeartLogo } from './_components/Icon';
+import { userMemberHref } from './_components/Shared';
 import NhiOnboardingGate from '@/components/NhiOnboardingGate';
+import { routeIsActive, routeWithNext } from '@/lib/internalRoutes';
 
-// ── Desktop sidebar — reminders are reachable from the bell / secondary lists.
-const menuSections = [
+export const PRIMARY_NAV_ITEMS = [
+  { name: '總覽', icon: 'home', href: '/dashboard' },
+  { name: '健康', icon: 'health', href: '/dashboard/health' },
+  { name: '紀錄', icon: 'records', href: '/dashboard/records' },
+  { name: '待辦', icon: 'bell', href: '/dashboard/tasks' },
+  { name: '更多', icon: 'user', href: '/dashboard/more' },
+] as const;
+
+const NEW_SHELL_ROUTES: ReadonlySet<string> = new Set(PRIMARY_NAV_ITEMS.map((item) => item.href));
+
+// Secondary destinations only. Primary destinations are rendered exactly once
+// in the desktop sidebar and once in the mobile bottom navigation; the mobile
+// all-features sheet must not repeat them.
+export const SECONDARY_NAV_SECTIONS = [
   {
-      label: '主要',
-      items: [
-        { name: '首頁', icon: '🏠', href: '/dashboard' },
-        { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
-        { name: '健康時間軸', icon: '📋', href: '/dashboard/timeline' },
-        { name: '家庭與權限', icon: '👤', href: '/dashboard/settings' },
-      ],
-  },
-  {
-    label: '健康細節',
+    label: '快速操作',
     items: [
-      { name: '詳細健康檔案', icon: '🧬', href: '/dashboard/health-profile' },
-      { name: '保命紅區',     icon: '🛟', href: '/dashboard/redzone' },
-      { name: '急診連結',     icon: '🆘', href: '/dashboard/emergency' },
-      { name: '疾病總覽',     icon: '🏥', href: '/dashboard/conditions' },
-      { name: '藥物',         icon: '💊', href: '/dashboard/medications' },
-      { name: '趨勢分析',     icon: '📈', href: '/dashboard/trends' },
+      { name: '新增紀錄', icon: 'file', href: '/dashboard/upload' },
+      { name: '急診資訊', icon: 'emergency', href: '/dashboard/emergency' },
     ],
   },
   {
-    label: '資料與紀錄',
+    label: '健康細項',
     items: [
-      { name: '新增紀錄', icon: '➕', href: '/dashboard/upload' },
-      { name: '健保存摺匯入', icon: '📑', href: '/dashboard/nhi' },
-      { name: '提醒中心', icon: '🔔', href: '/dashboard/reminders' },
-      { name: '影像庫',   icon: '🩻', href: '/dashboard/imaging' },
-      { name: '文件庫',   icon: '📁', href: '/dashboard/documents' },
-      { name: '歷史紀錄', icon: '📋', href: '/dashboard/history' },
+      { name: '我的病況', icon: 'hospital', href: '/dashboard/conditions' },
+      { name: '目前用藥', icon: 'medication', href: '/dashboard/medications' },
+      { name: '健康趨勢', icon: 'trend', href: '/dashboard/trends' },
+      { name: '健康時間軸', icon: 'activity', href: '/dashboard/timeline' },
+    ],
+  },
+  {
+    label: '資料庫',
+    items: [
+      { name: '文件', icon: 'folder', href: '/dashboard/documents' },
+      { name: '影像', icon: 'scan', href: '/dashboard/imaging' },
+      { name: '健保資料', icon: 'archive', href: '/dashboard/nhi' },
     ],
   },
 ];
 
-// ── Mobile bottom nav: primary tabs; reminders stay reachable through the bell/secondary route. ──
-const mobileNavLeft = [
-  { name: '首頁', icon: '🏠', href: '/dashboard' },
-  { name: '健康', icon: '🩺', href: '/dashboard/health-summary' },
-  { name: '資料', icon: '📁', href: '/dashboard/history' },
-  { name: '家庭與權限', icon: '👤', href: '/dashboard/settings' },
-];
+const PRIMARY_SECTION_ROUTES: Readonly<Record<string, readonly string[]>> = {
+  '/dashboard/health': [
+    '/dashboard/health',
+    '/dashboard/conditions',
+    '/dashboard/problems',
+    '/dashboard/medications',
+    '/dashboard/trends',
+    '/dashboard/emergency',
+    '/dashboard/redzone',
+  ],
+  '/dashboard/records': [
+    '/dashboard/records',
+    '/dashboard/history',
+    '/dashboard/timeline',
+    '/dashboard/upload',
+    '/dashboard/documents',
+    '/dashboard/imaging',
+    '/dashboard/nhi',
+  ],
+  '/dashboard/tasks': [
+    '/dashboard/tasks',
+    '/dashboard/reminders',
+    '/dashboard/clarifications',
+  ],
+  '/dashboard/more': [
+    '/dashboard/more',
+    '/dashboard/settings',
+  ],
+};
+
+export function primaryNavIsActive(pathname: string, href: string): boolean {
+  if (href === '/dashboard') return pathname === href;
+  if (pathname === '/dashboard/imaging/shares' || pathname.startsWith('/dashboard/imaging/shares/')) {
+    return href === '/dashboard/more';
+  }
+  const routes = PRIMARY_SECTION_ROUTES[href] || [href];
+  return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+}
+
+const mobileNavItems = PRIMARY_NAV_ITEMS;
+
+export function humanizeMemberRelation(value?: string | null): string {
+  const relation = (value ?? '').trim();
+  switch (relation.toLowerCase()) {
+    case 'self':
+      return '本人';
+    case 'owner':
+      return '家庭管理者';
+    case 'cmo':
+      return '醫療團隊';
+    case 'raw':
+      return '原始資料';
+    default:
+      return relation;
+  }
+}
+
+function humanizeUserCopy(value: string | null | undefined, fallback: string): string {
+  return (value?.trim() || fallback)
+    .replace(/\bCMO\b/gi, '醫療團隊')
+    .replace(/\bOwner\b/gi, '家庭管理者')
+    .replace(/\bSelf\b/gi, '本人')
+    .replace(/\braw\b/gi, '原始資料');
+}
 
 type AuthMe = {
   authenticated?: boolean;
@@ -61,8 +125,14 @@ type AuthMe = {
   display_name?: string | null;
   role?: string | null;
   health_data_scope?: 'family' | 'member' | 'none' | string | null;
+  family_member_id?: string | null;
+  family_member_name?: string | null;
+  allowed_member_names?: string[] | null;
   permissions?: {
     can_view_family_health_data?: boolean;
+    can_edit_patient_reported_data?: boolean;
+    can_manage_family_members?: boolean;
+    can_manage_join_code?: boolean;
   } | null;
 };
 
@@ -92,6 +162,7 @@ function ReminderBell({
   const isDesktop = variant === 'desktop';
   return (
     <div
+      data-mobile-dialog-background
       className={isDesktop ? 'desktop-reminder-bell' : undefined}
       style={isDesktop ? {
         position: 'fixed',
@@ -110,9 +181,10 @@ function ReminderBell({
         onClick={onToggle}
         style={{
           position: 'relative',
-          width: isDesktop ? 42 : 36,
-          height: isDesktop ? 42 : 36,
-          borderRadius: isDesktop ? 21 : 18,
+          width: 44,
+          height: 44,
+          minHeight: 44,
+          borderRadius: 22,
           background: '#fff',
           border: '1px solid var(--gray-200)',
           boxShadow: isDesktop ? '0 10px 24px rgba(15,23,42,0.10)' : 'none',
@@ -123,7 +195,7 @@ function ReminderBell({
           cursor: 'pointer',
         }}
       >
-        <span aria-hidden="true">🔔</span>
+        <Icon name="bell" size={20} />
         {count > 0 && (
           <span style={{
             position: 'absolute',
@@ -193,7 +265,7 @@ function ReminderBell({
 }
 
 // ── MobileNavItem ─────────────────────────────────────────────────────────────
-function MobileNavItem({
+export function MobileNavItem({
   item,
   isActive,
 }: {
@@ -201,14 +273,26 @@ function MobileNavItem({
   isActive: boolean;
 }) {
   return (
-    <Link href={item.href} style={{ flex: 1, WebkitTapHighlightColor: 'transparent' }}>
+    <Link
+      href={item.href}
+      aria-current={isActive ? 'page' : undefined}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: 44,
+        display: 'flex',
+        alignItems: 'stretch',
+        justifyContent: 'center',
+        WebkitTapHighlightColor: 'transparent',
+      }}
+    >
       <div style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center',
-        justifyContent: 'center', height: '68px', gap: '3px',
+        justifyContent: 'center', minHeight: '60px', gap: '3px',
         color: isActive ? 'var(--primary)' : '#93a3af',
       }}>
         <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 22 }}><Icon name={item.icon} size={22} /></span>
-        <span style={{ fontSize: '10px', fontWeight: isActive ? '700' : '500' }}>{item.name}</span>
+        <span className="mobile-nav-item-label" style={{ fontSize: '10px', fontWeight: isActive ? '700' : '500' }}>{item.name}</span>
         {isActive && (
           <div style={{
             width: '20px', height: '2.5px', borderRadius: '2px',
@@ -220,33 +304,80 @@ function MobileNavItem({
   );
 }
 
-function MobileMenuSheet({
+export function MobileMenuSheet({
   open,
   onClose,
   pathname,
   navHref,
+  returnFocusRef,
 }: {
   open: boolean;
   onClose: () => void;
   pathname: string;
   navHref: (href: string) => string;
+  returnFocusRef: RefObject<HTMLButtonElement | null>;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const previous = returnFocusRef.current ?? document.activeElement as HTMLElement | null;
+    const background = Array.from(document.querySelectorAll<HTMLElement>('[data-mobile-dialog-background]'));
+    const previousState = background.map((node) => ({ node, hidden: node.getAttribute('aria-hidden'), inert: (node as HTMLElement & { inert?: boolean }).inert }));
+    background.forEach((node) => {
+      node.setAttribute('aria-hidden', 'true');
+      (node as HTMLElement & { inert?: boolean }).inert = true;
+    });
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const focusTimer = window.setTimeout(() => {
+      closeButtonRef.current?.focus();
+    }, 0);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.body.style.overflow = previousOverflow;
+      previousState.forEach(({ node, hidden, inert }) => {
+        if (hidden === null) node.removeAttribute('aria-hidden'); else node.setAttribute('aria-hidden', hidden);
+        (node as HTMLElement & { inert?: boolean }).inert = inert ?? false;
+      });
+      previous?.focus();
+    };
+  }, [open, returnFocusRef]);
+
   if (!open) return null;
 
-  const isActive = (href: string) => href === '/dashboard'
-    ? pathname === href
-    : pathname === href || pathname.startsWith(`${href}/`);
+  const isActive = (href: string) => routeIsActive(pathname, href);
+
+  const containFocus = (event: React.KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+    ) ?? []);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  };
 
   return (
     <div
       className="mobile-menu-overlay"
       role="dialog"
       aria-modal="true"
-      aria-label="全部功能"
+      aria-labelledby="mobile-menu-title"
+      onKeyDown={containFocus}
+      ref={dialogRef}
     >
-      <button
-        type="button"
-        aria-label="關閉全部功能選單"
+      <div
+        data-dialog-backdrop
+        aria-hidden="true"
         onClick={onClose}
         style={{
           position: 'absolute',
@@ -266,19 +397,21 @@ function MobileMenuSheet({
           borderBottom: '1px solid var(--hk-line)',
         }}>
           <div>
-            <div style={{ fontSize: '17px', fontWeight: 850, color: 'var(--hk-ink)' }}>全部功能</div>
+            <h2 id="mobile-menu-title" style={{ fontSize: '17px', fontWeight: 850, color: 'var(--hk-ink)' }}>全部功能</h2>
             <div style={{ fontSize: '12px', color: 'var(--hk-ink-2)', marginTop: '2px' }}>
               健康細節、資料紀錄與急診工具
             </div>
           </div>
           <button
             type="button"
+            ref={closeButtonRef}
             onClick={onClose}
             aria-label="關閉"
             style={{
-              width: 38,
-              height: 38,
-              borderRadius: 19,
+              width: 44,
+              height: 44,
+              minHeight: 44,
+              borderRadius: 22,
               background: '#eef2f5',
               color: '#45596a',
               display: 'flex',
@@ -288,12 +421,12 @@ function MobileMenuSheet({
               lineHeight: 1,
             }}
           >
-            ×
+            <Icon name="close" size={20} />
           </button>
         </div>
 
         <div style={{ padding: '12px 14px 18px', overflowY: 'auto', maxHeight: 'calc(84vh - 68px)' }}>
-          {menuSections.map((section) => (
+          {SECONDARY_NAV_SECTIONS.map((section) => (
             <div key={section.label} style={{ marginBottom: '14px' }}>
               <div style={{
                 fontSize: '11px',
@@ -361,20 +494,22 @@ function MemberActionBar({
   onSwitchMember: (member: string) => void;
 }) {
   const { activeMember, members, membersLoading } = useActiveMember();
+  const { canWriteMember, writeAccessReason } = useActiveMember();
   if (membersLoading || members.length === 0) return null;
 
   const selectedMember = activeMember || (members.length === 1 ? members[0].name : '');
   const mustChooseMember = members.length > 1 && !activeMember;
+  const writeReason = writeAccessReason(selectedMember);
   const activeInfo = members.find((member) => member.name === activeMember);
   const recordHref = memberHref('/dashboard/upload', selectedMember, { tab: 'manual' });
-  const fileHref = memberHref('/dashboard/upload', selectedMember, { tab: 'file' });
+  const emergencyHref = memberHref('/dashboard/emergency', selectedMember);
 
   const actionStyle: React.CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: '6px',
-    minHeight: '38px',
+    minHeight: '44px',
     padding: '9px 14px',
     borderRadius: '9px',
     fontSize: '13px',
@@ -382,11 +517,12 @@ function MemberActionBar({
     whiteSpace: 'nowrap',
   };
 
-  const disabledAction = (label: string) => (
+  const disabledAction = (label: string, reason = '請先選擇要記錄的家庭成員') => (
     <button
       type="button"
       disabled
-      title="請先選擇要記錄的家庭成員"
+      title={reason}
+      aria-label={`${label}：${reason}`}
       style={{
         ...actionStyle,
         background: '#e5e7eb',
@@ -412,7 +548,7 @@ function MemberActionBar({
               </strong>
               {activeInfo && (
                 <span style={{ fontSize: '12px', color: '#6b7c8c' }}>
-                  {activeInfo.relation}{activeInfo.age ? ` · ${activeInfo.age} 歲` : ''}
+                  {humanizeMemberRelation(activeInfo.relation)}{activeInfo.age ? ` · ${activeInfo.age} 歲` : ''}
                 </span>
               )}
               {mustChooseMember && (
@@ -436,8 +572,11 @@ function MemberActionBar({
               {members.length > 1 && (
                 <button
                   type="button"
+                  aria-pressed={!activeMember}
                   onClick={() => onSwitchMember(ALL_MEMBERS)}
                   style={{
+                    minWidth: 44,
+                    minHeight: 44,
                     padding: '7px 12px',
                     borderRadius: '999px',
                     border: `1px solid ${!activeMember ? 'var(--primary)' : '#dbe3ea'}`,
@@ -456,11 +595,14 @@ function MemberActionBar({
                   <button
                     key={member.id}
                     type="button"
+                    aria-pressed={isActive}
                     onClick={() => onSwitchMember(member.name)}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '6px',
+                      minWidth: 44,
+                      minHeight: 44,
                       padding: '7px 12px',
                       borderRadius: '999px',
                       border: `1px solid ${isActive ? member.color : '#dbe3ea'}`,
@@ -479,7 +621,7 @@ function MemberActionBar({
         </div>
 
         <div className="member-action-actions">
-          {mustChooseMember ? disabledAction('新增紀錄') : (
+          {mustChooseMember || !canWriteMember(selectedMember) ? disabledAction('新增紀錄', mustChooseMember ? undefined : writeReason ?? undefined) : (
             <Link
               href={recordHref}
               style={{
@@ -489,22 +631,20 @@ function MemberActionBar({
                 boxShadow: '0 2px 10px rgba(14,116,144,0.22)',
               }}
             >
-              + 新增紀錄
+              <><Icon name="file" size={16} /> 新增紀錄</>
             </Link>
           )}
-          {mustChooseMember ? disabledAction('上傳文件') : (
-            <Link
-              href={fileHref}
+          <Link
+              href={emergencyHref}
               style={{
                 ...actionStyle,
                 background: '#fff',
-                color: 'var(--primary)',
-                border: '1px solid #cfe3e8',
+                color: '#8f342b',
+                border: '1px solid #f2d3cf',
               }}
             >
-              上傳文件
+              急診資訊
             </Link>
-          )}
         </div>
       </div>
     </div>
@@ -521,8 +661,12 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
     activeMember, setActiveMember,
     members, setMembers, setMembersLoading,
     membersError, setMembersError,
+    setUserAccess,
+    writeAccessReason,
   } = useActiveMember();
   const [authChecked, setAuthChecked] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authRetry, setAuthRetry] = useState(0);
   const [familyName, setFamilyName] = useState('我的家庭');
   const [canUseFamilyUi, setCanUseFamilyUi] = useState(false);
   const [displayName, setDisplayName] = useState('');
@@ -530,28 +674,46 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   const [reminderBellOpen, setReminderBellOpen] = useState(false);
   const [unreadReminderCount, setUnreadReminderCount] = useState(0);
   const [reminderBellItems, setReminderBellItems] = useState<ReminderBellItem[]>([]);
+  const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   // ── Auth check ───────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     const check = async (silent: boolean) => {
+      if (!silent) setAuthError('');
       try {
         const data = await api.get('/api/auth/me') as AuthMe;
         if (cancelled) return;
-        if (!data?.authenticated) { router.replace('/'); return; }
-        if (data?.needs_binding) { router.replace('/setup'); return; }
+        const currentRoute = typeof window === 'undefined'
+          ? '/dashboard'
+          : `${window.location.pathname}${window.location.search}`;
+        if (!data?.authenticated) {
+          window.location.replace(routeWithNext('/upload-entry', currentRoute));
+          return;
+        }
+        if (data?.needs_binding) {
+          router.replace(routeWithNext('/setup', currentRoute));
+          return;
+        }
         if (data?.family_name) setFamilyName(data.family_name);
         if (data?.display_name) setDisplayName(data.display_name);
+        setUserAccess(data as UserAccessSnapshot);
         const canViewFullFamily = data?.permissions?.can_view_family_health_data === true;
-        setCanUseFamilyUi(canViewFullFamily);
+        setCanUseFamilyUi(canViewFullFamily || ['family', 'member', 'none'].includes(data?.health_data_scope ?? ''));
         if (!silent) setAuthChecked(true);
-      } catch {
-        if (!cancelled) router.replace('/');
+      } catch (error) {
+        if (cancelled || (error instanceof ApiError && error.status === 401)) return;
+        if (!silent) {
+          const retryHint = error instanceof ApiError && error.retryAfter
+            ? `，約 ${error.retryAfter} 秒後可重試`
+            : '';
+          setAuthError(`暫時無法確認登入狀態${retryHint}。`);
+        }
       }
     };
     check(false);
     const iv = setInterval(() => check(true), 5 * 60 * 1000);
     return () => { cancelled = true; clearInterval(iv); };
-  }, [router]);
+  }, [authRetry, router, setUserAccess]);
 
   // ── Load members ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -601,6 +763,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
 
   const navHref = (href: string) => {
     if (href === '/dashboard/settings') return href;
+    if (NEW_SHELL_ROUTES.has(href)) return userMemberHref(href, activeMember);
     return memberHref(href, activeMember);
   };
 
@@ -633,14 +796,14 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
           ...pendingMissing.map((item) => ({
             id: `missing-${item.id}`,
             label: '補資料',
-            title: item.title || 'CMO 需要補充資料',
+            title: humanizeUserCopy(item.title, '醫療團隊需要補充資料'),
             meta: item.due_date || item.status || '待回覆',
             href: `${centerHref}${centerHref.includes('?') ? '&' : '?'}highlight=missing-${item.id}`,
           })),
           ...activeFollowUps.map((item) => ({
             id: `followup-${item.id}`,
-            label: item.priority === 'high' ? '高優先追蹤' : 'CMO 追蹤',
-            title: item.item || item.reason || 'CMO 追蹤提醒',
+            label: item.priority === 'high' ? '高優先追蹤' : '醫療團隊追蹤',
+            title: humanizeUserCopy(item.item || item.reason, '醫療團隊追蹤提醒'),
             meta: item.suggested_date || '待追蹤',
             href: `${centerHref}${centerHref.includes('?') ? '&' : '?'}highlight=followup-${item.id}`,
           })),
@@ -680,7 +843,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
   // ── Auth loading screen ───────────────────────────────────────────────────────
   if (!authChecked) {
     return (
-      <div style={{
+      <main style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         minHeight: '100vh',
         background: 'linear-gradient(135deg, #3e6b7e 0%, #33596a 100%)',
@@ -690,15 +853,30 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             HealthKeep
           </h1>
           <p style={{ fontSize: '12px', opacity: 0.75, marginBottom: '36px' }}>您的家庭健康守護者</p>
-          <div style={{
-            width: '48px', height: '48px', border: '4px solid rgba(255,255,255,0.25)',
-            borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite',
-            margin: '0 auto 20px',
-          }} />
-          <p style={{ fontSize: '14px', opacity: 0.9 }}>正在確認身分...</p>
+          {authError ? (
+            <div role="alert" aria-live="assertive">
+              <p style={{ fontSize: '14px', opacity: 0.95, marginBottom: 16 }}>{authError}</p>
+              <button
+                type="button"
+                onClick={() => setAuthRetry((value) => value + 1)}
+                style={{ border: '1px solid rgba(255,255,255,0.7)', background: '#fff', color: '#33596a', borderRadius: 10, padding: '10px 16px', fontWeight: 800, cursor: 'pointer' }}
+              >
+                重新確認
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={{
+                width: '48px', height: '48px', border: '4px solid rgba(255,255,255,0.25)',
+                borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+                margin: '0 auto 20px',
+              }} />
+              <p role="status" style={{ fontSize: '14px', opacity: 0.9 }}>正在確認身分...</p>
+            </>
+          )}
         </div>
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </div>
+      </main>
     );
   }
 
@@ -706,7 +884,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
     <div style={{ display: 'flex', minHeight: '100vh', background: '#f2f5f7' }}>
 
       {/* ── Desktop Sidebar ─────────────────────────────────────────────────────── */}
-      <aside className="app-sidebar" style={{
+      <aside data-mobile-dialog-background className="app-sidebar" style={{
         width: 'var(--sidebar-width)', background: '#fff',
         borderRight: '1px solid var(--gray-200)',
         position: 'fixed', height: '100vh', zIndex: 100, overflowY: 'auto',
@@ -729,7 +907,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             background: '#f8f9fa', borderRadius: '10px', padding: '10px 12px',
             display: 'flex', alignItems: 'center', gap: '10px',
           }}>
-            <span style={{ display: 'flex', color: '#56687a' }}><Icon name={canUseFamilyUi ? 'family' : '👤'} size={20} /></span>
+            <span style={{ display: 'flex', color: '#56687a' }}><Icon name={canUseFamilyUi ? 'family' : 'user'} size={20} /></span>
             <div>
               <div style={{ fontSize: '12px', fontWeight: '700', color: '#333' }}>{canUseFamilyUi ? familyName : (displayName || members[0]?.name || '本人')}</div>
               <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>
@@ -740,17 +918,41 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* Nav sections */}
-        <nav style={{ padding: '8px', flex: 1 }}>
-          {menuSections.map((section, sectionIndex) => {
-            const isSecondary = sectionIndex > 0;
-            const hasActiveItem = section.items.some((item) => pathname === item.href);
-            const sectionItems = (
-              <>
-                {section.items.map(item => (
+        <nav aria-label="桌面主要導覽" style={{ padding: '8px', flex: 1 }}>
+          <div style={{ marginBottom: '4px' }}>
+            <p style={{
+              fontSize: '10px', fontWeight: '700', color: '#c0c8d4',
+              textTransform: 'uppercase', letterSpacing: '0.8px',
+              padding: '10px 14px 4px',
+            }}>
+              主要入口
+            </p>
+            {PRIMARY_NAV_ITEMS.map((item) => (
+              <Link
+                key={item.name}
+                href={navHref(item.href)}
+                className={`sidebar-nav-item${primaryNavIsActive(pathname, item.href) ? ' sidebar-active' : ''}`}
+                aria-current={primaryNavIsActive(pathname, item.href) ? 'page' : undefined}
+              >
+                <span style={{ marginRight: '10px', width: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Icon name={item.icon} size={18} />
+                </span>
+                <span>{item.name}</span>
+              </Link>
+            ))}
+          </div>
+
+          {SECONDARY_NAV_SECTIONS.map((section) => {
+            const hasActiveItem = section.items.some((item) => routeIsActive(pathname, item.href));
+            return (
+              <details key={section.label} className="sidebar-secondary" open={hasActiveItem}>
+                <summary>{section.label}</summary>
+                {section.items.map((item) => (
                   <Link
                     key={item.name}
                     href={navHref(item.href)}
-                    className={`sidebar-nav-item${pathname === item.href ? ' sidebar-active' : ''}`}
+                    className={`sidebar-nav-item${routeIsActive(pathname, item.href) ? ' sidebar-active' : ''}`}
+                    aria-current={routeIsActive(pathname, item.href) ? 'page' : undefined}
                   >
                     <span style={{ marginRight: '10px', width: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                       <Icon name={item.icon} size={18} />
@@ -758,27 +960,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                     <span>{item.name}</span>
                   </Link>
                 ))}
-              </>
-            );
-            if (isSecondary) {
-              return (
-                <details key={section.label} className="sidebar-secondary" open={hasActiveItem}>
-                  <summary>{section.label}</summary>
-                  {sectionItems}
-                </details>
-              );
-            }
-            return (
-              <div key={section.label} style={{ marginBottom: '4px' }}>
-                <p style={{
-                  fontSize: '10px', fontWeight: '700', color: '#c0c8d4',
-                  textTransform: 'uppercase', letterSpacing: '0.8px',
-                  padding: '10px 14px 4px',
-                }}>
-                  {section.label}
-                </p>
-                {sectionItems}
-              </div>
+              </details>
             );
           })}
 
@@ -803,10 +985,10 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                     <p style={{ fontSize: '12px', color: '#bbb', marginBottom: '8px', paddingLeft: '6px' }}>
                       尚未新增成員
                     </p>
-                    <Link href="/dashboard/settings" className="sidebar-nav-item" style={{
+                    <Link href={navHref('/dashboard/settings')} className="sidebar-nav-item" style={{
                       fontSize: '12px', color: 'var(--primary)', fontWeight: '600', padding: '6px 8px',
                     }}>
-                      + 新增第一位成員 →
+                      <><Icon name="user" size={16} /> 新增第一位成員 <Icon name="arrowRight" size={16} /></>
                     </Link>
                   </>
                 )}
@@ -814,7 +996,9 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             ) : (
               <>
                 {members.length > 1 && (
-                  <div
+                  <button
+                    type="button"
+                    aria-pressed={!activeMember}
                     onClick={() => switchMember(ALL_MEMBERS)}
                     style={{
                       display: 'flex', alignItems: 'center', padding: '8px 10px',
@@ -822,6 +1006,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                       background: !activeMember ? '#e7f1ff' : 'transparent',
                       border: `1px solid ${!activeMember ? '#cfe3e8' : 'transparent'}`,
                       marginBottom: '3px', transition: 'all 0.15s',
+                      width: '100%', textAlign: 'left', font: 'inherit',
                     }}
                   >
                     <div style={{
@@ -842,12 +1027,14 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                       </div>
                     </div>
                     {!activeMember && <div style={{ width: '6px', height: '6px', borderRadius: '3px', background: 'var(--primary)', flexShrink: 0 }} />}
-                  </div>
+                  </button>
                 )}
                 {members.map(member => {
                   const isActive = member.name === activeMember;
                   return (
-                <div
+                <button
+                  type="button"
+                  aria-pressed={isActive}
                   key={member.id}
                   onClick={() => switchMember(member.name)}
                   style={{
@@ -856,6 +1043,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                     background: isActive ? `${member.color}14` : 'transparent',
                     border: `1px solid ${isActive ? `${member.color}35` : 'transparent'}`,
                     marginBottom: '3px', transition: 'all 0.15s',
+                    width: '100%', textAlign: 'left', font: 'inherit',
                   }}
                 >
                   <div style={{
@@ -875,7 +1063,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                       {member.name}
                     </div>
                     <div style={{ fontSize: '10px', color: isActive ? member.color : '#bbb', fontWeight: isActive ? '600' : '400' }}>
-                      {member.relation}{member.age ? ` · ${member.age} 歲` : ''}
+                      {humanizeMemberRelation(member.relation)}{member.age ? ` · ${member.age} 歲` : ''}
                     </div>
                   </div>
                   {isActive && (
@@ -884,7 +1072,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                       background: member.color, flexShrink: 0,
                     }} />
                   )}
-                </div>
+                </button>
                   );
                 })}
               </>
@@ -920,17 +1108,30 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
 
       {/* ── Mobile Header ────────────────────────────────────────────────────────── */}
       <header
+        data-mobile-dialog-background
         className="mobile-header"
         style={{
           position: 'fixed', top: 0, left: 0, right: 0, zIndex: 200,
           background: '#fff', borderBottom: '1px solid var(--gray-200)',
-          height: '56px', padding: '0 16px',
+          height: 'calc(56px + env(safe-area-inset-top))',
+          padding: 'env(safe-area-inset-top) max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left))',
           alignItems: 'center', justifyContent: 'space-between',
           gap: '12px',
         }}
       >
         {/* Brand */}
-        <Link href={navHref('/dashboard')} style={{ flexShrink: 0, WebkitTapHighlightColor: 'transparent' }}>
+        <Link
+          href={navHref('/dashboard')}
+          aria-label="回到總覽"
+          style={{
+            flexShrink: 0,
+            minWidth: 44,
+            minHeight: 44,
+            display: 'flex',
+            alignItems: 'center',
+            WebkitTapHighlightColor: 'transparent',
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <div style={{
               width: '28px', height: '28px', borderRadius: '8px', flexShrink: 0,
@@ -950,18 +1151,23 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
           scrollbarWidth: 'none', paddingRight: '2px',
         }}>
           {members.length === 0 ? (
-            <Link href="/dashboard/settings" style={{ flexShrink: 0 }}>
-              <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: '600' }}>
-                + 新增成員
+            <Link
+              href={navHref('/dashboard/settings')}
+              style={{ flexShrink: 0, minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <><Icon name="user" size={15} /> 新增成員</>
               </span>
             </Link>
           ) : (
             <>
               {members.length > 1 && (
                 <button
+                  type="button"
                   onClick={() => switchMember('')}
+                  aria-pressed={!activeMember}
                   style={{
-                    padding: '6px 14px', borderRadius: '20px', minHeight: '34px',
+                    padding: '6px 14px', borderRadius: '22px', minWidth: 44, minHeight: 44,
                     border: `1.5px solid ${!activeMember ? 'var(--primary)' : 'var(--gray-200)'}`,
                     background: !activeMember ? 'var(--primary)' : '#fff',
                     color: !activeMember ? '#fff' : '#666',
@@ -976,10 +1182,12 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
                 return (
                   <button
                     key={member.id}
+                    type="button"
                     onClick={() => switchMember(member.name)}
+                    aria-pressed={isActive}
                     style={{
                       display: 'flex', alignItems: 'center', gap: '4px',
-                      padding: '6px 14px', borderRadius: '20px', minHeight: '34px',
+                      padding: '6px 14px', borderRadius: '22px', minWidth: 44, minHeight: 44,
                       border: `1.5px solid ${isActive ? member.color : 'var(--gray-200)'}`,
                       background: isActive ? member.color : '#fff',
                       color: isActive ? '#fff' : '#666',
@@ -1010,11 +1218,13 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
 
         <button
           type="button"
+          ref={mobileMenuTriggerRef}
           onClick={() => setMobileMenuOpen(true)}
           aria-label="開啟全部功能"
           style={{
             flexShrink: 0,
-            minHeight: '36px',
+            minHeight: '44px',
+            minWidth: '44px',
             padding: '7px 10px',
             borderRadius: '11px',
             background: '#3e6b7e',
@@ -1027,7 +1237,6 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
             boxShadow: '0 6px 14px rgba(15,118,110,0.22)',
           }}
         >
-          <span style={{ fontSize: 15, lineHeight: 1 }}>☰</span>
           全部
         </button>
       </header>
@@ -1037,10 +1246,11 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
         onClose={() => setMobileMenuOpen(false)}
         pathname={pathname}
         navHref={navHref}
+        returnFocusRef={mobileMenuTriggerRef}
       />
 
       {/* ── Main Content ─────────────────────────────────────────────────────────── */}
-      <main className="app-main">
+      <main data-mobile-dialog-background className="app-main">
         <SyncProvider scope="patient" enabled={authChecked}>
           <Suspense fallback={null}>
             <NhiOnboardingGate />
@@ -1048,21 +1258,30 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
           {pathname !== '/dashboard' && (
             <MemberActionBar canUseFamilyUi={canUseFamilyUi} onSwitchMember={switchMember} />
           )}
+          {writeAccessReason(activeMember) && (
+            <div role="note" style={{ margin: '0 16px 12px', padding: '10px 12px', borderRadius: 10, border: '1px solid #fed7aa', background: '#fff7ed', color: '#9a5b13', fontSize: 13, lineHeight: 1.55 }}>
+              唯讀提示：{writeAccessReason(activeMember)}
+            </div>
+          )}
           {children}
         </SyncProvider>
       </main>
 
       {/* ── Mobile Bottom Navigation ──────────────────────────────────────────────── */}
       <nav
+        data-mobile-dialog-background
         className="mobile-nav"
+        aria-label="主要入口"
         style={{
           position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
           background: '#fff', borderTop: '1px solid var(--gray-200)',
-          height: '60px', alignItems: 'stretch', padding: '0',
+          height: 'calc(60px + env(safe-area-inset-bottom))',
+          alignItems: 'stretch',
+          padding: '0 max(4px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(4px, env(safe-area-inset-left))',
         }}
       >
-        {mobileNavLeft.map(item => (
-          <MobileNavItem key={item.name} item={{ ...item, href: navHref(item.href) }} isActive={pathname === item.href} />
+        {mobileNavItems.map(item => (
+          <MobileNavItem key={item.name} item={{ ...item, href: navHref(item.href) }} isActive={primaryNavIsActive(pathname, item.href)} />
         ))}
       </nav>
     </div>

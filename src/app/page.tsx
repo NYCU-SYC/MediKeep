@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { LoaderCircle } from 'lucide-react';
 import { setPatientSessionToken } from '@/lib/api';
+import { nextRouteFromSearch, routeWithNext } from '@/lib/internalRoutes';
 
 export default function HomePage() {
   const [message, setMessage] = useState('正在為您準備...');
@@ -15,24 +17,25 @@ export default function HomePage() {
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
+        const next = nextRouteFromSearch(window.location.search, '/dashboard');
         if (data?.authenticated) {
           setPatientSessionToken(null);
           if (data?.needs_binding) {
             setMessage('請完成家庭設定...');
-            router.replace('/setup');
+            router.replace(routeWithNext('/setup', next));
           } else {
             setMessage('歡迎回來，正在進入儀表板...');
-            router.replace('/dashboard');
+            router.replace(next);
           }
         } else {
           setMessage('正在連接 LINE...');
-          router.replace('/upload-entry');
+          router.replace(routeWithNext('/upload-entry', next));
         }
       })
       .catch(() => {
         if (cancelled) return;
         setMessage('正在連接 LINE...');
-        router.replace('/upload-entry');
+        router.replace(routeWithNext('/upload-entry', nextRouteFromSearch(window.location.search, '/dashboard')));
       });
 
     return () => {
@@ -41,7 +44,8 @@ export default function HomePage() {
   }, [router]);
 
   return (
-    <div
+    <main
+      aria-busy="true"
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -71,20 +75,22 @@ export default function HomePage() {
         >
           您的家庭健康守護者
         </p>
-        <div
-          style={{
-            width: '48px',
-            height: '48px',
-            border: '4px solid rgba(255,255,255,0.25)',
-            borderTopColor: '#fff',
-            borderRadius: '50%',
-            animation: 'spin 0.8s linear infinite',
-            margin: '0 auto 20px',
-          }}
+        <LoaderCircle
+          aria-hidden="true"
+          className="hk-entry-spinner"
+          size={48}
+          strokeWidth={3}
+          style={{ margin: '0 auto 20px' }}
         />
-        <p style={{ fontSize: '14px', opacity: 0.9, minHeight: '20px' }}>{message}</p>
+        <p role="status" style={{ fontSize: '14px', opacity: 0.9, minHeight: '20px' }}>{message}</p>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
+      <style>{`
+        .hk-entry-spinner { animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+          .hk-entry-spinner { animation: none; }
+        }
+      `}</style>
+    </main>
   );
 }

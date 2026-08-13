@@ -1,7 +1,13 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Clipboard, Files, Link2, Trash2 } from 'lucide-react';
+import { api } from '@/lib/api';
+import { memberHref } from '@/lib/members';
+import { AsyncState, ConfirmDialog, PageHeader, ReadOnlyNotice } from '../../_components/Shared';
+import { useActiveMember } from '../../member-context';
+import { useToast } from '../../toast-context';
 
 type ShareOut = {
   id: string;
@@ -16,31 +22,54 @@ type ShareOut = {
 
 export default function SharesPage() {
   const router = useRouter();
+  const { activeMember, canWriteMember, writeAccessReason } = useActiveMember();
+  const { showToast } = useToast();
   const [shares, setShares] = useState<ShareOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [revokeErrors, setRevokeErrors] = useState<Record<string, string>>({});
+  const [revokeTarget, setRevokeTarget] = useState<ShareOut | null>(null);
 
-  useEffect(() => {
-    fetch('/api/dicom/shares', { credentials: 'include' })
-      .then(r => r.ok ? r.json() : [])
-      .then((data: ShareOut[]) => {
+  const loadShares = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const data = await api.get('/api/dicom/shares') as ShareOut[];
         // Rebuild share_url using current window origin so protocol/host/port are always correct
         const fixed = data.map(s => ({
           ...s,
           share_url: `${window.location.origin}/viewer/${s.share_token}`,
         }));
         setShares(fixed);
-      })
-      .finally(() => setLoading(false));
+    } catch {
+      setLoadError(true);
+      // Keep the last successful list. A refresh error is not an empty state.
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => { void loadShares(); }, [loadShares]);
+
   const handleDelete = async (share: ShareOut) => {
-    if (!confirm('確定要撤銷此分享連結？對方將無法再使用此連結存取影像。')) return;
+    if (deletingId === share.id) return;
+    if (!canWriteMember(activeMember)) {
+      showToast(writeAccessReason(activeMember) || '權限仍在確認中，目前不能撤銷分享。', 'info');
+      setRevokeTarget(null);
+      return;
+    }
     setDeletingId(share.id);
     try {
-      await fetch(`/api/dicom/shares/${share.id}`, { method: 'DELETE', credentials: 'include' });
+      await api.delete(`/api/dicom/shares/${share.id}`);
+      // Keep the row until the server confirms success. Failed revokes remain retryable.
       setShares(prev => prev.filter(s => s.id !== share.id));
+      setRevokeErrors(prev => { const next = { ...prev }; delete next[share.id]; return next; });
+      setRevokeTarget(null);
+      showToast('分享連結已撤銷，對方無法再使用。', 'success');
+    } catch (error) {
+      setRevokeErrors(prev => ({ ...prev, [share.id]: `${error instanceof Error ? error.message : '撤銷失敗'}；連結仍有效且保留，請重試。` }));
     } finally {
       setDeletingId(null);
     }
@@ -62,21 +91,17 @@ export default function SharesPage() {
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
       <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <button onClick={() => router.push('/dashboard/imaging')} style={{
-            width: '40px', height: '40px', borderRadius: '10px', background: '#fff',
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '12px' }}>
+          <button onClick={() => router.push(memberHref('/dashboard/imaging', activeMember))} aria-label="返回影像庫" style={{
+            width: '44px', height: '44px', borderRadius: '10px', background: '#fff',
             border: '1px solid var(--gray-200)', fontSize: '18px', cursor: 'pointer',
             color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center',
             flexShrink: 0, boxShadow: 'var(--shadow-sm)',
           }}>←</button>
-          <div>
-            <h2 style={{ fontSize: '22px', fontWeight: '800', color: '#111' }}>分享管理</h2>
-            <p style={{ fontSize: '13px', color: '#888', marginTop: '2px' }}>
-              管理您建立的所有影像分享連結
-            </p>
-          </div>
+          <div style={{ flex: 1 }}><PageHeader eyebrow="醫學影像" title="分享管理" description="查看有效期限、複製連結或立即撤銷影像檢視權限。" /></div>
         </div>
+
+        {!canWriteMember(activeMember) && <div style={{ marginBottom: 16 }}><ReadOnlyNotice>{writeAccessReason(activeMember) || '權限仍在確認中，目前只能查看分享清單。'}</ReadOnlyNotice></div>}
 
         <div style={{
           background: '#fdf1e0',
@@ -88,24 +113,21 @@ export default function SharesPage() {
           lineHeight: 1.65,
           marginBottom: '18px',
         }}>
-          這裡是一般影像 viewer 分享，僅適合讓對方查看 DICOM 影像。急診現場請優先使用「急診保命連結」，因為它會顯示紅區摘要、要求醫師留下身分，並保留急診存取紀錄。
+          這裡是一般影像檢視分享，只提供 DICOM 影像。急診現場請使用「急診資訊」，以便同時查看重要摘要、確認現場人員身分並保留存取紀錄。
         </div>
 
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#999' }}>載入中...</div>
+        {loading && shares.length === 0 ? (
+          <AsyncState state="loading" title="正在載入影像分享…" />
+        ) : loadError && shares.length === 0 ? (
+          <AsyncState state="error" title="分享清單暫時無法載入" description="這不代表沒有分享連結；請重新載入確認。" onRetry={() => { void loadShares(); }} />
         ) : shares.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px' }}>
-            <div style={{ fontSize: '40px', marginBottom: '12px' }}>🔗</div>
-            <div style={{ fontWeight: '700', color: '#333', marginBottom: '8px' }}>尚無分享連結</div>
-            <p style={{ fontSize: '14px', color: '#999' }}>
-              在影像庫或檢視器中點選「分享」即可建立連結
-            </p>
-          </div>
+          <AsyncState state="empty" title="目前沒有分享連結" description="在影像庫或檢視器中選擇「分享」即可建立有期限的連結。" />
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div>{loadError && <div style={{ marginBottom: 14 }}><AsyncState state="partial" title="目前顯示上一次成功載入的分享" description="重新整理失敗，連結狀態可能不是最新資料。" onRetry={() => { void loadShares(); }} /></div>}<div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {shares.map(share => {
               const expired = isExpired(share);
               const isDeleting = deletingId === share.id;
+              const revokeError = revokeErrors[share.id];
               return (
                 <div key={share.id} style={{
                   background: '#fff', borderRadius: '12px', boxShadow: 'var(--shadow-sm)',
@@ -123,7 +145,7 @@ export default function SharesPage() {
                           background: share.study_id ? '#e3f2fd' : '#f3e5f5',
                           color: share.study_id ? '#1565c0' : '#6a1b9a',
                         }}>
-                          {share.study_id ? '📋 整份檢查' : '📂 單一序列'}
+                          {share.study_id ? <><Files size={13} aria-hidden="true" /> 整份檢查</> : <><Link2 size={13} aria-hidden="true" /> 單一序列</>}
                         </span>
                         <span style={{
                           display: 'inline-flex', alignItems: 'center', padding: '2px 8px',
@@ -158,44 +180,46 @@ export default function SharesPage() {
                         </span>
                       </div>
                       <div style={{ fontSize: '11px', color: '#8a6d3b', marginTop: '8px', lineHeight: 1.5 }}>
-                        此連結不包含急診紅區、break-glass 身分紀錄或醫師摘要；若不再需要，請立即撤銷。
+                        此連結不包含急診摘要、現場身分確認或醫療人員摘要；若不再需要，請立即撤銷。
                       </div>
                     </div>
 
                     {/* Actions */}
-                    <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                    <div style={{ display: 'flex', gap: '6px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                       {!expired && (
-                        <button
+                        <button type="button"
                           onClick={() => handleCopy(share)}
                           style={{
-                            padding: '7px 12px', borderRadius: '8px',
+                            minHeight: 44, padding: '7px 12px', borderRadius: '8px',
                             border: '1px solid var(--primary)', background: '#fff',
                             color: 'var(--primary)', fontSize: '12px', fontWeight: '600', cursor: 'pointer',
                           }}
                         >
-                          {copiedId === share.id ? '✓ 已複製' : '複製'}
+                          <Clipboard size={15} aria-hidden="true" /> {copiedId === share.id ? '已複製' : '複製'}
                         </button>
                       )}
-                      <button
-                        onClick={() => handleDelete(share)}
-                        disabled={isDeleting}
+                      <button type="button"
+                        onClick={() => setRevokeTarget(share)}
+                        disabled={isDeleting || !canWriteMember(activeMember)}
                         style={{
-                          padding: '7px 12px', borderRadius: '8px',
+                          minHeight: 44, padding: '7px 12px', borderRadius: '8px',
                           border: '1px solid var(--gray-200)', background: '#fff',
                           color: '#f44336', fontSize: '12px', cursor: 'pointer',
                           opacity: isDeleting ? 0.6 : 1,
                         }}
                       >
-                        撤銷
+                        <Trash2 size={15} aria-hidden="true" /> {isDeleting ? '撤銷中…' : revokeError ? '重試撤銷' : '撤銷'}
                       </button>
                     </div>
                   </div>
+                  {revokeError && <div role="alert" style={{ color: '#b91c1c', fontSize: 12, fontWeight: 700, marginTop: 10 }}>{revokeError}</div>}
                 </div>
               );
             })}
-          </div>
+          </div></div>
         )}
       </div>
+      <ConfirmDialog open={Boolean(revokeTarget)} onCancel={() => setRevokeTarget(null)} onConfirm={() => { if (revokeTarget) void handleDelete(revokeTarget); }} title="撤銷這個分享連結？" description="撤銷後，任何持有此連結的人都無法再查看影像。影像本身不會被刪除，撤銷無法復原。" confirmLabel={deletingId ? '撤銷中…' : '撤銷分享'} danger />
     </div>
   );
 }

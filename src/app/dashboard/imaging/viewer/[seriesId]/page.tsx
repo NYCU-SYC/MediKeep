@@ -2,7 +2,10 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { AlertTriangle, Check, Copy, Maximize2, Minimize2, RotateCcw, Share2, X } from 'lucide-react';
 import { getPatientSessionToken } from '@/lib/api';
+import { useActiveMember } from '../../../member-context';
+import { memberHref } from '@/lib/members';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,7 +42,7 @@ type ErrorPayload = {
   error?: { message?: string; code?: string; details?: unknown };
 };
 
-const MISSING_STORAGE_MESSAGE = '影像原始檔不存在於目前後端環境，請重新上傳 DICOM 或同步 api/uploads/dicom 檔案。';
+const MISSING_STORAGE_MESSAGE = '影像原始檔目前不在安全儲存區，請重新上傳 DICOM，或請系統管理人員協助恢復原始檔。';
 
 function authHeaders(): HeadersInit {
   const token = getPatientSessionToken();
@@ -50,6 +53,7 @@ async function readApiError(res: Response, fallback: string): Promise<string> {
   const payload = await res.json().catch(() => null) as ErrorPayload | null;
   if (payload?.error?.message) return payload.error.message;
   if (typeof payload?.detail === 'string') return payload.detail;
+  if (payload?.detail && typeof payload.detail === 'object' && 'message' in payload.detail && typeof payload.detail.message === 'string') return payload.detail.message;
   if (res.status === 401) return '登入狀態已過期，請重新登入後再查看影像。';
   return fallback;
 }
@@ -69,7 +73,7 @@ async function fetchFrameObjectUrl(url: string): Promise<string> {
 // ── Tool button style ─────────────────────────────────────────────────────────
 
 const TB: React.CSSProperties = {
-  padding: '5px 12px', background: '#2a2a2a', color: '#ddd',
+  minHeight: 44, minWidth: 44, padding: '5px 12px', background: '#2a2a2a', color: '#ddd',
   border: '1px solid #444', borderRadius: '6px', cursor: 'pointer',
   fontSize: '12px', fontWeight: '600', flexShrink: 0,
 };
@@ -77,8 +81,8 @@ const TB: React.CSSProperties = {
 function MissingStorageState({ onBack, onUpload }: { onBack: () => void; onUpload: () => void }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px', height: '100vh', background: '#000', padding: 24 }}>
-      <div style={{ fontSize: '36px' }}>⚠️</div>
-      <div style={{ color: '#ddd', fontWeight: 800, fontSize: 16 }}>影像原始檔尚未同步</div>
+      <AlertTriangle size={36} aria-hidden="true" style={{ color: '#e8bf68' }} />
+      <h1 style={{ color: '#ddd', fontWeight: 800, fontSize: 16 }}>影像原始檔尚未同步</h1>
       <div style={{ color: '#aaa', maxWidth: 520, textAlign: 'center', lineHeight: 1.7, fontSize: 13 }}>
         {MISSING_STORAGE_MESSAGE}
       </div>
@@ -95,6 +99,7 @@ function MissingStorageState({ onBack, onUpload }: { onBack: () => void; onUploa
 export default function DicomViewerPage() {
   const { seriesId } = useParams<{ seriesId: string }>();
   const router = useRouter();
+  const { activeMember, canWriteMember, writeAccessReason } = useActiveMember();
 
   const [series, setSeries] = useState<SeriesDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -130,6 +135,7 @@ export default function DicomViewerPage() {
   // Share state
   const [shareResult, setShareResult] = useState<ShareResult | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [shareError, setShareError] = useState('');
   const [shareUrlCopied, setShareUrlCopied] = useState(false);
 
   const wcDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -397,7 +403,12 @@ export default function DicomViewerPage() {
 
   const handleShare = async () => {
     if (!series) return;
+    if (!canWriteMember(activeMember)) {
+      setShareError(writeAccessReason(activeMember) || '權限仍在確認中，目前不能建立分享連結。');
+      return;
+    }
     setSharing(true);
+    setShareError('');
     try {
       const r = await fetch('/api/dicom/share', {
         method: 'POST', credentials: 'include',
@@ -412,7 +423,11 @@ export default function DicomViewerPage() {
         await navigator.clipboard.writeText(shareUrl).catch(() => {});
         setShareUrlCopied(true);
         setTimeout(() => setShareUrlCopied(false), 3000);
+      } else {
+        setShareError(`${await readApiError(r, '無法建立分享連結')}；分享連結尚未建立。`);
       }
+    } catch {
+      setShareError('網路連線中斷，分享連結尚未建立。請稍後重試。');
     } finally {
       setSharing(false);
     }
@@ -423,7 +438,7 @@ export default function DicomViewerPage() {
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#000' }}>
-        <div style={{ color: '#aaa', fontSize: '14px' }}>載入影像中...</div>
+        <h1 style={{ color: '#aaa', fontSize: '14px' }}>正在載入影像…</h1>
       </div>
     );
   }
@@ -431,15 +446,15 @@ export default function DicomViewerPage() {
   if (error || !series) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px', height: '100vh', background: '#000' }}>
-        <div style={{ fontSize: '36px' }}>⚠️</div>
-        <div style={{ color: '#aaa' }}>{error || '找不到此序列'}</div>
-        <button onClick={() => router.back()} style={{ ...TB, marginTop: '8px' }}>返回</button>
+        <AlertTriangle size={36} aria-hidden="true" style={{ color: '#e8bf68' }} />
+        <h1 style={{ color: '#aaa', fontSize: 16 }}>{error || '找不到此序列'}</h1>
+        <button onClick={() => router.push(memberHref('/dashboard/imaging', activeMember))} style={{ ...TB, marginTop: '8px' }}>返回醫療影像</button>
       </div>
     );
   }
 
   if (series.storage_available === false) {
-    return <MissingStorageState onBack={() => router.push('/dashboard/imaging')} onUpload={() => router.push('/dashboard/imaging/upload')} />;
+    return <MissingStorageState onBack={() => router.push(memberHref('/dashboard/imaging', activeMember))} onUpload={() => router.push(memberHref('/dashboard/imaging/upload', activeMember))} />;
   }
 
   const instances = series.instances;
@@ -461,7 +476,7 @@ export default function DicomViewerPage() {
         background: '#111', borderBottom: '1px solid #333', flexWrap: 'wrap',
         flexShrink: 0,
       }}>
-        <button onClick={() => router.back()} style={TB}>← 返回</button>
+        <button onClick={() => router.push(memberHref('/dashboard/imaging', activeMember))} style={TB}>← 返回醫療影像</button>
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
@@ -473,9 +488,9 @@ export default function DicomViewerPage() {
                 {series.modality}
               </span>
             )}
-            <span style={{ fontSize: '13px', fontWeight: '700', color: '#ddd' }}>
+            <h1 style={{ fontSize: '13px', fontWeight: '700', color: '#ddd', margin: 0 }}>
               {series.series_description || `序列 ${series.series_number ?? '?'}`}
-            </span>
+            </h1>
             {/* Subtle loading dot in toolbar — doesn't obscure the image */}
             {isLoading && showSpinner && (
               <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4caf50', display: 'inline-block', animation: 'pulse 1s ease-in-out infinite' }} />
@@ -484,7 +499,7 @@ export default function DicomViewerPage() {
           <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>
             {inst.columns}×{inst.rows} px
             {series.body_part ? ` · ${series.body_part}` : ''}
-            {' · '}分享預設 24 小時；急診請用急診保命連結
+            {' · '}分享預設 24 小時；急診請使用急診資訊
           </div>
         </div>
 
@@ -493,23 +508,25 @@ export default function DicomViewerPage() {
           {Math.round(zoom * 100)}%
         </span>
         <button onClick={() => setZoom(z => Math.max(z * 0.8, 0.2))} style={TB}>−</button>
-        <button onClick={resetView} style={TB} title="重設視角">↺</button>
+        <button onClick={resetView} style={TB} title="重設視角" aria-label="重設視角"><RotateCcw size={16} aria-hidden="true" /></button>
         <button
           onClick={() => setFullscreen(v => !v)}
           style={{ ...TB, background: fullscreen ? '#1565c0' : '#2a2a2a' }}
           title="全螢幕 (F)"
         >
-          {fullscreen ? '⊡' : '⊞'}
+          {fullscreen ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}
         </button>
         <button
           onClick={handleShare}
-          disabled={sharing}
+          disabled={sharing || !canWriteMember(activeMember)}
           title="建立分享連結"
           style={{ ...TB, background: sharing ? '#333' : '#1565c0', borderColor: '#1565c0' }}
         >
-          {sharing ? '...' : shareUrlCopied ? '✓ 已複製' : '🔗 分享'}
+          {sharing ? '建立中…' : shareUrlCopied ? <><Check size={15} aria-hidden="true" /> 已複製</> : <><Share2 size={15} aria-hidden="true" /> 分享</>}
         </button>
       </div>
+
+      {shareError && <div role="alert" style={{ background: '#3b2020', color: '#ffd4d4', borderBottom: '1px solid #6b3333', padding: '10px 14px', fontSize: 12, fontWeight: 700 }}>{shareError}</div>}
 
       {/* Share URL banner */}
       {shareResult && (
@@ -518,17 +535,17 @@ export default function DicomViewerPage() {
           padding: '8px 14px', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0,
         }}>
           <span style={{ color: '#7cb3ff', fontSize: '12px', flex: 1, wordBreak: 'break-all' }}>
-            🔗 {shareResult.share_url}
-            <span style={{ color: '#a6b8d8' }}> · 24 小時有效；此連結只開放影像，不含急診紅區或 break-glass 稽核。</span>
+            <Share2 size={14} aria-hidden="true" style={{ verticalAlign: 'text-bottom', marginRight: 5 }} />{shareResult.share_url}
+            <span style={{ color: '#a6b8d8' }}> · 24 小時有效；此連結只開放影像，不含急診摘要、現場身分確認或急診存取紀錄。</span>
           </span>
           <button onClick={async () => {
             await navigator.clipboard.writeText(shareResult.share_url);
             setShareUrlCopied(true);
             setTimeout(() => setShareUrlCopied(false), 2000);
           }} style={{ ...TB, flexShrink: 0 }}>
-            {shareUrlCopied ? '✓' : '複製'}
+            {shareUrlCopied ? <Check size={15} aria-hidden="true" /> : <><Copy size={15} aria-hidden="true" />複製</>}
           </button>
-          <button onClick={() => setShareResult(null)} style={{ ...TB, flexShrink: 0 }}>×</button>
+          <button aria-label="關閉分享結果" onClick={() => setShareResult(null)} style={{ ...TB, flexShrink: 0 }}><X size={15} aria-hidden="true" /></button>
         </div>
       )}
 
@@ -550,7 +567,7 @@ export default function DicomViewerPage() {
             position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
             justifyContent: 'center', flexDirection: 'column', gap: '8px', zIndex: 5,
           }}>
-            <span style={{ fontSize: '32px' }}>⚠️</span>
+            <AlertTriangle size={32} aria-hidden="true" style={{ color: '#e8bf68' }} />
             <span style={{ color: '#aaa', fontSize: '13px', maxWidth: 360, textAlign: 'center', lineHeight: 1.6 }}>
               {imageErrorMessage || '無法渲染此切片'}
             </span>
@@ -566,6 +583,8 @@ export default function DicomViewerPage() {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           {displayedUrl && !imageError && (
+            // Authenticated blob URLs cannot use Next Image optimization.
+            // eslint-disable-next-line @next/next/no-img-element
             <img
               src={displayedUrl}
               alt={`切片 ${currentIdx + 1}`}

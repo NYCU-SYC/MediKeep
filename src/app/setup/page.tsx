@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { setPatientSessionToken } from '@/lib/api';
+import { Check, Home, Link2, Plus, X } from 'lucide-react';
+import { api, ApiError, setPatientSessionToken } from '@/lib/api';
+import { nextRouteFromSearch, routeWithNext, safeNextRoute } from '@/lib/internalRoutes';
 
 type Tab = 'create' | 'join';
 
@@ -38,7 +40,17 @@ const PRESETS = [
   { name: '姊妹',   relation: '姊妹', gender: '女', color: '#8bc34a' },
 ];
 
-const COLORS = ['#f44336','#e91e63','#9c27b0','#2196f3','#4caf50','#ff9800','#00bcd4','#795548'];
+const COLORS = [
+  { value: '#607d8b', label: '藍灰色' },
+  { value: '#f44336', label: '紅色' },
+  { value: '#e91e63', label: '桃紅色' },
+  { value: '#9c27b0', label: '紫色' },
+  { value: '#2196f3', label: '藍色' },
+  { value: '#4caf50', label: '綠色' },
+  { value: '#ff9800', label: '橘色' },
+  { value: '#00bcd4', label: '青色' },
+  { value: '#795548', label: '棕色' },
+];
 
 const BLANK_MEMBER: NewMember = { name: '', relation: '', age: '', gender: '男', color: '#607d8b' };
 
@@ -49,6 +61,9 @@ async function readApiError(resp: Response, fallback: string) {
 
 export default function SetupPage() {
   const router = useRouter();
+  const [returnTo, setReturnTo] = useState('/dashboard');
+  const [authState, setAuthState] = useState<'checking' | 'ready' | 'error'>('checking');
+  const [authAttempt, setAuthAttempt] = useState(0);
   const [step, setStep] = useState<1 | 2>(1);
   const [tab, setTab] = useState<Tab>('create');
 
@@ -68,6 +83,55 @@ export default function SetupPage() {
   const [saving, setSaving] = useState(false);
   const [cancelingCreate, setCancelingCreate] = useState(false);
   const [finishError, setFinishError] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    const search = window.location.search;
+    const params = new URLSearchParams(search);
+    const next = nextRouteFromSearch(search, '/dashboard');
+    setReturnTo(next);
+    const linkedCode = (params.get('code') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    const currentSetupRoute = safeNextRoute(`/setup${search}`, '/setup');
+    setAuthState('checking');
+    setStep1Error('');
+
+    const prepare = async () => {
+      try {
+        const me = await api.get('/api/auth/me') as { authenticated?: boolean };
+        if (!alive) return;
+        if (!me?.authenticated) {
+          window.location.replace(routeWithNext('/upload-entry', currentSetupRoute));
+          return;
+        }
+        setAuthState('ready');
+        if (params.get('mode') !== 'join' || linkedCode.length !== 8) return;
+
+        setTab('join');
+        setJoinCode(linkedCode);
+        setJoinPreview(null);
+        setJoinConfirmed(false);
+        setStep1Submitting(true);
+        const resp = await fetch(`/api/auth/join/preview?join_code=${encodeURIComponent(linkedCode)}`, { credentials: 'include' });
+        if (!resp.ok) throw new Error(await readApiError(resp, '找不到此家庭代碼，請確認後重試'));
+        const preview = await resp.json() as JoinPreview;
+        if (alive) setJoinPreview(preview);
+      } catch (error) {
+        if (!alive || (error instanceof ApiError && error.status === 401)) return;
+        if (error instanceof ApiError) {
+          setAuthState('error');
+          setStep1Error(error.retryAfter
+            ? `暫時無法確認登入狀態，約 ${error.retryAfter} 秒後可重試。`
+            : '暫時無法確認登入狀態，請重試。');
+        } else {
+          setStep1Error(error instanceof Error ? error.message : '無法預覽家庭加入資訊');
+        }
+      } finally {
+        if (alive) setStep1Submitting(false);
+      }
+    };
+    void prepare();
+    return () => { alive = false; };
+  }, [authAttempt]);
 
   // ── Step 1: create family ──────────────────────────────────────────────────
   const handleCreate = async (e: React.FormEvent) => {
@@ -104,7 +168,7 @@ export default function SetupPage() {
     e.preventDefault();
     setStep1Error('');
     const code = joinCode.trim().toUpperCase();
-    if (code.length < 8 || code.length > 20) { setStep1Error('請輸入 8 到 20 碼的加入代碼'); return; }
+    if (code.length !== 8) { setStep1Error('請輸入 8 碼的加入代碼'); return; }
     setStep1Submitting(true);
     try {
       if (joinPreview?.join_code !== code) {
@@ -143,7 +207,7 @@ export default function SetupPage() {
       }
       setPatientSessionToken(null);
       // Joined an existing family — skip member setup, go to dashboard
-      router.replace('/dashboard');
+      router.replace(returnTo);
     } catch {
       setStep1Error('網路錯誤，請稍後再試');
     } finally {
@@ -192,7 +256,7 @@ export default function SetupPage() {
           throw new Error(await readApiError(resp, `無法新增 ${m.name || '家庭成員'}，請稍後再試`));
         }
       }
-      router.replace('/dashboard');
+      router.replace(returnTo);
     } catch (error) {
       setFinishError(error instanceof Error ? error.message : '新增家庭成員失敗，請稍後再試');
     } finally {
@@ -245,12 +309,32 @@ export default function SetupPage() {
     padding: '10px 14px', fontSize: '13px', color: '#c62828', marginBottom: '16px',
   };
   const joinCodeForSubmit = joinCode.trim().toUpperCase();
-  const joinCodeInvalid = joinCodeForSubmit.length < 8 || joinCodeForSubmit.length > 20;
+  const joinCodeInvalid = joinCodeForSubmit.length !== 8;
   const createSubmitDisabled = step1Submitting || !createConfirmed;
   const joinSubmitDisabled = step1Submitting || joinCodeInvalid || (joinPreview?.requires_confirmation === true && !joinConfirmed);
 
+  if (authState !== 'ready') {
+    return (
+      <main style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #3e6b7e 0%, #33596a 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <div style={{ background: '#fff', borderRadius: 18, padding: 28, width: '100%', maxWidth: 420, textAlign: 'center', boxShadow: '0 24px 48px rgba(0,0,0,0.20)' }}>
+          <h1 style={{ color: '#22313f', fontSize: 22, marginBottom: 10 }}>家庭設定</h1>
+          {authState === 'checking' ? (
+            <p role="status" style={{ color: '#6b7c8c' }}>正在確認登入狀態…</p>
+          ) : (
+            <div role="alert">
+              <p style={{ color: '#a03a30', lineHeight: 1.6 }}>{step1Error}</p>
+              <button type="button" onClick={() => setAuthAttempt((value) => value + 1)} style={{ marginTop: 12, minHeight: 44, border: 0, borderRadius: 10, padding: '10px 16px', background: '#3e6b7e', color: '#fff', fontWeight: 800, cursor: 'pointer' }}>
+                重新確認
+              </button>
+            </div>
+          )}
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <div style={{
+    <main style={{
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #3e6b7e 0%, #33596a 100%)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -261,11 +345,11 @@ export default function SetupPage() {
       {step === 1 && (
         <div style={cardStyle}>
           <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-            <div style={{ fontSize: '48px', marginBottom: '12px' }}>🏠</div>
+            <Home aria-hidden="true" size={48} strokeWidth={1.8} style={{ color: '#3e6b7e', margin: '0 auto 12px' }} />
             <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#111', marginBottom: '8px' }}>
               設定您的家庭
             </h1>
-            <p style={{ fontSize: '14px', color: '#888', lineHeight: 1.6 }}>
+            <p style={{ fontSize: '14px', color: '#56687a', lineHeight: 1.6 }}>
               建立新家庭空間，或加入已有的家庭
             </p>
           </div>
@@ -286,17 +370,19 @@ export default function SetupPage() {
           {/* Tabs */}
           <div style={{ display: 'flex', background: '#f0f4f8', borderRadius: '12px', padding: '4px', marginBottom: '28px' }}>
             {([
-              { key: 'create' as Tab, label: '🏗 建立新家庭' },
-              { key: 'join'   as Tab, label: '🔗 加入已有家庭' },
-            ]).map(t => (
-              <button key={t.key} onClick={() => { setTab(t.key); setStep1Error(''); setCreateConfirmed(false); setJoinPreview(null); setJoinConfirmed(false); }} style={{
+              { key: 'create' as Tab, label: '建立新家庭', icon: Home },
+              { key: 'join'   as Tab, label: '加入已有家庭', icon: Link2 },
+            ]).map(t => {
+              const TabIcon = t.icon;
+              return <button key={t.key} type="button" aria-pressed={tab === t.key} onClick={() => { setTab(t.key); setStep1Error(''); setCreateConfirmed(false); setJoinPreview(null); setJoinConfirmed(false); }} style={{
                 flex: 1, padding: '10px 8px', borderRadius: '10px', border: 'none',
                 background: tab === t.key ? '#fff' : 'transparent',
-                color: tab === t.key ? '#3e6b7e' : '#888',
+                color: tab === t.key ? '#3e6b7e' : '#56687a',
                 fontWeight: tab === t.key ? '700' : '500', fontSize: '13px', cursor: 'pointer',
                 boxShadow: tab === t.key ? '0 1px 4px rgba(0,0,0,0.12)' : 'none',
-              }}>{t.label}</button>
-            ))}
+                minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              }}><TabIcon aria-hidden="true" size={16} />{t.label}</button>;
+            })}
           </div>
 
           {tab === 'create' && (
@@ -304,10 +390,11 @@ export default function SetupPage() {
               <p style={{ fontSize: '13px', color: '#666', marginBottom: '20px', lineHeight: 1.6 }}>
                 為您的家庭取個名字。下一步可以新增家庭成員；成員名稱只用於介面辨識，不會自動代表醫療授權。
               </p>
-              <label style={{ fontSize: '13px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '6px' }}>
+              <label htmlFor="family-name" style={{ fontSize: '13px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '6px' }}>
                 家庭名稱（選填）
               </label>
               <input
+                id="family-name"
                 type="text" placeholder="例：林家、王家健康"
                 value={familyName} onChange={e => setFamilyName(e.target.value)}
                 maxLength={40}
@@ -341,12 +428,12 @@ export default function SetupPage() {
                 <button
                   type="button"
                   onClick={() => { setTab('join'); setStep1Error(''); setCreateConfirmed(false); }}
-                  style={{ marginTop: '10px', border: 'none', background: 'transparent', color: '#0369a1', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+                  style={{ marginTop: '10px', minHeight: 44, border: 'none', background: 'transparent', color: '#0369a1', fontWeight: 800, cursor: 'pointer', padding: '8px 0' }}
                 >
                   我有加入代碼，改為加入已有家庭
                 </button>
               </div>
-              {step1Error && <div style={errorBox}>{step1Error}</div>}
+              {step1Error && <div role="alert" style={errorBox}>{step1Error}</div>}
               <button
                 type="submit"
                 disabled={createSubmitDisabled}
@@ -362,18 +449,19 @@ export default function SetupPage() {
               <p style={{ fontSize: '13px', color: '#666', marginBottom: '20px', lineHeight: 1.6 }}>
                 輸入家庭管理員提供的加入代碼，加入共用家庭健康紀錄。加入後可看到的資料仍依帳號角色與後續授權設定為準。
               </p>
-              <label style={{ fontSize: '13px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '6px' }}>
+              <label htmlFor="family-join-code" style={{ fontSize: '13px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '6px' }}>
                 加入代碼
               </label>
               <input
-                type="text" placeholder="例：NHI2605302258"
+                id="family-join-code"
+                type="text" placeholder="例：AB12CD34"
                 value={joinCode}
                 onChange={e => {
-                  setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20));
+                  setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8));
                   setJoinPreview(null);
                   setJoinConfirmed(false);
                 }}
-                maxLength={20}
+                maxLength={8}
                 style={{
                   width: '100%', padding: '12px 14px', borderRadius: '10px',
                   border: '1.5px solid #e0e0e0', fontSize: '22px',
@@ -431,13 +519,13 @@ export default function SetupPage() {
                   <button
                     type="button"
                     onClick={() => { setJoinPreview(null); setJoinConfirmed(false); setJoinCode(''); }}
-                    style={{ marginTop: '10px', border: 'none', background: 'transparent', color: '#0369a1', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+                    style={{ marginTop: '10px', minHeight: 44, border: 'none', background: 'transparent', color: '#0369a1', fontWeight: 800, cursor: 'pointer', padding: '8px 0' }}
                   >
                     取消，重新輸入代碼
                   </button>
                 </div>
               )}
-              {step1Error && <div style={errorBox}>{step1Error}</div>}
+              {step1Error && <div role="alert" style={errorBox}>{step1Error}</div>}
               <button type="submit" disabled={joinSubmitDisabled}
                 style={{ ...btnPrimary, opacity: joinSubmitDisabled ? 0.5 : 1 }}>
                 {step1Submitting ? (joinPreview ? '加入中...' : '確認中...') : (joinPreview ? '確認加入此家庭 →' : '檢查加入代碼 →')}
@@ -445,7 +533,7 @@ export default function SetupPage() {
             </form>
           )}
 
-          <p style={{ fontSize: '11px', color: '#ccc', textAlign: 'center', marginTop: '20px' }}>
+          <p style={{ fontSize: '11px', color: '#e2e8ec', textAlign: 'center', marginTop: '20px' }}>
             您的 LINE 帳號識別資訊已加密處理 · 健康紀錄與身分資料分離儲存
           </p>
         </div>
@@ -456,14 +544,14 @@ export default function SetupPage() {
         <div style={{ ...cardStyle, maxWidth: '540px' }}>
           {/* Progress */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '28px' }}>
-            <div style={{ width: '24px', height: '24px', borderRadius: '12px', background: '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', fontWeight: '700' }}>✓</div>
+            <div aria-hidden="true" style={{ width: '24px', height: '24px', borderRadius: '12px', background: '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}><Check size={15} strokeWidth={3} /></div>
             <div style={{ flex: 1, height: '3px', background: '#4caf50', borderRadius: '2px' }} />
-            <div style={{ width: '24px', height: '24px', borderRadius: '12px', background: '#3e6b7e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', fontWeight: '700' }}>2</div>
+            <div aria-hidden="true" style={{ width: '24px', height: '24px', borderRadius: '12px', background: '#3e6b7e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: '#fff', fontWeight: '700' }}>2</div>
           </div>
 
           <div style={{ marginBottom: '24px' }}>
-            <h2 style={{ fontSize: '20px', fontWeight: '800', color: '#111', marginBottom: '6px' }}>新增家庭成員</h2>
-            <p style={{ fontSize: '13px', color: '#888', lineHeight: 1.6 }}>
+            <h1 style={{ fontSize: '20px', fontWeight: '800', color: '#111', marginBottom: '6px' }}>新增家庭成員</h1>
+            <p style={{ fontSize: '13px', color: '#56687a', lineHeight: 1.6 }}>
               選擇常見成員類型，或自訂成員資料。這些資料用於家庭切換與顯示，正式授權與撤銷仍需另外確認。
             </p>
           </div>
@@ -473,21 +561,23 @@ export default function SetupPage() {
             {PRESETS.map(p => {
               const selected = members.some(m => m.name === p.name);
               return (
-                <button key={p.name} type="button" onClick={() => togglePreset(p)} style={{
+                <button key={p.name} type="button" aria-pressed={selected} onClick={() => togglePreset(p)} style={{
                   padding: '8px 16px', borderRadius: '20px', border: `2px solid ${selected ? p.color : '#e0e0e0'}`,
-                  background: selected ? p.color : '#fff',
-                  color: selected ? '#fff' : '#555', fontSize: '14px', fontWeight: selected ? '700' : '500',
-                  cursor: 'pointer', transition: 'all 0.15s',
+                  background: selected ? '#edf5f8' : '#fff',
+                  color: '#22313f', fontSize: '14px', fontWeight: selected ? '700' : '500',
+                  cursor: 'pointer', transition: 'all 0.15s', minHeight: 44,
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
                 }}>
-                  {selected ? '✓ ' : ''}{p.name}
+                  {selected ? <Check aria-hidden="true" size={16} strokeWidth={3} /> : null}{p.name}
                 </button>
               );
             })}
             <button type="button" onClick={() => setShowCustomForm(v => !v)} style={{
               padding: '8px 16px', borderRadius: '20px', border: '2px dashed #bbb',
-              background: '#fafafa', color: '#888', fontSize: '14px', cursor: 'pointer',
+              background: '#fafafa', color: '#56687a', fontSize: '14px', cursor: 'pointer', minHeight: 44,
+              display: 'inline-flex', alignItems: 'center', gap: 4,
             }}>
-              + 自訂
+              <Plus aria-hidden="true" size={16} />自訂
             </button>
           </div>
 
@@ -496,46 +586,68 @@ export default function SetupPage() {
             <form onSubmit={addCustom} style={{ background: '#f8f9fa', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
                 <div>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '4px' }}>稱謂</label>
-                  <input type="text" placeholder="例：阿嬤" value={customMember.name}
+                  <label htmlFor="custom-member-name" style={{ fontSize: '12px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '4px' }}>稱謂</label>
+                  <input id="custom-member-name" type="text" placeholder="例：阿嬤" value={customMember.name}
                     onChange={e => setCustomMember(m => ({ ...m, name: e.target.value }))}
                     style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #ddd', fontSize: '14px', boxSizing: 'border-box' }} required />
                 </div>
                 <div>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '4px' }}>關係</label>
-                  <input type="text" placeholder="例：祖母" value={customMember.relation}
+                  <label htmlFor="custom-member-relation" style={{ fontSize: '12px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '4px' }}>關係</label>
+                  <input id="custom-member-relation" type="text" placeholder="例：祖母" value={customMember.relation}
                     onChange={e => setCustomMember(m => ({ ...m, relation: e.target.value }))}
                     style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #ddd', fontSize: '14px', boxSizing: 'border-box' }} required />
                 </div>
                 <div>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '4px' }}>年齡</label>
-                  <input type="number" placeholder="65" min="0" max="120" value={customMember.age}
+                  <label htmlFor="custom-member-age" style={{ fontSize: '12px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '4px' }}>年齡</label>
+                  <input id="custom-member-age" type="number" placeholder="65" min="0" max="120" value={customMember.age}
                     onChange={e => setCustomMember(m => ({ ...m, age: e.target.value }))}
                     style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #ddd', fontSize: '14px', boxSizing: 'border-box' }} />
                 </div>
                 <div>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '4px' }}>性別</label>
-                  <select value={customMember.gender} onChange={e => setCustomMember(m => ({ ...m, gender: e.target.value }))}
+                  <label htmlFor="custom-member-gender" style={{ fontSize: '12px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '4px' }}>性別</label>
+                  <select id="custom-member-gender" value={customMember.gender} onChange={e => setCustomMember(m => ({ ...m, gender: e.target.value }))}
                     style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #ddd', fontSize: '14px', background: '#fff', boxSizing: 'border-box' }}>
                     <option value="男">男</option>
                     <option value="女">女</option>
                   </select>
                 </div>
               </div>
-              <div style={{ marginBottom: '10px' }}>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: '#555', display: 'block', marginBottom: '6px' }}>顏色</label>
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  {COLORS.map(c => (
-                    <div key={c} onClick={() => setCustomMember(m => ({ ...m, color: c }))} style={{
-                      width: '24px', height: '24px', borderRadius: '12px', background: c, cursor: 'pointer',
-                      border: customMember.color === c ? '3px solid #333' : '3px solid transparent',
-                    }} />
-                  ))}
+              <fieldset style={{ margin: '0 0 10px', padding: 0, border: 0 }}>
+                <legend style={{ fontSize: '12px', fontWeight: '600', color: '#555', marginBottom: '6px' }}>成員識別顏色</legend>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {COLORS.map(({ value, label }) => {
+                    const selected = customMember.color === value;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-label={`選擇${label}`}
+                        aria-pressed={selected}
+                        onClick={() => setCustomMember(m => ({ ...m, color: value }))}
+                        style={{
+                          width: 44,
+                          height: 44,
+                          borderRadius: 22,
+                          background: value,
+                          cursor: 'pointer',
+                          border: selected ? '3px solid #22313f' : '3px solid transparent',
+                          boxShadow: selected ? '0 0 0 2px #fff, 0 0 0 4px #22313f' : '0 0 0 1px rgba(34,49,63,0.3)',
+                          color: '#111',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                      >
+                        {selected ? <Check aria-hidden="true" size={20} strokeWidth={3} /> : null}
+                      </button>
+                    );
+                  })}
                 </div>
-              </div>
+              </fieldset>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button type="submit" style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#3e6b7e', color: '#fff', fontWeight: '700', cursor: 'pointer', fontSize: '13px' }}>新增</button>
-                <button type="button" onClick={() => setShowCustomForm(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #ddd', background: '#fff', color: '#666', cursor: 'pointer', fontSize: '13px' }}>取消</button>
+                <button type="submit" style={{ minHeight: 44, padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#3e6b7e', color: '#fff', fontWeight: '700', cursor: 'pointer', fontSize: '13px' }}>新增</button>
+                <button type="button" onClick={() => setShowCustomForm(false)} style={{ minHeight: 44, padding: '8px 16px', borderRadius: '8px', border: '1px solid #ddd', background: '#fff', color: '#666', cursor: 'pointer', fontSize: '13px' }}>取消</button>
               </div>
             </form>
           )}
@@ -549,11 +661,17 @@ export default function SetupPage() {
                   <span key={i} style={{
                     display: 'inline-flex', alignItems: 'center', gap: '4px',
                     padding: '4px 10px', borderRadius: '16px',
-                    background: m.color, color: '#fff', fontSize: '13px', fontWeight: '600',
+                    background: '#edf5f8', border: `2px solid ${m.color}`, color: '#22313f', fontSize: '13px', fontWeight: '600',
                   }}>
                     {m.name}
-                    <span onClick={() => setMembers(prev => prev.filter((_, idx) => idx !== i))}
-                      style={{ cursor: 'pointer', opacity: 0.8, fontSize: '14px', lineHeight: 1 }}>×</span>
+                    <button
+                      type="button"
+                      aria-label={`移除${m.name}`}
+                      onClick={() => setMembers(prev => prev.filter((_, idx) => idx !== i))}
+                      style={{ width: 44, height: 44, margin: '-10px -10px -10px 0', border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+                    >
+                      <X aria-hidden="true" size={16} />
+                    </button>
                   </span>
                 ))}
               </div>
@@ -604,11 +722,11 @@ export default function SetupPage() {
             </button>
           </div>
 
-          <p style={{ fontSize: '12px', color: '#bbb', textAlign: 'center', marginTop: '16px' }}>
+          <p style={{ fontSize: '12px', color: '#64727d', textAlign: 'center', marginTop: '16px' }}>
             成員資料可隨時在「設定」頁面修改
           </p>
         </div>
       )}
-    </div>
+    </main>
   );
 }

@@ -9,7 +9,12 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    ".next-dev-*/**",
+    ".next-preview-*/**",
+    ".healthkeep-dev/**",
     "out/**",
+    "output/**",
+    ".playwright-cli/**",
     "build/**",
     "next-env.d.ts",
     // macOS AppleDouble / metadata junk that gets synced into the repo — these

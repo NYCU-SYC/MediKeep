@@ -2,7 +2,19 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  Ban,
+  CircleAlert,
+  Clock3,
+  KeyRound,
+  LoaderCircle,
+  RefreshCw,
+  ServerCrash,
+  WifiOff,
+  type LucideIcon,
+} from 'lucide-react';
 import { setPatientSessionToken } from '@/lib/api';
+import { nextRouteFromSearch, routeWithNext } from '@/lib/internalRoutes';
 
 type LiffType = typeof import('@line/liff').default;
 type PageState = 'initializing' | 'redirecting' | 'error';
@@ -16,43 +28,43 @@ type ErrorKey =
   | 'CONFIG_ERROR'
   | 'UNKNOWN';
 
-const ERROR_INFO: Record<ErrorKey, { title: string; hint: string; icon: string }> = {
+const ERROR_INFO: Record<ErrorKey, { title: string; hint: string; icon: LucideIcon }> = {
   USER_CANCELLED: {
     title: '您取消了 LINE 登入',
     hint: '點擊下方按鈕重新連接',
-    icon: '👋',
+    icon: RefreshCw,
   },
   FORBIDDEN: {
     title: '帳號暫時無法使用',
     hint: '請聯絡系統管理員協助開通權限',
-    icon: '🚫',
+    icon: Ban,
   },
   NETWORK_ERROR: {
     title: '網路連線不穩',
     hint: '系統將在網路恢復後自動重試',
-    icon: '📡',
+    icon: WifiOff,
   },
   TOKEN_ERROR: {
     title: '身分憑證已失效',
     // TOKEN_ERROR does NOT auto-retry (reload gets the same stale token).
     // Instead we show a button that forces LIFF logout → fresh login.
     hint: '請點擊下方按鈕重新登入 LINE',
-    icon: '🔄',
+    icon: KeyRound,
   },
   SERVER_ERROR: {
     title: '伺服器暫時忙線',
     hint: '系統將自動為您重新嘗試',
-    icon: '⏳',
+    icon: Clock3,
   },
   CONFIG_ERROR: {
     title: '系統設定異常',
     hint: '請聯絡系統管理員協助處理',
-    icon: '⚙️',
+    icon: ServerCrash,
   },
   UNKNOWN: {
     title: '連線過程發生問題',
     hint: '系統將自動為您重新嘗試',
-    icon: '🔁',
+    icon: CircleAlert,
   },
 };
 
@@ -97,8 +109,10 @@ function isLocalDevHost(hostname: string) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
-function canonicalUploadEntryUrl() {
-  return new URL('/upload-entry', window.location.origin).toString();
+function canonicalUploadEntryUrl(next: string) {
+  const url = new URL('/upload-entry', window.location.origin);
+  url.searchParams.set('next', next);
+  return url.toString();
 }
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 8000) {
@@ -130,6 +144,7 @@ export default function UploadEntryPage() {
 
     const run = async () => {
       try {
+        const next = nextRouteFromSearch(window.location.search, '/dashboard');
         // 1. 預檢：若已登入，直接跳對應頁面 (bookmark / 回訪情境)
         try {
           const meResp = await fetch('/api/auth/me', { credentials: 'include' });
@@ -137,7 +152,7 @@ export default function UploadEntryPage() {
             const me = await meResp.json();
             if (!cancelled && me?.authenticated) {
               setPatientSessionToken(null);
-              const dest = me?.needs_binding ? '/setup' : '/dashboard';
+              const dest = me?.needs_binding ? routeWithNext('/setup', next) : next;
               setStatusText(me?.needs_binding ? '請完成家庭設定...' : '歡迎回來');
               setPageState('redirecting');
               setTimeout(() => {
@@ -164,7 +179,7 @@ export default function UploadEntryPage() {
           if (devRes.ok) {
             const data = await devRes.json();
             setPatientSessionToken(data.session_token);
-            const dest = data?.needs_binding ? '/setup' : '/dashboard';
+            const dest = data?.needs_binding ? routeWithNext('/setup', next) : next;
             setPageState('redirecting');
             setTimeout(() => { if (!cancelled) router.replace(dest); }, 300);
             return;
@@ -188,7 +203,7 @@ export default function UploadEntryPage() {
         // 4. 若尚未登入 LINE，導向 LINE 登入
         if (!liff.isLoggedIn()) {
           setStatusText('正在開啟 LINE 登入...');
-          liff.login({ redirectUri: canonicalUploadEntryUrl() });
+          liff.login({ redirectUri: canonicalUploadEntryUrl(next) });
           return;
         }
 
@@ -229,7 +244,7 @@ export default function UploadEntryPage() {
         // 7. 成功 → 依 needs_binding 決定目的地
         const loginData = await resp.json();
         setPatientSessionToken(loginData.session_token);
-        const dest = loginData?.needs_binding ? '/setup' : '/dashboard';
+        const dest = loginData?.needs_binding ? routeWithNext('/setup', next) : next;
         setStatusText(loginData?.needs_binding ? '請完成家庭設定...' : '登入成功，歡迎回家');
         setPageState('redirecting');
         setTimeout(() => {
@@ -285,13 +300,15 @@ export default function UploadEntryPage() {
   const isManualRetry = errorKey !== '' && MANUAL_RETRY_ERRORS.has(errorKey as ErrorKey);
   const isUnrecoverable = errorKey !== '' && UNRECOVERABLE_ERRORS.has(errorKey as ErrorKey);
   const info = errorKey ? ERROR_INFO[errorKey as ErrorKey] : null;
+  const ErrorIcon = info?.icon;
 
   // 倒數圓環進度 (0 ~ 1)
   const progress = isAutoRetrying && retryTotal > 0 ? (retryCountdown ?? 0) / retryTotal : 0;
   const circumference = 2 * Math.PI * 28;
 
   return (
-    <div
+    <main
+      aria-busy={pageState !== 'error'}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -335,18 +352,14 @@ export default function UploadEntryPage() {
               </div>
             ))}
           </div>
-          <div
-            style={{
-              width: '48px', height: '48px',
-              border: '4px solid rgba(255,255,255,0.25)',
-              borderTopColor: pageState === 'redirecting' ? '#06C755' : '#fff',
-              borderRadius: '50%',
-              animation: 'spin 0.8s linear infinite',
-              margin: '0 auto 20px',
-              transition: 'border-top-color 0.3s',
-            }}
+          <LoaderCircle
+            aria-hidden="true"
+            className="hk-entry-spinner"
+            size={48}
+            strokeWidth={3}
+            style={{ color: pageState === 'redirecting' ? '#06C755' : '#fff', margin: '0 auto 20px' }}
           />
-          <p style={{ fontSize: '14px', opacity: 0.9, minHeight: '20px' }}>{statusText}</p>
+          <p role="status" style={{ fontSize: '14px', opacity: 0.9, minHeight: '20px' }}>{statusText}</p>
         </div>
       ) : (
         // ─── 錯誤畫面 ────────────────────────────────────
@@ -361,11 +374,11 @@ export default function UploadEntryPage() {
             textAlign: 'center',
           }}
         >
-          <div style={{ fontSize: '52px', marginBottom: '12px' }}>{info?.icon}</div>
-          <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#333', marginBottom: '8px' }}>
+          {ErrorIcon ? <ErrorIcon aria-hidden="true" size={52} strokeWidth={1.8} style={{ color: '#3e6b7e', marginBottom: '12px' }} /> : null}
+          <h1 style={{ fontSize: '18px', fontWeight: 700, color: '#333', marginBottom: '8px' }}>
             {info?.title}
-          </h2>
-          <p style={{ fontSize: '13px', color: '#888', marginBottom: '24px', lineHeight: 1.6 }}>
+          </h1>
+          <p style={{ fontSize: '13px', color: '#56687a', marginBottom: '24px', lineHeight: 1.6 }}>
             {info?.hint}
           </p>
 
@@ -391,7 +404,7 @@ export default function UploadEntryPage() {
                   {retryCountdown}
                 </div>
               </div>
-              <p style={{ fontSize: '12px', color: '#999', marginTop: '10px' }}>稍後將自動重試</p>
+              <p style={{ fontSize: '12px', color: '#56687a', marginTop: '10px' }}>稍後將自動重試</p>
             </div>
           )}
 
@@ -423,13 +436,19 @@ export default function UploadEntryPage() {
 
           {/* Persistent TOKEN_ERROR: suggest checking config */}
           {errorKey === 'TOKEN_ERROR' && (
-            <p style={{ fontSize: '11px', color: '#bbb', marginTop: '12px', lineHeight: 1.5 }}>
+            <p style={{ fontSize: '11px', color: '#66737e', marginTop: '12px', lineHeight: 1.5 }}>
               如果反覆出現此問題，請確認 LINE 登入頻道設定是否正確
             </p>
           )}
         </div>
       )}
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
+      <style>{`
+        .hk-entry-spinner { animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+          .hk-entry-spinner { animation: none; }
+        }
+      `}</style>
+    </main>
   );
 }

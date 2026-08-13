@@ -1,10 +1,13 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { CalendarDays, ChevronDown, ChevronUp, Eye, Images, RotateCcw, Share2, Trash2, Upload, X } from 'lucide-react';
 import { useActiveMember } from '../member-context';
 import { getPatientSessionToken } from '@/lib/api';
-import { memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
+import { memberHref, memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
+import { AsyncState, ConfirmDialog, PageHeader, ReadOnlyNotice } from '../_components/Shared';
+import { useToast } from '../toast-context';
 
 type SeriesOut = {
   id: string;
@@ -34,8 +37,13 @@ type StudyOut = {
   storage_available: boolean;
   note: string | null;
   created_at: string;
+  deleted_at?: string | null;
+  recoverable?: boolean;
+  restore_action?: string | null;
   series?: SeriesOut[];
 };
+
+type DeleteStudyResult = { deleted_at: string; recoverable: boolean; revoked_share_count: number; save_state: string };
 
 type ShareResult = { share_url: string; expires_at: string | null };
 type ErrorPayload = {
@@ -43,7 +51,7 @@ type ErrorPayload = {
   error?: { message?: string; code?: string; details?: unknown };
 };
 const SHARE_EXPIRY_HOURS = 24;
-const MISSING_STORAGE_MESSAGE = '影像原始檔不存在於目前後端環境，請重新上傳 DICOM 或同步 api/uploads/dicom 檔案。';
+const MISSING_STORAGE_MESSAGE = '影像原始檔目前不在安全儲存區，請重新上傳 DICOM，或請系統管理人員協助恢復原始檔。';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -64,6 +72,7 @@ async function readApiError(res: Response, fallback: string): Promise<string> {
   const payload = await res.json().catch(() => null) as ErrorPayload | null;
   if (payload?.error?.message) return payload.error.message;
   if (typeof payload?.detail === 'string') return payload.detail;
+  if (payload?.detail && typeof payload.detail === 'object' && 'message' in payload.detail && typeof payload.detail.message === 'string') return payload.detail.message;
   if (res.status === 401) return '登入狀態已失效，請重新登入後查看影像庫';
   return fallback;
 }
@@ -71,6 +80,18 @@ async function readApiError(res: Response, fallback: string): Promise<string> {
 function authHeaders(): HeadersInit {
   const token = getPatientSessionToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function operationHeaders(key: string): Headers {
+  const headers = new Headers(authHeaders());
+  headers.set('Idempotency-Key', key);
+  return headers;
+}
+
+function newOperationKey(prefix: string): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? `${prefix}-${crypto.randomUUID()}`
+    : `${prefix}-${Date.now()}-${Math.random()}`;
 }
 
 const BADGE: React.CSSProperties = {
@@ -117,6 +138,8 @@ function AuthenticatedThumbnail({ seriesId }: { seriesId: string }) {
     return <span style={{ color: '#6b7c8c', fontSize: '11px', fontWeight: 700 }}>載入</span>;
   }
   return (
+    // Blob URLs are authenticated, short-lived previews and cannot use Next Image optimization.
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={thumbnail.src}
       alt=""
@@ -132,10 +155,16 @@ export default function ImagingPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { activeMember, setActiveMember, members } = useActiveMember();
+  const { activeMember, setActiveMember, members, canWriteMember, writeAccessReason } = useActiveMember();
+  const { showToast } = useToast();
 
   const [studies, setStudies] = useState<StudyOut[]>([]);
   const [total, setTotal] = useState(0);
+  const [deletedStudies, setDeletedStudies] = useState<StudyOut[]>([]);
+  const [deletedLoading, setDeletedLoading] = useState(false);
+  const [deletedError, setDeletedError] = useState('');
+  const [section, setSection] = useState<'active' | 'deleted'>('active');
+  const [restoringId, setRestoringId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -144,8 +173,20 @@ export default function ImagingPage() {
   const [shareResult, setShareResult] = useState<(ShareResult & { label: string }) | null>(null);
   const [sharingId, setSharingId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [operationError, setOperationError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; description: string; member: string } | null>(null);
+  const operationKeysRef = useRef(new Map<string, string>());
   const [filterMember, setFilterMember] = useState(() => activeMember || '全部');
   const requestedMemberParam = searchParams.get('member');
+
+  const operationKey = (action: 'delete' | 'restore', studyId: string) => {
+    const identity = `${action}:${studyId}`;
+    const existing = operationKeysRef.current.get(identity);
+    if (existing) return existing;
+    const created = newOperationKey(`dicom-${action}`);
+    operationKeysRef.current.set(identity, created);
+    return created;
+  };
 
   useEffect(() => {
     if (requestedMemberParam === null) return;
@@ -178,13 +219,9 @@ export default function ImagingPage() {
         setStudies(data);
         setTotal(parseInt(r.headers.get('X-Total-Count') ?? String(data.length), 10));
       } else {
-        setStudies([]);
-        setTotal(0);
         setError(await readApiError(r, '無法載入影像庫'));
       }
     } catch {
-      setStudies([]);
-      setTotal(0);
       setError('無法連線到影像庫，請稍後再試');
     } finally {
       setLoading(false);
@@ -192,6 +229,26 @@ export default function ImagingPage() {
   }, [filterMember]);
 
   useEffect(() => { fetchStudies(); }, [fetchStudies]);
+
+  const fetchDeletedStudies = useCallback(async () => {
+    setDeletedLoading(true);
+    setDeletedError('');
+    try {
+      const params = new URLSearchParams({ deleted: 'true', limit: '50', offset: '0' });
+      if (filterMember !== '全部') params.set('member', filterMember);
+      const response = await fetch(`/api/dicom/studies?${params}`, { credentials: 'include', headers: authHeaders() });
+      if (!response.ok) throw new Error(await readApiError(response, '無法載入最近刪除'));
+      setDeletedStudies(await response.json() as StudyOut[]);
+    } catch (error) {
+      setDeletedError(error instanceof Error ? error.message : '無法載入最近刪除');
+    } finally {
+      setDeletedLoading(false);
+    }
+  }, [filterMember]);
+
+  useEffect(() => {
+    if (section === 'deleted') void fetchDeletedStudies();
+  }, [fetchDeletedStudies, section]);
 
   const handleLoadMore = async () => {
     setLoadingMore(true);
@@ -208,6 +265,8 @@ export default function ImagingPage() {
       } else {
         setError(await readApiError(r, '無法載入更多影像'));
       }
+    } catch {
+      setError('無法載入更多影像；已顯示的影像仍保留。');
     } finally {
       setLoadingMore(false);
     }
@@ -240,27 +299,82 @@ export default function ImagingPage() {
     }
   };
 
-  const handleDelete = async (studyId: string, desc: string) => {
-    if (!confirm(`確定要刪除「${desc}」這筆影像檢查？\n所有影像檔案將一併刪除，此操作無法復原。`)) return;
+  const handleDelete = async () => {
+    if (!deleteTarget || deletingId) return;
+    if (!canWriteMember(deleteTarget.member)) {
+      showToast(writeAccessReason(deleteTarget.member) || '權限仍在確認中，目前只能查看。', 'info');
+      setDeleteTarget(null);
+      return;
+    }
+    const studyId = deleteTarget.id;
     setDeletingId(studyId);
+    setOperationError('');
     try {
       const r = await fetch(`/api/dicom/studies/${studyId}`, {
         method: 'DELETE',
         credentials: 'include',
-        headers: authHeaders(),
+        headers: operationHeaders(operationKey('delete', studyId)),
       });
       if (r.ok) {
+        const result = await r.json() as DeleteStudyResult;
+        const removed = studies.find(study => study.id === studyId);
         setStudies(prev => prev.filter(s => s.id !== studyId));
+        if (removed) setDeletedStudies(previous => [{ ...removed, deleted_at: result.deleted_at, recoverable: result.recoverable }, ...previous.filter(item => item.id !== removed.id)]);
+        setTotal(previous => Math.max(0, previous - 1));
+        setDeleteTarget(null);
+        showToast(
+          `影像檢查已移到最近刪除${result.revoked_share_count ? `，並撤銷 ${result.revoked_share_count} 個分享連結` : ''}。`,
+          'success',
+          result.recoverable && removed ? {
+            label: '復原',
+            durationMs: 8000,
+            onClick: () => { void restoreStudy({ ...removed, deleted_at: result.deleted_at, recoverable: true }); },
+          } : undefined,
+        );
       } else {
-        alert(await readApiError(r, '無法刪除影像檢查'));
+        const message = await readApiError(r, '無法刪除影像檢查');
+        setOperationError(`${message}；本次沒有移除，影像與清單項目都仍保留，請稍後重試。`);
       }
+    } catch {
+      setOperationError('網路連線中斷；無法確認刪除結果。清單項目仍保留，請重新載入確認後再重試。');
     } finally {
       setDeletingId(null);
     }
   };
 
+  const restoreStudy = async (study: StudyOut) => {
+    if (restoringId === study.id) return;
+    if (!canWriteMember(study.member_name)) {
+      showToast(writeAccessReason(study.member_name) || '權限仍在確認中，目前無法復原影像。', 'info');
+      return;
+    }
+    setRestoringId(study.id);
+    setOperationError('');
+    try {
+      const response = await fetch(`/api/dicom/studies/${study.id}/restore`, { method: 'POST', credentials: 'include', headers: operationHeaders(operationKey('restore', study.id)) });
+      if (!response.ok) throw new Error(await readApiError(response, '無法復原影像檢查'));
+      const restored = await response.json() as StudyOut;
+      setDeletedStudies(previous => previous.filter(item => item.id !== study.id));
+      setStudies(previous => [restored, ...previous.filter(item => item.id !== study.id)]);
+      setTotal(previous => previous + 1);
+      operationKeysRef.current.delete(`delete:${study.id}`);
+      operationKeysRef.current.delete(`restore:${study.id}`);
+      showToast('影像檢查已復原。先前撤銷的分享連結不會自動恢復。', 'success');
+    } catch (error) {
+      setOperationError(`${error instanceof Error ? error.message : '復原失敗'}；影像仍在最近刪除，請重試。`);
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
   const handleShareStudy = async (studyId: string, desc: string) => {
+    const study = studies.find(item => item.id === studyId);
+    if (!study || !canWriteMember(study.member_name)) {
+      showToast(writeAccessReason(study?.member_name) || '權限仍在確認中，目前不能建立分享連結。', 'info');
+      return;
+    }
     setSharingId(studyId);
+    setOperationError('');
     try {
       const r = await fetch('/api/dicom/share', {
         method: 'POST', credentials: 'include',
@@ -273,15 +387,22 @@ export default function ImagingPage() {
         setShareResult({ share_url: shareUrl, expires_at: data.expires_at, label: desc });
         await navigator.clipboard.writeText(shareUrl).catch(() => {});
       } else {
-        alert(await readApiError(r, '無法建立分享連結'));
+        setOperationError(`${await readApiError(r, '無法建立分享連結')}；分享連結尚未建立。`);
       }
+    } catch {
+      setOperationError('網路連線中斷，分享連結尚未建立。請稍後重試。');
     } finally {
       setSharingId(null);
     }
   };
 
-  const handleShareSeries = async (seriesId: string, desc: string) => {
+  const handleShareSeries = async (seriesId: string, desc: string, memberName: string) => {
+    if (!canWriteMember(memberName)) {
+      showToast(writeAccessReason(memberName) || '權限仍在確認中，目前不能建立分享連結。', 'info');
+      return;
+    }
     setSharingId(seriesId);
+    setOperationError('');
     try {
       const r = await fetch('/api/dicom/share', {
         method: 'POST', credentials: 'include',
@@ -294,8 +415,10 @@ export default function ImagingPage() {
         setShareResult({ share_url: shareUrl, expires_at: data.expires_at, label: desc });
         await navigator.clipboard.writeText(shareUrl).catch(() => {});
       } else {
-        alert(await readApiError(r, '無法建立分享連結'));
+        setOperationError(`${await readApiError(r, '無法建立分享連結')}；分享連結尚未建立。`);
       }
+    } catch {
+      setOperationError('網路連線中斷，分享連結尚未建立。請稍後重試。');
     } finally {
       setSharingId(null);
     }
@@ -307,40 +430,36 @@ export default function ImagingPage() {
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
       <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
 
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' }}>
-          <div style={{ flex: 1 }}>
-            <h2 style={{ fontSize: '26px', fontWeight: '800', color: '#111' }}>影像庫</h2>
-            <p style={{ fontSize: '14px', color: '#666', marginTop: '2px' }}>
-              共 {total || studies.length} 筆影像檢查
-            </p>
-            <p style={{ fontSize: '12px', color: '#8a6d3b', marginTop: '6px', lineHeight: 1.5 }}>
-              影像分享是一般 DICOM 檢視連結，預設 24 小時有效；急診現場請優先使用「急診保命連結」。
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
+        <PageHeader
+          eyebrow="紀錄"
+          title="醫學影像"
+          description={`共 ${total || studies.length} 筆影像檢查。一般影像分享預設 24 小時有效；急診現場請使用「急診資訊」。`}
+          actions={<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
-              onClick={() => router.push('/dashboard/imaging/shares')}
+              onClick={() => router.push(memberHref('/dashboard/imaging/shares', activeMember))}
+              className="hk-btn hk-btn-ghost"
               style={{
-                background: '#fff', color: '#555', border: '1px solid var(--gray-200)',
-                padding: '10px 16px', borderRadius: '10px', fontWeight: '600',
-                fontSize: '14px', cursor: 'pointer',
+                minHeight: 44,
               }}
             >
-              🔗 分享管理
+              <Share2 size={17} aria-hidden="true" /> 分享管理
             </button>
             <button
-              onClick={() => router.push('/dashboard/imaging/upload')}
+              onClick={() => router.push(memberHref('/dashboard/imaging/upload', activeMember))}
+              disabled={!canWriteMember(activeMember)}
+              className="hk-btn hk-btn-primary"
               style={{
-                background: 'var(--primary)', color: '#fff', border: 'none',
-                padding: '10px 20px', borderRadius: '10px', fontWeight: '700',
-                fontSize: '14px', cursor: 'pointer',
+                minHeight: 44,
               }}
             >
-              + 上傳影像
+              <Upload size={17} aria-hidden="true" /> 上傳影像
             </button>
-          </div>
-        </div>
+          </div>}
+        />
+
+        {!canWriteMember(activeMember) && (
+          <div style={{ marginBottom: 16 }}><ReadOnlyNotice>{writeAccessReason(activeMember) || '權限仍在確認中，目前只能查看影像。'}</ReadOnlyNotice></div>
+        )}
 
         {/* Member filter */}
         <div className="desktop-only" style={{ marginBottom: '20px' }}>
@@ -348,7 +467,7 @@ export default function ImagingPage() {
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             {memberOptions.map(m => (
               <button key={m} onClick={() => switchMember(m)} style={{
-                padding: '6px 14px', borderRadius: '20px', border: '1px solid',
+                minHeight: 44, padding: '6px 14px', borderRadius: '20px', border: '1px solid',
                 borderColor: filterMember === m ? 'var(--primary)' : 'var(--gray-200)',
                 background: filterMember === m ? 'var(--primary)' : '#fff',
                 color: filterMember === m ? '#fff' : '#555',
@@ -358,6 +477,18 @@ export default function ImagingPage() {
           </div>
         </div>
 
+        <div role="tablist" aria-label="影像區段" style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          <button type="button" role="tab" aria-selected={section === 'active'} className={`hk-btn ${section === 'active' ? 'hk-btn-primary' : 'hk-btn-ghost'}`} style={{ minHeight: 44 }} onClick={() => setSection('active')}><Images size={17} aria-hidden="true" />目前影像</button>
+          <button type="button" role="tab" aria-selected={section === 'deleted'} className={`hk-btn ${section === 'deleted' ? 'hk-btn-primary' : 'hk-btn-ghost'}`} style={{ minHeight: 44 }} onClick={() => setSection('deleted')}><Trash2 size={17} aria-hidden="true" />最近刪除 {deletedStudies.length > 0 ? `(${deletedStudies.length})` : ''}</button>
+        </div>
+
+        {operationError && (
+          <div role="alert" style={{ background: '#faecea', border: '1px solid #f2d3cf', color: '#a03a30', borderRadius: 12, padding: '12px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ flex: '1 1 260px', fontSize: 13, fontWeight: 700 }}>{operationError}</span>
+            <button type="button" className="hk-btn hk-btn-ghost hk-btn-sm" style={{ minHeight: 44 }} onClick={() => setOperationError('')}>關閉</button>
+          </div>
+        )}
+
         {/* Share result banner */}
         {shareResult && (
           <div style={{
@@ -365,7 +496,7 @@ export default function ImagingPage() {
             padding: '16px 20px', marginBottom: '20px',
             display: 'flex', gap: '12px', alignItems: 'flex-start',
           }}>
-            <span style={{ fontSize: '20px', flexShrink: 0 }}>🔗</span>
+            <Share2 size={20} aria-hidden="true" style={{ flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: '700', fontSize: '14px', color: '#2e7d32', marginBottom: '4px' }}>
                 分享連結已複製到剪貼簿
@@ -379,46 +510,26 @@ export default function ImagingPage() {
                 </div>
               )}
               <div style={{ fontSize: '11px', color: '#8a6d3b', marginTop: '4px' }}>
-                這是影像檢視連結，不包含紅區摘要、醫師 break-glass 或急診存取紀錄。
+                這是一般影像檢視連結，不包含急診摘要、現場身分確認或急診存取紀錄。
               </div>
             </div>
-            <button onClick={() => setShareResult(null)} style={{
+            <button type="button" aria-label="關閉分享結果" onClick={() => setShareResult(null)} style={{
               background: 'none', border: 'none', color: '#aaa', fontSize: '18px',
-              cursor: 'pointer', flexShrink: 0,
-            }}>×</button>
+              cursor: 'pointer', flexShrink: 0, width: 44, height: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            }}><X size={18} aria-hidden="true" /></button>
           </div>
         )}
 
         {/* Studies list */}
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#999' }}>載入中...</div>
-        ) : error ? (
-          <div style={{ textAlign: 'center', padding: '60px' }}>
-            <div style={{ fontSize: '42px', marginBottom: '16px' }}>⚠️</div>
-            <div style={{ fontWeight: '700', color: '#333', marginBottom: '8px' }}>影像庫暫時無法載入</div>
-            <p style={{ fontSize: '14px', color: '#999', marginBottom: '20px' }}>{error}</p>
-            <button onClick={fetchStudies} style={{
-              background: 'var(--primary)', color: '#fff', border: 'none',
-              padding: '12px 28px', borderRadius: '10px', fontWeight: '700', cursor: 'pointer',
-            }}>
-              重新載入
-            </button>
-          </div>
+        {section === 'active' ? (loading && studies.length === 0 ? (
+          <AsyncState state="loading" title="正在載入影像檢查…" />
+        ) : error && studies.length === 0 ? (
+          <AsyncState state="error" title="影像庫暫時無法載入" description={`${error}。這不代表沒有影像，既有資料沒有被移除。`} onRetry={() => { void fetchStudies(); }} />
         ) : studies.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px' }}>
-            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🩻</div>
-            <div style={{ fontWeight: '700', color: '#333', marginBottom: '8px' }}>尚無影像資料</div>
-            <p style={{ fontSize: '14px', color: '#999', marginBottom: '20px' }}>
-              上傳 DICOM 資料夾、ZIP 壓縮檔或多個 .dcm 檔案
-            </p>
-            <button onClick={() => router.push('/dashboard/imaging/upload')} style={{
-              background: 'var(--primary)', color: '#fff', border: 'none',
-              padding: '12px 28px', borderRadius: '10px', fontWeight: '700', cursor: 'pointer',
-            }}>
-              上傳第一份影像
-            </button>
-          </div>
+          <div><AsyncState state="empty" title="目前沒有影像資料" description="可上傳 DICOM 資料夾、ZIP 壓縮檔或多個 DICOM 檔案。" /><button type="button" className="hk-btn hk-btn-primary" style={{ minHeight: 44, margin: '14px auto 0', display: 'flex' }} disabled={!canWriteMember(activeMember)} onClick={() => router.push(memberHref('/dashboard/imaging/upload', activeMember))}><Upload size={17} aria-hidden="true" />上傳第一份影像</button></div>
         ) : (
+          <div>
+            {error && <div style={{ marginBottom: 14 }}><AsyncState state="partial" title="目前顯示上一次成功載入的影像" description="重新整理失敗，畫面上的資料可能不是最新狀態。" onRetry={() => { void fetchStudies(); }} /></div>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {studies.map((study) => {
               const isExpanded = !!expanded[study.id];
@@ -449,7 +560,7 @@ export default function ImagingPage() {
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       flexDirection: 'column', gap: '2px',
                     }}>
-                      <span style={{ fontSize: '20px' }}>🩻</span>
+                      <Images size={21} aria-hidden="true" style={{ color: modalityColor(study.modality) }} />
                     </div>
 
                     {/* Info */}
@@ -474,7 +585,7 @@ export default function ImagingPage() {
                       </div>
                       <div style={{ display: 'flex', gap: '12px', marginTop: '4px', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '12px', color: '#888' }}>
-                          📅 {formatDicomDate(study.study_date)}
+                          <CalendarDays size={14} aria-hidden="true" style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />{formatDicomDate(study.study_date)}
                         </span>
                         <span style={{ fontSize: '12px', color: '#888' }}>
                           {study.series_count} 個序列
@@ -490,7 +601,7 @@ export default function ImagingPage() {
                       </div>
                       {studyMissing && (
                         <div style={{ fontSize: '12px', color: '#92400e', marginTop: 6, lineHeight: 1.5 }}>
-                          目前只保留影像索引，不能查看或分享。請重新上傳 DICOM，或將原始檔同步到 <code>api/uploads/dicom</code>。
+                          目前只保留影像索引，不能查看或分享。請重新上傳 DICOM，或請系統管理人員協助恢復安全儲存區中的原始檔。
                         </div>
                       )}
                     </div>
@@ -499,35 +610,41 @@ export default function ImagingPage() {
                     <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                       <button
                         onClick={() => handleShareStudy(study.id, desc)}
-                        disabled={sharingId === study.id || studyMissing}
+                        disabled={sharingId === study.id || studyMissing || !canWriteMember(study.member_name)}
                         title={studyMissing ? MISSING_STORAGE_MESSAGE : '建立影像分享連結'}
                         style={{
-                          padding: '7px 14px', borderRadius: '8px',
+                          minHeight: 44, padding: '7px 14px', borderRadius: '8px',
                           border: '1px solid var(--primary)',
                           background: '#fff', color: 'var(--primary)',
                           fontSize: '12px', fontWeight: '600', cursor: 'pointer',
                           opacity: sharingId === study.id || studyMissing ? 0.45 : 1,
                         }}
                       >
-                        {sharingId === study.id ? '...' : '🔗 分享'}
+                        <Share2 size={15} aria-hidden="true" /> {sharingId === study.id ? '建立中…' : '分享'}
                       </button>
                       <button
-                        onClick={() => handleDelete(study.id, desc)}
-                        disabled={isDeleting}
+                        onClick={() => {
+                          if (studyMissing) return;
+                          setDeleteTarget({ id: study.id, description: desc, member: study.member_name });
+                        }}
+                        disabled={isDeleting || studyMissing || !canWriteMember(study.member_name)}
+                        aria-label={`移到最近刪除：${desc}`}
+                        title={studyMissing ? MISSING_STORAGE_MESSAGE : '移到最近刪除'}
                         style={{
-                          padding: '7px 12px', borderRadius: '8px',
+                          minWidth: 44, minHeight: 44, padding: '7px 12px', borderRadius: '8px',
                           border: '1px solid var(--gray-200)',
                           background: '#fff', color: '#f44336',
-                          fontSize: '12px', cursor: 'pointer',
+                          fontSize: '12px', cursor: studyMissing ? 'not-allowed' : 'pointer',
+                          opacity: isDeleting || studyMissing ? 0.45 : 1,
                         }}
                       >
-                        刪除
+                        <Trash2 size={16} aria-hidden="true" />
                       </button>
                     </div>
 
                     {/* Expand chevron */}
-                    <span style={{ color: '#bbb', fontSize: '14px', flexShrink: 0 }}>
-                      {isExpanded ? '▲' : '▼'}
+                    <span style={{ color: '#6b7c8c', fontSize: '14px', flexShrink: 0 }} aria-hidden="true">
+                      {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
                     </span>
                   </div>
 
@@ -580,31 +697,32 @@ export default function ImagingPage() {
                                   <button
                                     onClick={() => {
                                       if (seriesMissing) return;
-                                      router.push(`/dashboard/imaging/viewer/${series.id}`);
+                                      router.push(memberHref(`/dashboard/imaging/viewer/${series.id}`, study.member_name));
                                     }}
                                     disabled={seriesMissing}
                                     title={seriesMissing ? MISSING_STORAGE_MESSAGE : '查看序列'}
                                     style={{
-                                      padding: '6px 14px', borderRadius: '8px',
+                                      minHeight: 44, padding: '6px 14px', borderRadius: '8px',
                                       background: seriesMissing ? '#e5e7eb' : 'var(--primary)', color: seriesMissing ? '#93a3af' : '#fff',
                                       border: 'none', fontSize: '12px', fontWeight: '600', cursor: 'pointer',
                                     }}
                                   >
-                                    {seriesMissing ? '需補檔' : '👁 查看'}
+                                    {seriesMissing ? '需補檔' : <><Eye size={15} aria-hidden="true" /> 查看</>}
                                   </button>
                                   <button
-                                    onClick={() => handleShareSeries(series.id, seriesDesc)}
-                                    disabled={sharingId === series.id || seriesMissing}
+                                    onClick={() => handleShareSeries(series.id, seriesDesc, study.member_name)}
+                                    disabled={sharingId === series.id || seriesMissing || !canWriteMember(study.member_name)}
+                                    aria-label={`分享序列：${seriesDesc}`}
                                     title={seriesMissing ? MISSING_STORAGE_MESSAGE : '分享序列'}
                                     style={{
-                                      padding: '6px 12px', borderRadius: '8px',
+                                      minWidth: 44, minHeight: 44, padding: '6px 12px', borderRadius: '8px',
                                       border: '1px solid var(--gray-200)',
                                       background: '#fff', color: '#555',
                                       fontSize: '12px', cursor: 'pointer',
                                       opacity: sharingId === series.id || seriesMissing ? 0.45 : 1,
                                     }}
                                   >
-                                    {sharingId === series.id ? '...' : '🔗'}
+                                    {sharingId === series.id ? '…' : <Share2 size={15} aria-hidden="true" />}
                                   </button>
                                 </div>
                               </div>
@@ -633,9 +751,30 @@ export default function ImagingPage() {
                 {loadingMore ? '載入中...' : `載入更多（還有 ${total - studies.length} 筆）`}
               </button>
             )}
-          </div>
+          </div></div>
+        )) : (
+          <section aria-labelledby="deleted-imaging-title">
+            <h2 id="deleted-imaging-title" style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>最近刪除</h2>
+            <p style={{ fontSize: 13, color: '#56687a', lineHeight: 1.6, marginBottom: 16 }}>影像移除後仍保留原始檔，可在這裡復原。為避免已外流連結繼續存取，相關分享會在移除時撤銷，復原影像不會自動恢復分享。</p>
+            {deletedLoading && deletedStudies.length === 0 ? <AsyncState state="loading" title="正在載入最近刪除…" /> : deletedError && deletedStudies.length === 0 ? <AsyncState state="error" title="最近刪除暫時無法載入" description="這不代表沒有已移除的影像。" onRetry={() => { void fetchDeletedStudies(); }} /> : deletedStudies.length === 0 ? <AsyncState state="empty" title="最近刪除目前沒有影像" description="從影像庫移除的檢查會出現在這裡，並保留復原入口。" /> : (
+              <div>{deletedError && <div style={{ marginBottom: 14 }}><AsyncState state="partial" title="目前顯示上一次成功載入的最近刪除" description="清單可能不是最新狀態。" onRetry={() => { void fetchDeletedStudies(); }} /></div>}<div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{deletedStudies.map(study => {
+                const description = study.study_description || (study.modality ? `${study.modality} 影像` : '未命名檢查');
+                const recoverable = study.recoverable !== false && Boolean(study.storage_available);
+                return <article key={study.id} style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}><Images size={21} aria-hidden="true" style={{ color: modalityColor(study.modality) }} /><div style={{ flex: '1 1 220px', minWidth: 0 }}><strong style={{ display: 'block' }}>{description}</strong><span style={{ display: 'block', marginTop: 3, fontSize: 12, color: '#687989' }}>{study.member_name} · {formatDicomDate(study.study_date)} · 已於 {study.deleted_at ? new Date(study.deleted_at).toLocaleString('zh-TW') : '最近'}移除</span><span style={{ display: 'block', marginTop: 3, fontSize: 12, color: recoverable ? '#687989' : '#8f342b' }}>{recoverable ? `${study.instance_count} 張影像；原始檔仍保留，可復原。` : '原始影像目前不完整，無法復原；請聯絡支援人員確認保存狀態。'}</span></div>{recoverable ? <button type="button" className="hk-btn hk-btn-ghost" style={{ minHeight: 44 }} disabled={restoringId === study.id || !canWriteMember(study.member_name)} onClick={() => { void restoreStudy(study); }}><RotateCcw size={16} aria-hidden="true" />{restoringId === study.id ? '復原中…' : '復原'}</button> : null}</article>;
+              })}</div></div>
+            )}
+          </section>
         )}
       </div>
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => { void handleDelete(); }}
+        title="移到最近刪除？"
+        description={deleteTarget ? `「${deleteTarget.description}」會從影像庫移除，但原始影像仍保留並可復原。與這筆影像相關的分享連結會立即撤銷，復原影像時不會自動恢復分享。` : undefined}
+        confirmLabel={deletingId ? '移除中…' : '移到最近刪除'}
+        danger
+      />
     </div>
   );
 }

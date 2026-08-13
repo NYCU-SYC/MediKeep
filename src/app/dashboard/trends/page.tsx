@@ -1,160 +1,389 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
+import {
+  Activity,
+  ArrowLeft,
+  BarChart3,
+  CircleCheck,
+  Droplets,
+  Footprints,
+  Gauge,
+  HeartPulse,
+  Info,
+  Lightbulb,
+  LoaderCircle,
+  Moon,
+  Plus,
+  RefreshCw,
+  Scale,
+  TriangleAlert,
+  Users,
+} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { api, ApiError, invalidateApiGetCache } from '@/lib/api';
+import { memberHref, memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
 import { useActiveMember } from '../member-context';
-import { memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
+import { analyzeHealthRecords, type HealthInsight, type HealthRecord } from './insights';
+import { buildTrendsUrl, normalizeTrendsSection, type TrendsSection } from './routes';
 
-type RecordOut = {
+type Point = {
   id: string;
-  record_type: string;
-  value1: string | null;
-  value2: string | null;
-  unit: string | null;
-  recorded_at: string;
+  label: string;
+  value: number;
+  value2?: number;
 };
 
-type Point = { label: string; value: number; value2?: number };
-
 const METRICS = [
-  { key: 'blood_pressure', label: '血壓',   icon: '❤️',  unit: 'mmHg', color: '#f44336', target: 140, targetLabel: '警戒 140' },
-  { key: 'heart_rate',     label: '心跳',   icon: '💓',  unit: 'bpm',  color: '#e91e63', target: 100, targetLabel: '上限 100' },
-  { key: 'glucose',        label: '血糖',   icon: '🩸',  unit: 'mg/dL', color: '#ff9800', target: 130, targetLabel: '上限 130' },
-  { key: 'weight',         label: '體重',   icon: '⚖️',  unit: 'kg',   color: '#2196f3' },
-  { key: 'steps',          label: '步數',   icon: '👟',  unit: '步',   color: '#4caf50', target: 8000, targetLabel: '目標 8,000' },
-  { key: 'sleep',          label: '睡眠',   icon: '😴',  unit: 'h',    color: '#9c27b0', target: 7, targetLabel: '目標 7h' },
-  { key: 'bmi',            label: 'BMI',    icon: '📊',  unit: '',     color: '#00bcd4' },
-  { key: 'body_fat',       label: '體脂率', icon: '🔬',  unit: '%',    color: '#795548' },
+  { key: 'blood_pressure', label: '血壓', unit: 'mmHg', color: '#0f766e', target: 140, targetLabel: '參考值 140', icon: Gauge },
+  { key: 'heart_rate', label: '心跳', unit: 'bpm', color: '#0e7490', target: 100, targetLabel: '參考值 100', icon: HeartPulse },
+  { key: 'glucose', label: '血糖', unit: 'mg/dL', color: '#0369a1', icon: Droplets },
+  { key: 'weight', label: '體重', unit: 'kg', color: '#2563eb', icon: Scale },
+  { key: 'steps', label: '步數', unit: '步', color: '#15803d', icon: Footprints },
+  { key: 'sleep', label: '睡眠', unit: '小時', color: '#475569', icon: Moon },
+  { key: 'bmi', label: 'BMI', unit: '', color: '#0e7490', icon: Activity },
+  { key: 'body_fat', label: '體脂率', unit: '%', color: '#0f766e', icon: BarChart3 },
 ] as const;
 
-type MetricKey = typeof METRICS[number]['key'];
+type MetricKey = (typeof METRICS)[number]['key'];
+type Metric = (typeof METRICS)[number];
 
-// ── SVG Line Chart ────────────────────────────────────────────────────────────
-function LineChart({ points, color, target, targetLabel, showDiastolic }: {
-  points: Point[]; color: string; target?: number; targetLabel?: string; showDiastolic?: boolean;
+const panelStyle: CSSProperties = {
+  background: '#fff',
+  border: '1px solid var(--gray-200)',
+  borderRadius: 16,
+  boxShadow: 'var(--shadow-sm)',
+};
+
+function isMetricKey(value: string | null): value is MetricKey {
+  return METRICS.some((metric) => metric.key === value);
+}
+
+function recordsFromResponse(response: unknown): HealthRecord[] {
+  if (Array.isArray(response)) return response as HealthRecord[];
+  if (response && typeof response === 'object' && Array.isArray((response as { items?: unknown }).items)) {
+    return (response as { items: HealthRecord[] }).items;
+  }
+  throw new Error('Unexpected records response');
+}
+
+function pointsForMetric(records: HealthRecord[], metric: MetricKey): Point[] {
+  return records
+    .filter((record) => record.record_type === metric)
+    .slice(0, 30)
+    .reverse()
+    .map((record) => ({
+      id: record.id,
+      label: new Date(record.recorded_at).toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' }),
+      value: Number.parseFloat(record.value1 ?? ''),
+      value2: record.value2 == null ? undefined : Number.parseFloat(record.value2),
+    }))
+    .filter((point) => Number.isFinite(point.value))
+    .map((point) => ({
+      ...point,
+      value2: Number.isFinite(point.value2) ? point.value2 : undefined,
+    }));
+}
+
+function LineChart({
+  points,
+  metric,
+  showSecondValue,
+}: {
+  points: Point[];
+  metric: Metric;
+  showSecondValue: boolean;
 }) {
   if (points.length < 2) return null;
-  const W = 560; const H = 160;
-  const PAD = { top: 16, right: 24, bottom: 28, left: 48 };
-  const iW = W - PAD.left - PAD.right;
-  const iH = H - PAD.top - PAD.bottom;
-
-  const vals = points.map(p => p.value);
-  const allVals = showDiastolic
-    ? [...vals, ...points.map(p => p.value2 ?? p.value)]
-    : vals;
-  const minV = Math.min(...allVals);
-  const maxV = Math.max(...allVals);
-  const rng = maxV - minV || 1;
-  const lo = Math.floor(minV - rng * 0.2);
-  const hi = Math.ceil(maxV + rng * 0.2);
-  const tot = hi - lo || 1;
-
-  const tx = (i: number) => PAD.left + (i / (points.length - 1)) * iW;
-  const ty = (v: number) => PAD.top + iH - ((v - lo) / tot) * iH;
-
-  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${tx(i).toFixed(1)} ${ty(p.value).toFixed(1)}`).join(' ');
-  const areaD = `${pathD} L ${tx(points.length - 1).toFixed(1)} ${PAD.top + iH} L ${PAD.left} ${PAD.top + iH} Z`;
-
-  const diastolicPathD = showDiastolic
-    ? points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${tx(i).toFixed(1)} ${ty(p.value2 ?? p.value).toFixed(1)}`).join(' ')
+  const width = 560;
+  const height = 176;
+  const padding = { top: 18, right: 34, bottom: 34, left: 50 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const values = points.flatMap((point) => [
+    point.value,
+    ...(showSecondValue && point.value2 !== undefined ? [point.value2] : []),
+  ]);
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const range = maximum - minimum || Math.max(Math.abs(maximum) * 0.1, 1);
+  const low = Math.floor(minimum - range * 0.2);
+  const high = Math.ceil(maximum + range * 0.2);
+  const total = high - low || 1;
+  const x = (index: number) => padding.left + (index / (points.length - 1)) * innerWidth;
+  const y = (value: number) => padding.top + innerHeight - ((value - low) / total) * innerHeight;
+  const mainPath = points
+    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(index).toFixed(1)} ${y(point.value).toFixed(1)}`)
+    .join(' ');
+  const secondPath = showSecondValue
+    ? points
+        .filter((point) => point.value2 !== undefined)
+        .map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(index).toFixed(1)} ${y(point.value2 ?? point.value).toFixed(1)}`)
+        .join(' ')
     : '';
-
-  const yTicks = [lo, Math.round((lo + hi) / 2), hi];
+  const ticks = [low, Math.round((low + high) / 2), high];
 
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible' }}>
-      {/* Grid lines */}
-      {yTicks.map(v => (
-        <g key={v}>
-          <line x1={PAD.left} y1={ty(v)} x2={PAD.left + iW} y2={ty(v)} stroke="#e9ecef" strokeWidth="1" />
-          <text x={PAD.left - 6} y={ty(v) + 4} textAnchor="end" fontSize="10" fill="#aaa">{v}</text>
+    <svg
+      width="100%"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label={`${metric.label}最近 ${points.length} 筆紀錄的趨勢圖`}
+      style={{ display: 'block', overflow: 'visible' }}
+    >
+      <title>{metric.label}趨勢圖</title>
+      {ticks.map((tick) => (
+        <g key={tick}>
+          <line
+            x1={padding.left}
+            y1={y(tick)}
+            x2={padding.left + innerWidth}
+            y2={y(tick)}
+            stroke="#e2e8f0"
+            strokeWidth="1"
+          />
+          <text x={padding.left - 7} y={y(tick) + 4} textAnchor="end" fontSize="11" fill="#64748b">
+            {tick}
+          </text>
         </g>
       ))}
-      {/* Target line */}
-      {target !== undefined && target >= lo && target <= hi && (
+      {'target' in metric && metric.target >= low && metric.target <= high && (
         <g>
-          <line x1={PAD.left} y1={ty(target)} x2={PAD.left + iW} y2={ty(target)} stroke={color} strokeWidth="1" strokeDasharray="4 4" opacity="0.5" />
-          <text x={PAD.left + iW + 4} y={ty(target) + 4} fontSize="9" fill={color} opacity="0.7">{targetLabel}</text>
+          <line
+            x1={padding.left}
+            y1={y(metric.target)}
+            x2={padding.left + innerWidth}
+            y2={y(metric.target)}
+            stroke={metric.color}
+            strokeWidth="1"
+            strokeDasharray="4 4"
+          />
+          <text x={padding.left + innerWidth + 4} y={y(metric.target) + 4} fontSize="10" fill={metric.color}>
+            {metric.targetLabel}
+          </text>
         </g>
       )}
-      {/* Area fill (systolic only) */}
-      <path d={areaD} fill={color} opacity="0.07" />
-      {/* Diastolic line (blood pressure only) */}
-      {showDiastolic && diastolicPathD && (
-        <path d={diastolicPathD} fill="none" stroke={color} strokeWidth="1.5" strokeDasharray="5 3" strokeLinejoin="round" strokeLinecap="round" opacity="0.6" />
+      {secondPath && (
+        <path
+          d={secondPath}
+          fill="none"
+          stroke={metric.color}
+          strokeWidth="2"
+          strokeDasharray="5 4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity="0.65"
+        />
       )}
-      {/* Systolic / main line */}
-      <path d={pathD} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-      {/* Data point circles */}
-      {points.map((p, i) => (
-        <g key={i}>
-          <circle cx={tx(i)} cy={ty(p.value)} r="4" fill="#fff" stroke={color} strokeWidth="2" />
-          {showDiastolic && p.value2 !== undefined && (
-            <circle cx={tx(i)} cy={ty(p.value2)} r="3" fill="#fff" stroke={color} strokeWidth="1.5" opacity="0.7" />
+      <path
+        d={mainPath}
+        fill="none"
+        stroke={metric.color}
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {points.map((point, index) => (
+        <g key={point.id}>
+          <circle cx={x(index)} cy={y(point.value)} r="4" fill="#fff" stroke={metric.color} strokeWidth="2" />
+          {showSecondValue && point.value2 !== undefined && (
+            <circle cx={x(index)} cy={y(point.value2)} r="3" fill="#fff" stroke={metric.color} strokeWidth="1.5" />
           )}
-          <text x={tx(i)} y={H - 4} textAnchor="middle" fontSize="10" fill="#aaa">{p.label}</text>
+          <text x={x(index)} y={height - 6} textAnchor="middle" fontSize="10" fill="#64748b">
+            {point.label}
+          </text>
         </g>
       ))}
     </svg>
   );
 }
 
-function StatRow({ points, unit, showDiastolic }: { points: Point[]; unit: string; showDiastolic?: boolean }) {
+function MetricStats({ points, metric }: { points: Point[]; metric: Metric }) {
   if (points.length === 0) return null;
-  const vals = points.map(p => p.value);
-  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-  const last = vals[vals.length - 1];
-  const prev = vals.length >= 2 ? vals[vals.length - 2] : last;
-  const delta = last - prev;
-
-  const diastolicVals = showDiastolic ? points.map(p => p.value2).filter((v): v is number => v !== undefined) : [];
-  const diastolicAvg = diastolicVals.length > 0 ? diastolicVals.reduce((a, b) => a + b, 0) / diastolicVals.length : null;
+  const values = points.map((point) => point.value);
+  const latest = values.at(-1) ?? 0;
+  const previous = values.at(-2) ?? latest;
+  const difference = latest - previous;
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const precision = values.some((value) => value % 1 !== 0) ? 1 : 0;
+  const changeText = difference === 0
+    ? '與上次相同'
+    : `較上次${difference > 0 ? '增加' : '減少'} ${Math.abs(difference).toFixed(1)}`;
+  const stats = [
+    { label: '最新', value: latest.toFixed(precision), detail: changeText },
+    { label: '平均', value: average.toFixed(1), detail: `${points.length} 筆平均` },
+    { label: '最低', value: Math.min(...values).toFixed(1), detail: metric.unit },
+    { label: '最高', value: Math.max(...values).toFixed(1), detail: metric.unit },
+  ];
 
   return (
-    <div style={{ marginTop: '16px' }}>
-      <div className="grid-4col">
-        {[
-          { label: '最新', value: last % 1 === 0 ? last.toString() : last.toFixed(1), sub: delta !== 0 ? `${delta > 0 ? '▲' : '▼'} ${Math.abs(delta).toFixed(1)} vs 上次` : '與上次持平', subColor: delta > 0 ? '#f44336' : delta < 0 ? '#4caf50' : '#999' },
-          { label: '平均', value: avg.toFixed(1), sub: `${points.length}筆平均`, subColor: '#999' },
-          { label: '最低', value: (Math.min(...vals)).toFixed(1), sub: unit, subColor: '#4caf50' },
-          { label: '最高', value: (Math.max(...vals)).toFixed(1), sub: unit, subColor: '#f44336' },
-        ].map(s => (
-          <div key={s.label} style={{ background: '#f8f9fa', borderRadius: '10px', padding: '12px', textAlign: 'center' }}>
-            <div style={{ fontSize: '11px', color: '#999', marginBottom: '4px' }}>{s.label}</div>
-            <div style={{ fontSize: '18px', fontWeight: '800', color: '#111' }}>{s.value}</div>
-            <div style={{ fontSize: '10px', color: s.subColor, marginTop: '2px' }}>{s.sub}</div>
-          </div>
-        ))}
-      </div>
-      {/* Diastolic note for blood pressure */}
-      {diastolicAvg !== null && (
-        <div style={{ fontSize: '12px', color: '#6b7c8c', marginTop: '10px', textAlign: 'center' }}>
-          舒張壓平均：{diastolicAvg.toFixed(0)} mmHg（虛線）
+    <dl
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(118px, 1fr))',
+        gap: 10,
+        margin: '18px 0 0',
+      }}
+    >
+      {stats.map((stat) => (
+        <div key={stat.label} style={{ background: '#f8fafc', borderRadius: 12, padding: 12, textAlign: 'center' }}>
+          <dt style={{ color: '#64748b', fontSize: 12 }}>{stat.label}</dt>
+          <dd style={{ margin: '4px 0 0', color: '#172033', fontSize: 20, fontWeight: 800 }}>{stat.value}</dd>
+          <div style={{ color: '#64748b', fontSize: 11, marginTop: 2 }}>{stat.detail}</div>
         </div>
-      )}
-    </div>
+      ))}
+    </dl>
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+const INSIGHT_APPEARANCE: Record<HealthInsight['kind'], {
+  label: string;
+  color: string;
+  background: string;
+  icon: typeof Info;
+}> = {
+  attention: { label: '請留意', color: '#9a3412', background: '#fff7ed', icon: TriangleAlert },
+  steady: { label: '目前穩定', color: '#166534', background: '#f0fdf4', icon: CircleCheck },
+  information: { label: '數值摘要', color: '#075985', background: '#f0f9ff', icon: Info },
+  reminder: { label: '記錄提醒', color: '#334155', background: '#f8fafc', icon: Lightbulb },
+};
+
+function MemberChoice({
+  members,
+  onChoose,
+}: {
+  members: ReturnType<typeof useActiveMember>['members'];
+  onChoose: (member: string) => void;
+}) {
+  return (
+    <section style={{ ...panelStyle, padding: '40px 24px', textAlign: 'center' }} aria-labelledby="choose-member-title">
+      <Users size={40} aria-hidden="true" style={{ color: 'var(--primary)', marginBottom: 14 }} />
+      <h2 id="choose-member-title" style={{ fontSize: 18, color: '#22313f', margin: 0 }}>
+        請選擇要查看的成員
+      </h2>
+      <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.7, margin: '8px 0 20px' }}>
+        健康趨勢依成員分開顯示，選擇一位成員後即可查看。
+      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 10 }}>
+        {members.map((member) => (
+          <button
+            key={member.id}
+            type="button"
+            onClick={() => onChoose(member.name)}
+            style={{
+              minHeight: 44,
+              padding: '9px 18px',
+              borderRadius: 22,
+              border: '1px solid var(--gray-200)',
+              background: '#fff',
+              color: '#22313f',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            {member.name}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function EmptyRecords({ member, onAdd }: { member: string; onAdd: () => void }) {
+  return (
+    <section style={{ ...panelStyle, padding: '48px 24px', textAlign: 'center' }} aria-labelledby="empty-records-title">
+      <BarChart3 size={42} aria-hidden="true" style={{ color: 'var(--primary)', marginBottom: 14 }} />
+      <h2 id="empty-records-title" style={{ fontSize: 18, color: '#22313f', margin: 0 }}>
+        {member}目前還沒有可整理的量測紀錄
+      </h2>
+      <p style={{ color: '#64748b', fontSize: 14, margin: '8px 0 20px' }}>
+        新增血壓、血糖、體重或其他量測後，這裡會顯示實際趨勢與數值摘要。
+      </p>
+      <button
+        type="button"
+        onClick={onAdd}
+        style={{
+          minHeight: 44,
+          padding: '10px 18px',
+          border: 0,
+          borderRadius: 10,
+          background: 'var(--primary)',
+          color: '#fff',
+          fontWeight: 800,
+          cursor: 'pointer',
+        }}
+      >
+        新增第一筆量測
+      </button>
+    </section>
+  );
+}
+
 export default function TrendsPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { activeMember, setActiveMember, members } = useActiveMember();
-  const [activeMetricKey, setActiveMetricKey] = useState<MetricKey>('blood_pressure');
-  const [records, setRecords] = useState<RecordOut[]>([]);
+  const requestedMember = searchParams.get('member');
+  const section = normalizeTrendsSection(searchParams.get('section'));
+  const metricKey: MetricKey = isMetricKey(searchParams.get('metric'))
+    ? searchParams.get('metric') as MetricKey
+    : 'blood_pressure';
+  const metric = METRICS.find((item) => item.key === metricKey) ?? METRICS[0];
+  const MetricIcon = metric.icon;
+  const [data, setData] = useState<{ member: string | null; records: HealthRecord[] }>({ member: null, records: [] });
   const [loading, setLoading] = useState(false);
-  const [summary, setSummary] = useState<Partial<Record<MetricKey, RecordOut[]>>>({});
-  const requestedMemberParam = searchParams.get('member');
-
-  const metric = METRICS.find(m => m.key === activeMetricKey) ?? METRICS[0];
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (requestedMemberParam === null) return;
-    setActiveMember(normalizeMemberName(requestedMemberParam));
-  }, [requestedMemberParam, setActiveMember]);
+    if (requestedMember === null) return;
+    setActiveMember(normalizeMemberName(requestedMember));
+  }, [requestedMember, setActiveMember]);
+
+  const loadRecords = useCallback(async (force = false) => {
+    if (!activeMember) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    if (force) invalidateApiGetCache();
+    try {
+      const response = await api.get('/api/records', { member: activeMember, limit: '100' });
+      setData({ member: activeMember, records: recordsFromResponse(response) });
+    } catch (reason) {
+      const message = reason instanceof ApiError && reason.message !== 'Request failed'
+        ? reason.message
+        : '目前無法更新健康紀錄，請稍後再試。';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeMember]);
+
+  useEffect(() => {
+    void loadRecords();
+  }, [loadRecords]);
+
+  const activeRecords = useMemo(
+    () => data.member === activeMember ? data.records : [],
+    [activeMember, data],
+  );
+  const hasSuccessfulData = Boolean(activeMember && data.member === activeMember);
+  const initialLoading = loading && !hasSuccessfulData;
+  const insights = useMemo(
+    () => activeMember ? analyzeHealthRecords(activeRecords, activeMember) : [],
+    [activeMember, activeRecords],
+  );
+  const points = useMemo(() => pointsForMetric(activeRecords, metricKey), [activeRecords, metricKey]);
+  const metricCounts = useMemo(() => {
+    return activeRecords.reduce<Record<string, number>>((result, record) => {
+      result[record.record_type] = (result[record.record_type] ?? 0) + 1;
+      return result;
+    }, {});
+  }, [activeRecords]);
 
   const switchMember = (member: string) => {
     const normalized = normalizeMemberName(member);
@@ -162,265 +391,411 @@ export default function TrendsPage() {
     router.replace(memberHrefWithCurrentSearch(pathname, searchParams.toString(), normalized), { scroll: false });
   };
 
-  useEffect(() => {
-    if (!activeMember) return;
-    fetch(
-      `/api/records?member=${encodeURIComponent(activeMember)}&record_type=${activeMetricKey}&limit=30`,
-      { credentials: 'include' }
-    )
-      .then(r => r.ok ? r.json() : [])
-      .then((data: RecordOut[]) => setRecords(data))
-      .catch(() => setRecords([]))
-      .finally(() => setLoading(false));
-  }, [activeMember, activeMetricKey]);
+  const switchSection = (nextSection: TrendsSection) => {
+    const hash = typeof window === 'undefined' ? '' : window.location.hash;
+    router.replace(buildTrendsUrl(searchParams.toString(), nextSection, hash), { scroll: false });
+  };
 
-  useEffect(() => {
-    if (!activeMember) return;
-    const fetchAll = async () => {
-      const result: Partial<Record<MetricKey, RecordOut[]>> = {};
-      await Promise.all(
-        METRICS.map(async m => {
-          try {
-            const resp = await fetch(
-              `/api/records?member=${encodeURIComponent(activeMember)}&record_type=${m.key}&limit=10`,
-              { credentials: 'include' }
-            );
-            if (resp.ok) result[m.key] = await resp.json();
-          } catch { /* ignore */ }
-        })
-      );
-      setSummary(result);
-    };
-    fetchAll();
-  }, [activeMember]);
+  const switchMetric = (nextMetric: MetricKey) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('metric', nextMetric);
+    const hash = typeof window === 'undefined' ? '' : window.location.hash;
+    router.replace(`/dashboard/trends?${params.toString()}${hash}`, { scroll: false });
+  };
 
-  const points: Point[] = [...records].reverse().map(r => ({
-    label: new Date(r.recorded_at).toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' }),
-    value: parseFloat(r.value1 ?? '0'),
-    value2: r.value2 ? parseFloat(r.value2) : undefined,
-  }));
-
-  const isBP = activeMetricKey === 'blood_pressure';
+  const addRecord = (type?: MetricKey) => {
+    const uploadType = type === 'body_fat' ? 'body_composition' : type;
+    router.push(memberHref('/dashboard/upload', activeMember, uploadType ? { type: uploadType } : undefined));
+  };
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-      <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
-
-        {/* ── Header ── */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '24px' }}>
+      <div style={{ maxWidth: 'var(--hk-page-wide)', width: '100%', margin: '0 auto' }}>
+        <header style={{ display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap', gap: 14, marginBottom: 18 }}>
           <button
-            onClick={() => router.back()}
+            type="button"
+            onClick={() => router.push(memberHref('/dashboard/health', activeMember))}
+            aria-label="返回健康頁"
             style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              minWidth: '44px', height: '44px', flexShrink: 0,
-              border: '1px solid var(--gray-200)', background: '#fff', borderRadius: '12px',
-              fontSize: '18px', cursor: 'pointer', color: '#555', boxShadow: 'var(--shadow-sm)',
+              width: 44,
+              height: 44,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: '1px solid var(--gray-200)',
+              borderRadius: 12,
+              background: '#fff',
+              color: '#334155',
+              cursor: 'pointer',
+              flexShrink: 0,
             }}
-          >←</button>
-          <div style={{ flex: 1 }}>
-            <h2 style={{ fontSize: '22px', fontWeight: '800', color: '#22313f', lineHeight: 1.2 }}>趨勢分析</h2>
-            <p style={{ fontSize: '13px', color: '#6b7c8c', marginTop: '3px' }}>
-              {activeMember ? `${activeMember}的健康指標趨勢` : '追蹤各項健康指標的變化'}
+          >
+            <ArrowLeft size={20} aria-hidden="true" />
+          </button>
+          <div style={{ flex: '1 1 240px' }}>
+            <h1 style={{ fontSize: 26, lineHeight: 1.2, color: '#172033', margin: 0 }}>健康趨勢</h1>
+            <p style={{ color: '#64748b', fontSize: 14, margin: '5px 0 0' }}>
+              {activeMember ? `查看${activeMember}的量測變化與數值整理` : '查看量測變化與白話數值整理'}
             </p>
           </div>
           {activeMember && (
-            <button
-              onClick={() => router.push(`/dashboard/upload?type=${activeMetricKey === 'body_fat' ? 'body_composition' : metric.key}`)}
-              style={{
-                background: 'var(--primary)', color: '#fff', border: 'none',
-                padding: '10px 18px', borderRadius: '10px', fontWeight: '700',
-                fontSize: '14px', cursor: 'pointer', flexShrink: 0,
-                boxShadow: '0 2px 8px rgba(14,116,144,0.3)',
-              }}
-            >
-              + 新增
-            </button>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => void loadRecords(true)}
+                disabled={loading}
+                style={{
+                  minHeight: 44,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  padding: '9px 13px',
+                  borderRadius: 10,
+                  border: '1px solid var(--gray-200)',
+                  background: '#fff',
+                  color: '#334155',
+                  fontWeight: 700,
+                  cursor: loading ? 'wait' : 'pointer',
+                }}
+              >
+                <RefreshCw size={17} aria-hidden="true" />
+                更新資料
+              </button>
+              <button
+                type="button"
+                onClick={() => addRecord(metricKey)}
+                style={{
+                  minHeight: 44,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  padding: '9px 15px',
+                  borderRadius: 10,
+                  border: 0,
+                  background: 'var(--primary)',
+                  color: '#fff',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                <Plus size={18} aria-hidden="true" />
+                新增量測
+              </button>
+            </div>
           )}
+        </header>
+
+        <div
+          role="tablist"
+          aria-label="健康趨勢內容"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: 6,
+            padding: 5,
+            marginBottom: 18,
+            background: '#eaf4f5',
+            borderRadius: 13,
+          }}
+        >
+          {([
+            { key: 'trends' as const, label: '趨勢圖表', icon: BarChart3 },
+            { key: 'insights' as const, label: '數值整理', icon: Info },
+          ]).map((tab) => {
+            const TabIcon = tab.icon;
+            const selected = tab.key === section;
+            return (
+              <button
+                key={tab.key}
+                id={`health-trends-tab-${tab.key}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls={`health-trends-panel-${tab.key}`}
+                onClick={() => switchSection(tab.key)}
+                style={{
+                  minHeight: 44,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  border: selected ? '1px solid #c7e2e5' : '1px solid transparent',
+                  borderRadius: 9,
+                  background: selected ? '#fff' : 'transparent',
+                  color: selected ? '#0f766e' : '#475569',
+                  boxShadow: selected ? '0 1px 3px rgba(15, 118, 110, 0.1)' : 'none',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                <TabIcon size={18} aria-hidden="true" />
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
-        {/* ── 全部 mode guide ── */}
-        {!activeMember && members.length > 0 && (
-          <div style={{
-            background: '#fff', borderRadius: '20px', padding: '48px 32px',
-            textAlign: 'center', boxShadow: 'var(--shadow-sm)', marginBottom: '20px',
-          }}>
-            <div style={{ fontSize: '52px', marginBottom: '16px' }}>📈</div>
-            <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#22313f', marginBottom: '10px' }}>
-              請選擇要查看的成員
-            </h3>
-            <p style={{ fontSize: '14px', color: '#6b7c8c', lineHeight: 1.7, marginBottom: '24px' }}>
-              趨勢分析針對個別成員的健康數據，<br />請從上方選擇成員後查看圖表。
-            </p>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
-              {members.map(m => (
-                <button
-                  key={m.id}
-                  onClick={() => switchMember(m.name)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    padding: '10px 20px', borderRadius: '24px',
-                    border: `2px solid ${m.color}`, background: `${m.color}12`, color: m.color,
-                    fontSize: '14px', fontWeight: '700', cursor: 'pointer',
-                  }}
-                >
-                  <div style={{
-                    width: '24px', height: '24px', borderRadius: '12px', background: m.color,
-                    color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: '10px', fontWeight: '800',
-                  }}>
-                    {m.name.slice(0, 2)}
-                  </div>
-                  {m.name}
-                </button>
-              ))}
+        {error && (
+          <div
+            role="alert"
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              flexWrap: 'wrap',
+              gap: 10,
+              padding: 14,
+              marginBottom: 18,
+              border: '1px solid #fdba74',
+              borderRadius: 12,
+              background: '#fff7ed',
+              color: '#7c2d12',
+            }}
+          >
+            <TriangleAlert size={20} aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }} />
+            <div style={{ flex: '1 1 220px', lineHeight: 1.55 }}>
+              <strong>資料更新失敗</strong>
+              <div style={{ fontSize: 13 }}>
+                {error}{hasSuccessfulData ? ' 目前仍顯示上次成功載入的資料。' : ' 畫面未將錯誤當成沒有資料。'}
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={() => void loadRecords(true)}
+              style={{
+                minHeight: 44,
+                padding: '8px 14px',
+                border: '1px solid #fdba74',
+                borderRadius: 9,
+                background: '#fff',
+                color: '#9a3412',
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              再試一次
+            </button>
           </div>
         )}
 
-        {/* ── Content when member is selected ── */}
-        {activeMember && (
-          <>
-            {/* Metric tabs — horizontally scrollable on mobile */}
-            <div className="scroll-x-row" style={{ marginBottom: '20px' }}>
-              {METRICS.map(m => (
-                <button
-                  key={m.key}
-                  onClick={() => setActiveMetricKey(m.key as MetricKey)}
-                  style={{
-                    padding: '9px 18px', borderRadius: '10px',
-                    border: `1.5px solid ${activeMetricKey === m.key ? m.color : 'var(--gray-200)'}`,
-                    background: activeMetricKey === m.key ? m.color : '#fff',
-                    color: activeMetricKey === m.key ? '#fff' : '#555',
-                    fontWeight: activeMetricKey === m.key ? '700' : '500',
-                    fontSize: '13px', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  {m.icon} {m.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Chart card */}
-            {loading ? (
-              <div style={{ background: '#fff', borderRadius: '16px', padding: '60px', textAlign: 'center', boxShadow: 'var(--shadow-sm)', marginBottom: '24px' }}>
-                <div style={{ width: '36px', height: '36px', border: '3px solid var(--gray-200)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
-                <div style={{ color: '#93a3af', fontSize: '14px' }}>載入中...</div>
-                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-              </div>
-            ) : points.length >= 2 ? (
-              <div style={{ background: '#fff', borderRadius: '16px', padding: '24px', boxShadow: 'var(--shadow-sm)', marginBottom: '24px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '8px' }}>
-                  <div>
-                    <h3 style={{ fontSize: '17px', fontWeight: '800', color: '#22313f' }}>
-                      {metric.icon} {metric.label}
-                      <span style={{ fontSize: '13px', color: '#93a3af', fontWeight: 'normal', marginLeft: '8px' }}>· {activeMember}</span>
-                    </h3>
-                    <p style={{ fontSize: '12px', color: '#93a3af', marginTop: '2px' }}>
-                      最近 {points.length} 筆紀錄
-                      {isBP && ' · 實線=收縮壓，虛線=舒張壓'}
-                    </p>
-                  </div>
-                </div>
-                <LineChart
-                  points={points}
-                  color={metric.color}
-                  target={'target' in metric ? metric.target : undefined}
-                  targetLabel={'targetLabel' in metric ? metric.targetLabel : undefined}
-                  showDiastolic={isBP}
-                />
-                <StatRow points={points} unit={metric.unit} showDiastolic={isBP} />
-              </div>
-            ) : points.length === 1 ? (
-              <div style={{ background: '#fff', borderRadius: '16px', padding: '28px', boxShadow: 'var(--shadow-sm)', marginBottom: '24px' }}>
-                <h3 style={{ fontSize: '17px', fontWeight: '800', marginBottom: '20px', color: '#22313f' }}>{metric.icon} {metric.label}</h3>
-                <div style={{ textAlign: 'center', padding: '20px' }}>
-                  <div style={{ fontSize: '48px', fontWeight: '900', color: metric.color, lineHeight: 1 }}>{points[0].value}</div>
-                  <div style={{ fontSize: '14px', color: '#93a3af', marginTop: '6px' }}>{metric.unit}</div>
-                  <p style={{ fontSize: '13px', color: '#93a3af', marginTop: '12px' }}>僅有 1 筆紀錄，再新增 1 筆即可看到趨勢圖</p>
-                </div>
-              </div>
-            ) : (
-              <div style={{ background: '#fff', borderRadius: '16px', padding: '60px 32px', textAlign: 'center', boxShadow: 'var(--shadow-sm)', marginBottom: '24px' }}>
-                <div style={{ fontSize: '48px', marginBottom: '16px' }}>📈</div>
-                <div style={{ fontWeight: '700', color: '#22313f', marginBottom: '8px', fontSize: '17px' }}>
-                  {activeMember} 還沒有 {metric.label} 的紀錄
-                </div>
-                <p style={{ fontSize: '13px', color: '#93a3af', marginBottom: '24px' }}>開始記錄即可看到趨勢圖表</p>
-                <button
-                  onClick={() => router.push(`/dashboard/upload?type=${activeMetricKey === 'body_fat' ? 'body_composition' : metric.key}`)}
-                  style={{ background: 'var(--primary)', color: '#fff', border: 'none', padding: '12px 28px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', boxShadow: '0 2px 8px rgba(14,116,144,0.3)' }}
-                >
-                  + 記錄第一筆 {metric.label}
-                </button>
-              </div>
-            )}
-
-            {/* Overview grid — other metrics */}
-            {Object.values(summary).some(arr => arr && arr.length > 0) && (
-              <>
-                <div style={{ fontSize: '11px', fontWeight: '700', color: '#93a3af', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px' }}>
-                  全部指標概覽
-                </div>
-                <div className="grid-2col">
-                  {METRICS.filter(m => m.key !== activeMetricKey).map(m => {
-                    const recs = summary[m.key] ?? [];
-                    if (recs.length === 0) return null;
-                    const last = parseFloat(recs[0].value1 ?? '0');
-                    const prev = recs.length >= 2 ? parseFloat(recs[1].value1 ?? '0') : last;
-                    const delta = last - prev;
-                    const miniPts = [...recs].reverse().map(r => parseFloat(r.value1 ?? '0'));
-                    const maxMini = Math.max(...miniPts);
-                    return (
-                      <button
-                        key={m.key}
-                        onClick={() => setActiveMetricKey(m.key as MetricKey)}
-                        style={{
-                          background: '#fff', borderRadius: '14px', padding: '20px',
-                          boxShadow: 'var(--shadow-sm)', cursor: 'pointer',
-                          border: '1px solid var(--gray-200)', textAlign: 'left',
-                          transition: 'transform 0.15s, box-shadow 0.15s',
-                        }}
-                        onMouseEnter={e => {
-                          (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(-1px)';
-                          (e.currentTarget as HTMLButtonElement).style.boxShadow = 'var(--shadow-md)';
-                        }}
-                        onMouseLeave={e => {
-                          (e.currentTarget as HTMLButtonElement).style.transform = '';
-                          (e.currentTarget as HTMLButtonElement).style.boxShadow = 'var(--shadow-sm)';
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                          <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: `${m.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>
-                            {m.icon}
-                          </div>
-                          {delta !== 0 && (
-                            <span style={{ fontSize: '11px', color: delta > 0 ? '#f44336' : '#4caf50', fontWeight: '700' }}>
-                              {delta > 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(1)} {m.unit}
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: '12px', color: '#93a3af', marginBottom: '3px', fontWeight: '600' }}>{m.label}</div>
-                        <div style={{ fontSize: '22px', fontWeight: '800', color: '#22313f' }}>
-                          {m.key === 'steps' ? last.toLocaleString() : last.toFixed(1)}
-                          {m.unit && <span style={{ fontSize: '12px', fontWeight: 'normal', color: '#93a3af', marginLeft: '4px' }}>{m.unit}</span>}
-                        </div>
-                        {miniPts.length >= 2 && (
-                          <div style={{ height: '28px', display: 'flex', alignItems: 'flex-end', gap: '2px', marginTop: '10px' }}>
-                            {miniPts.map((v, i) => (
-                              <div key={i} style={{ flex: 1, height: `${maxMini > 0 ? (v / maxMini) * 100 : 50}%`, background: m.color, borderRadius: '2px', opacity: 0.6 }} />
-                            ))}
-                          </div>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </>
+        {members.length === 0 && (
+          <section style={{ ...panelStyle, padding: '44px 24px', textAlign: 'center' }} aria-labelledby="no-members-title">
+            <Users size={42} aria-hidden="true" style={{ color: 'var(--primary)', marginBottom: 14 }} />
+            <h2 id="no-members-title" style={{ color: '#22313f', fontSize: 18, margin: 0 }}>請先完成家庭設定</h2>
+            <p style={{ color: '#64748b', fontSize: 14, margin: '8px 0 18px' }}>完成設定後，就能依成員查看健康趨勢。</p>
+            <button
+              type="button"
+              onClick={() => router.push(memberHref('/dashboard/settings', activeMember))}
+              style={{ minHeight: 44, padding: '9px 16px', borderRadius: 10, border: '1px solid var(--primary)', background: '#fff', color: 'var(--primary)', fontWeight: 800, cursor: 'pointer' }}
+            >
+              前往家庭設定
+            </button>
+          </section>
         )}
 
+        {members.length > 0 && !activeMember && <MemberChoice members={members} onChoose={switchMember} />}
+
+        {activeMember && initialLoading && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{ ...panelStyle, padding: '52px 24px', textAlign: 'center', color: '#64748b' }}
+          >
+            <LoaderCircle size={34} aria-hidden="true" style={{ color: 'var(--primary)', marginBottom: 12 }} />
+            <div>正在載入{activeMember}的健康紀錄…</div>
+          </div>
+        )}
+
+        {activeMember && hasSuccessfulData && activeRecords.length === 0 && !error && (
+          <EmptyRecords member={activeMember} onAdd={() => addRecord()} />
+        )}
+
+        {activeMember && hasSuccessfulData && activeRecords.length > 0 && section === 'trends' && (
+          <div
+            id="health-trends-panel-trends"
+            role="tabpanel"
+            aria-labelledby="health-trends-tab-trends"
+          >
+            <div className="scroll-x-row" role="group" style={{ marginBottom: 16 }} aria-label="選擇量測項目">
+              {METRICS.map((item) => {
+                const Icon = item.icon;
+                const selected = metricKey === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => switchMetric(item.key)}
+                    style={{
+                      minHeight: 44,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 7,
+                      flexShrink: 0,
+                      padding: '9px 14px',
+                      borderRadius: 10,
+                      border: `1px solid ${selected ? item.color : 'var(--gray-200)'}`,
+                      background: selected ? item.color : '#fff',
+                      color: selected ? '#fff' : '#334155',
+                      fontWeight: selected ? 800 : 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Icon size={17} aria-hidden="true" />
+                    {item.label}
+                    <span aria-label={`${metricCounts[item.key] ?? 0} 筆`}>({metricCounts[item.key] ?? 0})</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {points.length >= 2 && (
+              <section style={{ ...panelStyle, padding: 20, marginBottom: 18 }} aria-labelledby="metric-chart-title">
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+                  <div>
+                    <h2 id="metric-chart-title" style={{ fontSize: 18, color: '#22313f', margin: 0 }}>{metric.label}</h2>
+                    <p style={{ fontSize: 13, color: '#64748b', margin: '4px 0 0' }}>
+                      最近 {points.length} 筆紀錄{metricKey === 'blood_pressure' ? '；實線為收縮壓，虛線為舒張壓' : ''}
+                    </p>
+                  </div>
+                  {loading && <span role="status" style={{ fontSize: 12, color: '#64748b' }}>正在更新…</span>}
+                </div>
+                <LineChart points={points} metric={metric} showSecondValue={metricKey === 'blood_pressure'} />
+                <MetricStats points={points} metric={metric} />
+              </section>
+            )}
+
+            {points.length === 1 && (
+              <section style={{ ...panelStyle, padding: 28, marginBottom: 18, textAlign: 'center' }} aria-labelledby="single-record-title">
+                <h2 id="single-record-title" style={{ fontSize: 18, color: '#22313f', margin: 0 }}>{metric.label}</h2>
+                <div style={{ color: metric.color, fontSize: 44, fontWeight: 900, marginTop: 18 }}>{points[0].value}</div>
+                <div style={{ color: '#64748b', fontSize: 14, marginTop: 3 }}>{metric.unit}</div>
+                <p style={{ color: '#64748b', fontSize: 13, margin: '12px 0 0' }}>再新增 1 筆，即可開始比較趨勢。</p>
+              </section>
+            )}
+
+            {points.length === 0 && (
+              <section style={{ ...panelStyle, padding: '38px 24px', marginBottom: 18, textAlign: 'center' }} aria-labelledby="metric-empty-title">
+                <MetricIcon size={38} aria-hidden="true" style={{ color: metric.color, marginBottom: 12 }} />
+                <h2 id="metric-empty-title" style={{ fontSize: 18, color: '#22313f', margin: 0 }}>
+                  {activeMember}還沒有{metric.label}紀錄
+                </h2>
+                <p style={{ color: '#64748b', fontSize: 13, margin: '8px 0 17px' }}>這是此量測項目的空白狀態；其他量測紀錄仍保留。</p>
+                <button
+                  type="button"
+                  onClick={() => addRecord(metricKey)}
+                  style={{ minHeight: 44, padding: '9px 16px', border: 0, borderRadius: 10, background: 'var(--primary)', color: '#fff', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  新增{metric.label}
+                </button>
+              </section>
+            )}
+
+            <section style={{ ...panelStyle, padding: 18 }} aria-labelledby="all-metrics-title">
+              <h2 id="all-metrics-title" style={{ fontSize: 17, color: '#22313f', margin: '0 0 13px' }}>所有量測摘要</h2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: 10 }}>
+                {METRICS.map((item) => {
+                  const itemPoints = pointsForMetric(activeRecords, item.key);
+                  const latest = itemPoints.at(-1);
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => switchMetric(item.key)}
+                      style={{
+                        minHeight: 78,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 11,
+                        padding: 12,
+                        border: '1px solid var(--gray-200)',
+                        borderRadius: 12,
+                        background: '#fff',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Icon size={22} aria-hidden="true" style={{ color: item.color, flexShrink: 0 }} />
+                      <span>
+                        <span style={{ display: 'block', color: '#334155', fontSize: 13, fontWeight: 700 }}>{item.label}</span>
+                        <span style={{ display: 'block', color: latest ? '#172033' : '#64748b', fontSize: latest ? 17 : 13, fontWeight: latest ? 800 : 500, marginTop: 2 }}>
+                          {latest ? `${latest.value} ${item.unit}` : '尚無紀錄'}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+        )}
+
+        {activeMember && hasSuccessfulData && activeRecords.length > 0 && section === 'insights' && (
+          <div
+            id="health-trends-panel-insights"
+            role="tabpanel"
+            aria-labelledby="health-trends-tab-insights"
+          >
+            <div
+              style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 14, marginBottom: 16, border: '1px solid #bae6fd', borderRadius: 12, background: '#f0f9ff', color: '#0c4a6e' }}
+            >
+              <Info size={20} aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }} />
+              <p style={{ fontSize: 13, lineHeight: 1.65, margin: 0 }}>
+                這裡使用固定規則整理你已記錄的數值，方便看懂變化。內容不是醫療診斷、不提供治療建議，也不取代醫療專業人員。
+              </p>
+            </div>
+
+            {insights.length === 0 ? (
+              <section style={{ ...panelStyle, padding: '42px 24px', textAlign: 'center' }} aria-labelledby="no-insights-title">
+                <CircleCheck size={40} aria-hidden="true" style={{ color: '#15803d', marginBottom: 12 }} />
+                <h2 id="no-insights-title" style={{ fontSize: 18, color: '#22313f', margin: 0 }}>目前沒有需要特別說明的數值變化</h2>
+                <p style={{ color: '#64748b', fontSize: 13, margin: '8px 0 0' }}>請持續記錄；若有不適或疑問，仍請與醫療團隊確認。</p>
+              </section>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {insights.map((insight) => {
+                  const appearance = INSIGHT_APPEARANCE[insight.kind];
+                  const InsightIcon = appearance.icon;
+                  const insightMetric = METRICS.find((item) => item.key === insight.metric);
+                  return (
+                    <article
+                      key={insight.id}
+                      style={{
+                        ...panelStyle,
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 13,
+                        padding: 18,
+                        borderLeft: `4px solid ${appearance.color}`,
+                        background: appearance.background,
+                      }}
+                    >
+                      <InsightIcon size={23} aria-hidden="true" style={{ color: appearance.color, flexShrink: 0, marginTop: 1 }} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                          <h2 style={{ fontSize: 16, color: '#172033', margin: 0 }}>{insight.title}</h2>
+                          <span style={{ padding: '3px 8px', borderRadius: 99, background: '#fff', color: appearance.color, fontSize: 11, fontWeight: 800 }}>
+                            {appearance.label}
+                          </span>
+                        </div>
+                        <p style={{ color: '#475569', fontSize: 13, lineHeight: 1.7, margin: '7px 0 0' }}>{insight.body}</p>
+                        {insightMetric && (
+                          <button
+                            type="button"
+                            onClick={() => addRecord(insightMetric.key)}
+                            style={{ minHeight: 44, marginTop: 7, padding: '8px 0', border: 0, background: 'transparent', color: '#0f766e', fontWeight: 800, cursor: 'pointer' }}
+                          >
+                            新增{insightMetric.label}紀錄
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,13 +1,17 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useActiveMember } from '../member-context';
 import { RECORD_TYPE_META, getTypeMeta } from '../record-types';
 import { useSync } from '@/lib/sync';
-import { memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
+import { memberHref, memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
 import { api } from '@/lib/api';
 import { useToast } from '../toast-context';
+import { safeInternalActionUrl } from '@/lib/internalRoutes';
+import { groupActivityLifecycles, humanActivityDescription, humanActivityTitle } from './activity-lifecycle';
+import { Icon } from '../_components/Icon';
+import { Activity, ArrowLeft, ArrowRight, Droplets, Footprints, Gauge, HeartPulse, Moon, Plus, Scale } from 'lucide-react';
 
 type RecordOut = {
   id: string;
@@ -26,6 +30,13 @@ type RecordEditForm = {
   unit: string;
   note: string;
   recorded_at: string;
+};
+
+type DeleteResult = {
+  deleted: boolean;
+  recoverable: boolean;
+  deleted_at: string;
+  save_state: 'saved' | 'unknown';
 };
 
 type ActivityEvent = {
@@ -85,7 +96,7 @@ const STATUS_META: Record<string, { label: string; bg: string; color: string; bo
   needs_clarification: { label: '需要你補充', bg: '#fdf1e0', color: '#a97614', border: '#fed7aa', helper: '請補充資料後送回醫療團隊。' },
   replied: { label: '已回覆', bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd', helper: '你的補充已送回醫療團隊。' },
   completed: { label: '已完成', bg: '#e7f4ec', color: '#2e8b57', border: '#cfe8da', helper: '這個動作已完成。' },
-  published: { label: '已發布', bg: '#e7f4ec', color: '#2e8b57', border: '#cfe8da', helper: '已更新到 User 端可見內容。' },
+  published: { label: '已發布', bg: '#e7f4ec', color: '#2e8b57', border: '#cfe8da', helper: '已更新到你可查看的內容。' },
   unpublished: { label: '暫時撤下', bg: '#f6f9fa', color: '#56687a', border: '#e3e9ee', helper: '醫療團隊暫時撤下先前發布內容。' },
   withdrawn: { label: '已撤回', bg: '#f6f9fa', color: '#56687a', border: '#e3e9ee', helper: '這次異動已撤回。' },
   reverted: { label: '已還原', bg: '#f6f9fa', color: '#56687a', border: '#e3e9ee', helper: '上一個操作已被還原。' },
@@ -94,45 +105,78 @@ const STATUS_META: Record<string, { label: string; bg: string; color: string; bo
   done: { label: '已記錄', bg: '#eef2f5', color: '#56687a', border: '#e3e9ee', helper: '自我紀錄已保存。' },
 };
 
+const UNKNOWN_STATUS_META = {
+  label: '狀態待確認',
+  bg: '#f6f9fa',
+  color: '#56687a',
+  border: '#e3e9ee',
+  helper: '目前尚無法確認這個處理的結果，請開啟詳情查看。',
+};
+
 const TYPE_LABELS: Record<string, string> = {
   reminder: '提醒',
   appointment: '回診',
-  problem: 'Problem',
-  condition: '疾病',
+  problem: '醫療團隊確認的病況',
+  condition: '我的病況',
   medication: '用藥',
   medication_regimen: '用藥',
   medication_event: '用藥事件',
-  allergy: '紅區/過敏',
-  red_zone: '保命紅區',
-  source_document: '來源文件',
+  allergy: '重要過敏',
+  red_zone: '急診重要資訊',
+  source_document: '文件',
   change_request: '資料異動',
   measurement: '量測',
 };
 
-const EVENT_FALLBACK_LABELS: Record<string, string> = {
-  medication_update: '你更新用藥實際狀況',
-  'medication update': '你更新用藥實際狀況',
-  'medication.update': '你更新用藥實際狀況',
-  reminder_create: '你新增提醒',
-  reminder_update: '你更新提醒',
-  reminder_delete: '你刪除提醒',
+const TECHNICAL_IDENTITY_LABELS: Record<string, string> = {
+  self: '本人',
+  patient: '本人',
+  owner: '家庭管理者',
+  family_owner: '家庭管理者',
+  family_manager: '家庭管理者',
+  cmo: '醫療團隊',
+  cmo_admin: '醫療團隊',
+  medical_team: '醫療團隊',
 };
+
+function activityTypeLabel(value?: string | null): string {
+  return value ? TYPE_LABELS[value] ?? '其他資料' : '其他資料';
+}
+
+function activityStatusLabel(value?: string | null): string {
+  return value ? STATUS_LABELS[value] ?? UNKNOWN_STATUS_META.label : UNKNOWN_STATUS_META.label;
+}
+
+function normalizedIdentityKey(value?: string | null): string {
+  return String(value ?? '').trim().toLocaleLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function activityActorLabel(event: ActivityEvent): string {
+  const actor = normalizedIdentityKey(event.actor);
+  const role = normalizedIdentityKey(event.actor_role);
+  if (actor === 'you' || actor === 'self' || actor === 'patient' || role === 'patient') return '你';
+  if (actor === 'medical_team' || actor === 'cmo' || actor === 'cmo_admin' || role === 'medical_team' || role === 'cmo' || role === 'cmo_admin') return '醫療團隊';
+  if (actor === 'owner' || actor === 'family_owner' || actor === 'family_manager' || role === 'owner' || role === 'family_owner' || role === 'family_manager') return '家庭管理者';
+  return 'HealthKeep';
+}
+
+function activityMemberLabel(value?: string | null): string {
+  const display = String(value ?? '').trim();
+  if (!display) return '';
+  return TECHNICAL_IDENTITY_LABELS[normalizedIdentityKey(display)] ?? display;
+}
 
 function activityTime(e: ActivityEvent): string {
   return e.created_at || e.at || e.updated_at || '';
 }
 
 function activityTitle(e: ActivityEvent): string {
-  const title = e.title || '';
-  const eventType = e.event_type || '';
-  const label = EVENT_FALLBACK_LABELS[eventType] || EVENT_FALLBACK_LABELS[title.split(' · ')[0]];
-  if (!label) return title;
-  const target = e.target_label ? ` · ${e.target_label}` : '';
-  return `${label}${target}`;
+  const type = activityTypeLabel(e.target_type);
+  return humanActivityTitle(e, type);
 }
 
 function routeForActivity(e: ActivityEvent): string {
-  if (e.action_url) return e.action_url;
+  if (e.action_url) return safeInternalActionUrl(e.action_url);
   switch (e.target_type) {
     case 'reminder':
     case 'appointment':
@@ -148,7 +192,7 @@ function routeForActivity(e: ActivityEvent): string {
     case 'allergy':
     case 'red_zone':
     case 'change_request':
-      return '/dashboard/health-profile';
+      return '/dashboard/health';
     default:
       return '/dashboard/history';
   }
@@ -159,7 +203,7 @@ function activityNeedsAction(e: ActivityEvent): boolean {
 }
 
 function activityStatusMeta(status: string) {
-  return STATUS_META[status] ?? STATUS_META.done;
+  return STATUS_META[status] ?? UNKNOWN_STATUS_META;
 }
 
 function formatValue(r: RecordOut): string {
@@ -179,6 +223,17 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
 }
 
+function RecordTypeIcon({ type, size = 20 }: { type: string; size?: number }) {
+  const props = { size, 'aria-hidden': true as const, focusable: false };
+  if (type === 'blood_pressure' || type === 'heart_rate') return <HeartPulse {...props} />;
+  if (type === 'glucose') return <Droplets {...props} />;
+  if (type === 'weight' || type === 'body_fat' || type === 'body_composition') return <Scale {...props} />;
+  if (type === 'bmi') return <Gauge {...props} />;
+  if (type === 'steps') return <Footprints {...props} />;
+  if (type === 'sleep') return <Moon {...props} />;
+  return <Activity {...props} />;
+}
+
 function toDatetimeLocal(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
@@ -186,12 +241,32 @@ function toDatetimeLocal(iso: string): string {
   return local.toISOString().slice(0, 16);
 }
 
+function newRetryOperationKey(action: string, resourceId: string): string {
+  const nonce = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `healthkeep-${action}-${resourceId}-${nonce}`;
+}
+
+function retainedOperationKey(
+  keys: Map<string, string>,
+  logicalOperation: string,
+  action: string,
+  resourceId: string,
+): string {
+  const existing = keys.get(logicalOperation);
+  if (existing) return existing;
+  const created = newRetryOperationKey(action, resourceId);
+  keys.set(logicalOperation, created);
+  return created;
+}
+
 export default function HistoryPage() {
   const { showToast } = useToast();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { activeMember, setActiveMember, members } = useActiveMember();
+  const { activeMember, setActiveMember, members, canWriteMember, writeAccessReason } = useActiveMember();
   const sync = useSync();
   // Refetch the activity stream whenever a timeline-touching event arrives
   // (CMO publish, clarification, reconcile…) so this page never sits stale.
@@ -203,6 +278,10 @@ export default function HistoryPage() {
   const [filterMember, setFilterMember] = useState(() => activeMember || '全部');
   const [filterType, setFilterType] = useState('全部');
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<RecordOut | null>(null);
+  const deleteTriggerRef = useRef<HTMLElement | null>(null);
+  const deleteOperationKeysRef = useRef<Map<string, string>>(new Map());
+  const restoreOperationKeysRef = useRef<Map<string, string>>(new Map());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<RecordEditForm | null>(null);
   const [editBusy, setEditBusy] = useState(false);
@@ -215,6 +294,7 @@ export default function HistoryPage() {
   const [activityStatus, setActivityStatus] = useState('全部');
   const [activityFrom, setActivityFrom] = useState('');
   const [activityTo, setActivityTo] = useState('');
+  const [activityVisibleCount, setActivityVisibleCount] = useState(30);
   const requestedMemberParam = searchParams.get('member');
 
   useEffect(() => {
@@ -240,20 +320,13 @@ export default function HistoryPage() {
     setLoading(true);
     setRecordsLoadError(false);
     try {
-      const params = new URLSearchParams();
-      if (filterMember !== '全部') params.set('member', filterMember);
-      if (filterType !== '全部') params.set('record_type', filterType);
-      params.set('limit', '200');
-      const resp = await fetch(`/api/records?${params}`, { credentials: 'include' });
-      if (resp.ok) {
-        const data: RecordOut[] = await resp.json();
-        setRecords(data);
-      } else {
-        throw new Error('records_load_failed');
-      }
+      const params: Record<string, string> = { limit: '100' };
+      if (filterMember !== '全部') params.member = filterMember;
+      if (filterType !== '全部') params.record_type = filterType;
+      const data = await api.get('/api/records', params) as RecordOut[];
+      setRecords(Array.isArray(data) ? data : []);
     } catch {
       setRecordsLoadError(true);
-      setRecords([]);
     } finally {
       setLoading(false);
     }
@@ -265,14 +338,15 @@ export default function HistoryPage() {
     setActivityLoading(true);
     setActivityLoadError(false);
     try {
-      const params = new URLSearchParams({ limit: '120' });
-      if (filterMember !== '全部') params.set('member', filterMember);
-      const resp = await fetch(`/api/patients/me/timeline?${params}`, { credentials: 'include' });
-      if (!resp.ok) throw new Error('timeline_load_failed');
-      setActivity(await resp.json() as ActivityEvent[]);
+      const params: Record<string, string> = { limit: '100' };
+      if (filterMember !== '全部') params.member = filterMember;
+      const response = await api.get('/api/patients/me/timeline', params);
+      const rows = Array.isArray(response)
+        ? response
+        : ((response as { items?: ActivityEvent[] } | null)?.items ?? []);
+      setActivity(rows as ActivityEvent[]);
     } catch {
       setActivityLoadError(true);
-      setActivity([]);
     } finally {
       setActivityLoading(false);
     }
@@ -280,13 +354,68 @@ export default function HistoryPage() {
 
   useEffect(() => { fetchActivity(); }, [fetchActivity, timelineVersion]);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('確定要刪除這筆紀錄嗎？這會 soft delete，系統仍會保留 audit/history。')) return;
-    setDeleting(id);
+  const restoreRecord = useCallback(async (record: RecordOut, deletedAt: string) => {
+    const logicalOperation = `${record.id}:${deletedAt}`;
+    const idempotencyKey = retainedOperationKey(
+      restoreOperationKeysRef.current,
+      logicalOperation,
+      'restore-measurement',
+      record.id,
+    );
     try {
-      await api.delete(`/api/records/${id}`);
-      setRecords(prev => prev.filter(r => r.id !== id));
-      showToast('已移除這筆自我紀錄', 'success');
+      const restored = await api.post(
+        `/api/records/${record.id}/restore`,
+        undefined,
+        { idempotencyKey },
+      ) as RecordOut;
+      restoreOperationKeysRef.current.delete(logicalOperation);
+      setRecords((current) => [restored, ...current.filter((row) => row.id !== restored.id)]);
+      showToast('紀錄已復原', 'success');
+    } catch {
+      showToast('復原失敗，紀錄仍留在最近刪除中', 'error', {
+        label: '重試復原',
+        onClick: () => void restoreRecord(record, deletedAt),
+        durationMs: 10_000,
+      });
+    }
+  }, [showToast]);
+
+  const requestDelete = (record: RecordOut) => {
+    if (!canWriteMember(record.member_name)) {
+      showToast(writeAccessReason(record.member_name) || '你目前只能查看這位成員的資料', 'info');
+      return;
+    }
+    deleteTriggerRef.current = document.activeElement as HTMLElement | null;
+    setPendingDelete(record);
+  };
+
+  const handleDelete = async () => {
+    if (!pendingDelete) return;
+    const record = pendingDelete;
+    setPendingDelete(null);
+    setDeleting(record.id);
+    const idempotencyKey = retainedOperationKey(
+      deleteOperationKeysRef.current,
+      record.id,
+      'delete-measurement',
+      record.id,
+    );
+    try {
+      const result = await api.delete(
+        `/api/records/${record.id}`,
+        { idempotencyKey },
+      ) as DeleteResult;
+      deleteOperationKeysRef.current.delete(record.id);
+      setRecords(prev => prev.filter(r => r.id !== record.id));
+      showToast(
+        result.recoverable ? '已移至最近刪除' : '紀錄已刪除',
+        'success',
+        result.recoverable ? {
+          label: '復原',
+          onClick: () => void restoreRecord(record, result.deleted_at),
+          durationMs: 10_000,
+        } : undefined,
+      );
     } catch {
       showToast('移除失敗，紀錄仍保留在清單中', 'error');
     } finally {
@@ -295,6 +424,10 @@ export default function HistoryPage() {
   };
 
   const startEditing = (record: RecordOut) => {
+    if (!canWriteMember(record.member_name)) {
+      showToast(writeAccessReason(record.member_name) || '你目前只能查看這位成員的資料', 'info');
+      return;
+    }
     setEditingId(record.id);
     setEditForm({
       value1: record.value1 ?? '',
@@ -349,13 +482,14 @@ export default function HistoryPage() {
     const statuses = Array.from(new Set(activity.map(e => e.status).filter(Boolean) as string[]));
     return ['全部', ...statuses.sort()];
   }, [activity]);
-  const activitySources = useMemo(() => {
-    const sources = Array.from(new Set(activity.map(e => e.source_document_id).filter(Boolean) as string[]));
-    return ['全部', '有來源文件', ...sources.sort()];
-  }, [activity]);
+  const activitySources = useMemo(
+    () => activity.some(e => Boolean(e.source_document_id)) ? ['全部', '有來源文件'] : ['全部'],
+    [activity],
+  );
+  const lifecycleActivity = useMemo(() => groupActivityLifecycles(activity), [activity]);
   const filteredActivity = useMemo(() => {
     const memberName = filterMember === '全部' ? '' : normalizeMemberName(filterMember);
-    return activity.filter((e) => {
+    return lifecycleActivity.filter((e) => {
       const at = activityTime(e).slice(0, 10);
       if (memberName && normalizeMemberName(e.member_name) !== memberName) return false;
       if (activityTab === 'mine' && !(e.actor === 'you' || e.actor_role === 'patient')) return false;
@@ -367,10 +501,11 @@ export default function HistoryPage() {
       if (activityFrom && at && at < activityFrom) return false;
       if (activityTo && at && at > activityTo) return false;
       if (activitySource === '有來源文件' && !e.source_document_id) return false;
-      if (activitySource !== '全部' && activitySource !== '有來源文件' && e.source_document_id !== activitySource) return false;
       return true;
     });
-  }, [activity, activityFrom, activityOnlyAction, activitySource, activityStatus, activityTab, activityTo, activityType, filterMember]);
+  }, [activityFrom, activityOnlyAction, activitySource, activityStatus, activityTab, activityTo, activityType, filterMember, lifecycleActivity]);
+  useEffect(() => { setActivityVisibleCount(30); }, [activityFrom, activityOnlyAction, activitySource, activityStatus, activityTab, activityTo, activityType, filterMember]);
+  const visibleActivity = filteredActivity.slice(0, activityVisibleCount);
   const actionRequiredCount = filteredActivity.filter(activityNeedsAction).length;
   const teamActivityCount = filteredActivity.filter(e => e.actor === 'medical_team' || e.actor_role === 'cmo_admin').length;
   const sourceLinkedCount = filteredActivity.filter(e => Boolean(e.source_document_id)).length;
@@ -390,16 +525,16 @@ export default function HistoryPage() {
       <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '28px' }}>
-        <button onClick={() => router.back()} style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#fff', border: '1px solid var(--gray-200)', fontSize: '18px', cursor: 'pointer', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: 'var(--shadow-sm)' }}>←</button>
+        <button onClick={() => router.push(memberHref('/dashboard', activeMember))} aria-label="返回儀表板" style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#fff', border: '1px solid var(--gray-200)', cursor: 'pointer', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: 'var(--shadow-sm)' }}><ArrowLeft size={20} aria-hidden="true" /></button>
         <div style={{ flex: 1 }}>
-          <h2 style={{ fontSize: '26px', fontWeight: '800', color: '#111' }}>健康管理記錄</h2>
-          <p style={{ fontSize: '14px', color: '#666', marginTop: '2px' }}>互動紀錄 {filteredActivity.length} 筆 · 量測紀錄 {filteredRecords.length} 筆</p>
+          <h1 style={{ fontSize: '26px', fontWeight: '800', color: '#111', margin: 0 }}>紀錄與操作歷程</h1>
+          <p style={{ fontSize: '14px', color: '#666', marginTop: '2px' }}>操作紀錄 {filteredActivity.length} 筆 · 量測紀錄 {filteredRecords.length} 筆</p>
         </div>
         <button onClick={() => router.push(routeWithMember('/dashboard/upload'))} style={{
           background: 'var(--primary)', color: '#fff', border: 'none',
-          padding: '10px 20px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: 'pointer',
+          padding: '10px 20px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
         }}>
-          + 新增紀錄
+          <Plus size={17} aria-hidden="true" /> 新增紀錄
         </button>
       </div>
 
@@ -415,11 +550,11 @@ export default function HistoryPage() {
         <div style={{ background: '#e7f4ec', border: '1px solid #cfe8da', borderRadius: '12px', padding: '12px' }}>
           <div style={{ fontSize: '20px', fontWeight: 900, color: '#2e8b57' }}>{teamActivityCount}</div>
           <div style={{ fontSize: '12px', fontWeight: 800, color: '#56687a' }}>醫療團隊處理</div>
-          <div style={{ fontSize: '11px', color: '#6b7c8c', marginTop: 4 }}>包含 QA、發布、撤回與補件要求。</div>
+          <div style={{ fontSize: '11px', color: '#6b7c8c', marginTop: 4 }}>包含品質確認、發布、撤回與補件要求。</div>
         </div>
         <div style={{ background: '#f6f9fa', border: '1px solid #e3e9ee', borderRadius: '12px', padding: '12px' }}>
           <div style={{ fontSize: '20px', fontWeight: 900, color: '#22313f' }}>{sourceLinkedCount}</div>
-          <div style={{ fontSize: '12px', fontWeight: 800, color: '#56687a' }}>有 evidence</div>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: '#56687a' }}>可追溯來源</div>
           <div style={{ fontSize: '11px', color: '#6b7c8c', marginTop: 4 }}>可追溯到原始文件的更新。</div>
         </div>
       </div>
@@ -427,8 +562,8 @@ export default function HistoryPage() {
       <section style={{ background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)', padding: '18px', marginBottom: '26px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
           <div>
-            <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#22313f', margin: 0 }}>醫療互動與資料處理紀錄</h3>
-            <p style={{ fontSize: '13px', color: '#6b7c8c', margin: '4px 0 0' }}>每筆紀錄都包含 actor、target、status、下一步與可追溯入口。</p>
+            <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#22313f', margin: 0 }}>醫療互動與資料處理紀錄</h2>
+            <p style={{ fontSize: '13px', color: '#6b7c8c', margin: '4px 0 0' }}>依照誰進行操作、影響的資料與目前結果，清楚顯示下一步。</p>
           </div>
           <button onClick={fetchActivity} style={{ border: '1px solid var(--gray-200)', background: '#fff', borderRadius: '10px', padding: '8px 12px', color: '#45596a', fontWeight: 700, cursor: 'pointer' }}>
             重新整理
@@ -451,13 +586,13 @@ export default function HistoryPage() {
           <label style={{ fontSize: '12px', color: '#6b7c8c', fontWeight: 700 }}>
             類型
             <select value={activityType} onChange={(e) => setActivityType(e.target.value)} style={{ marginLeft: 8, border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '6px 8px', background: '#fff' }}>
-              {activityTypes.map(t => <option key={t} value={t}>{t === '全部' ? '全部' : TYPE_LABELS[t] || t}</option>)}
+              {activityTypes.map(t => <option key={t} value={t}>{t === '全部' ? '全部' : activityTypeLabel(t)}</option>)}
             </select>
           </label>
           <label style={{ fontSize: '12px', color: '#6b7c8c', fontWeight: 700 }}>
             狀態
             <select value={activityStatus} onChange={(e) => setActivityStatus(e.target.value)} style={{ marginLeft: 8, border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '6px 8px', background: '#fff' }}>
-              {activityStatuses.map(s => <option key={s} value={s}>{s === '全部' ? '全部' : STATUS_LABELS[s] || s}</option>)}
+              {activityStatuses.map(s => <option key={s} value={s}>{s === '全部' ? '全部' : activityStatusLabel(s)}</option>)}
             </select>
           </label>
           <label style={{ fontSize: '12px', color: '#6b7c8c', fontWeight: 700 }}>
@@ -489,10 +624,10 @@ export default function HistoryPage() {
           <div style={{ textAlign: 'center', padding: '30px', color: '#93a3af' }}>正在載入健康管理記錄...</div>
         ) : activityLoadError ? (
           <div role="alert" style={{ border: '1px solid #f2d3cf', background: '#faecea', borderRadius: '12px', padding: '22px', color: '#8f342b', lineHeight: 1.7 }}>
-            <div style={{ fontWeight: 800, marginBottom: '4px' }}>互動紀錄載入失敗</div>
-            <div style={{ fontSize: '13px', color: '#7f1d1d' }}>這不代表沒有 CMO 處理紀錄或補件要求。請重新整理後再判斷目前狀態。</div>
+            <div style={{ fontWeight: 800, marginBottom: '4px' }}>操作紀錄載入失敗</div>
+            <div style={{ fontSize: '13px', color: '#7f1d1d' }}>這不代表沒有醫療團隊的處理紀錄或補件要求。請重新載入後再判斷目前狀態。</div>
             <button type="button" onClick={fetchActivity} style={{ marginTop: '12px', border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', borderRadius: '8px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: 'pointer' }}>
-              重新載入互動紀錄
+              重新載入操作紀錄
             </button>
           </div>
         ) : filteredActivity.length === 0 ? (
@@ -501,12 +636,12 @@ export default function HistoryPage() {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {filteredActivity.map(e => {
+            {visibleActivity.map(e => {
               const at = activityTime(e);
               const status = e.status || 'done';
               const needsAction = activityNeedsAction(e);
               const statusMeta = activityStatusMeta(status);
-              const targetType = e.target_type ? (TYPE_LABELS[e.target_type] || e.target_type) : '資料';
+              const targetType = activityTypeLabel(e.target_type);
               const cta = needsAction ? '補充資料' : e.available_actions?.includes('undo_if_available') ? '查看復原方式' : '查看詳情';
               return (
                 <button key={e.id} onClick={() => router.push(routeWithMember(routeForActivity(e)))} style={{
@@ -517,35 +652,41 @@ export default function HistoryPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 800, color: e.actor === 'you' ? '#3e6b7e' : e.actor === 'medical_team' ? '#2e8b57' : '#6b7c8c' }}>{e.actor_label || (e.actor === 'you' ? '你' : e.actor === 'medical_team' ? '醫療團隊' : '系統')}</span>
+                         <span style={{ fontSize: '12px', fontWeight: 800, color: e.actor === 'you' ? '#3e6b7e' : e.actor === 'medical_team' ? '#2e8b57' : '#6b7c8c' }}>{activityActorLabel(e)}</span>
                         <span style={{ fontSize: '11px', color: '#93a3af' }}>{targetType}</span>
-                        {e.member_name && <span style={{ fontSize: '11px', color: '#56687a', background: '#f6f9fa', border: '1px solid #e3e9ee', borderRadius: '999px', padding: '2px 8px', fontWeight: 700 }}>{e.member_name}</span>}
+                        {e.member_name && <span style={{ fontSize: '11px', color: '#56687a', background: '#f6f9fa', border: '1px solid #e3e9ee', borderRadius: '999px', padding: '2px 8px', fontWeight: 700 }}>{activityMemberLabel(e.member_name)}</span>}
                         <span style={{
                           fontSize: '11px', color: statusMeta.color, background: statusMeta.bg,
                           border: `1px solid ${statusMeta.border}`, borderRadius: '999px',
                           padding: '2px 8px', fontWeight: 800,
-                        }}>{STATUS_LABELS[status] || statusMeta.label}</span>
+                        }}>{activityStatusLabel(status)}</span>
                       </div>
                       <div style={{ fontSize: '15px', fontWeight: 800, color: '#22313f', lineHeight: 1.4 }}>{activityTitle(e)}</div>
-                      <div style={{ fontSize: '12px', color: '#6b7c8c', marginTop: '4px', lineHeight: 1.5 }}>{e.short_description || e.patient_facing_note || '這筆資料有狀態更新，點擊可查看來源與下一步。'}</div>
+                       <div style={{ fontSize: '13px', color: '#56687a', marginTop: '4px', lineHeight: 1.55 }}>{humanActivityDescription(e)}</div>
                       <div style={{ fontSize: '12px', color: statusMeta.color, marginTop: '4px', lineHeight: 1.5, fontWeight: 700 }}>{statusMeta.helper}</div>
-                      {e.related_problem_label && <div style={{ fontSize: '12px', color: '#3e6b7e', marginTop: '4px' }}>相關 Problem：{e.related_problem_label}</div>}
-                      {e.source_document_id && <div style={{ fontSize: '12px', color: '#7a5fc0', marginTop: '4px' }}>Evidence：已連結原始文件，可到文件庫查看（{e.source_document_id}）</div>}
+                       {e.related_problem_label && <div style={{ fontSize: '12px', color: '#3e6b7e', marginTop: '4px' }}>相關病況：{e.related_problem_label}</div>}
+                       {e.source_document_id && <div style={{ fontSize: '12px', color: '#526b7a', marginTop: '4px' }}>資料來源：已連結原始文件，可到文件庫查看。</div>}
+                       {e.lifecycle_events.length > 1 && <div style={{ fontSize: '12px', color: '#56687a', marginTop: 4 }}>已將同一次操作的 {e.lifecycle_events.length} 個狀態整合顯示。</div>}
                     </div>
                     <div style={{ flexShrink: 0, textAlign: 'right' }}>
                       {at && <div style={{ fontSize: '11px', color: '#93a3af', marginBottom: '8px' }}>{formatDate(at)} {formatTime(at)}</div>}
-                      <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: 800 }}>{cta} →</span>
+                      <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 4 }}>{cta} <ArrowRight size={14} aria-hidden="true" /></span>
                     </div>
                   </div>
                 </button>
               );
-            })}
+           })}
+            {visibleActivity.length < filteredActivity.length && (
+              <button type="button" className="hk-btn hk-btn-outline" style={{ minHeight: 44, alignSelf: 'center' }} onClick={() => setActivityVisibleCount((count) => count + 30)}>
+                顯示更多操作紀錄
+              </button>
+            )}
           </div>
         )}
       </section>
 
       <div style={{ marginBottom: '14px' }}>
-        <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#22313f', margin: 0 }}>量測流水帳</h3>
+        <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#22313f', margin: 0 }}>量測紀錄</h2>
         <p style={{ fontSize: '13px', color: '#6b7c8c', marginTop: '4px' }}>血壓、血糖、體重、睡眠等自我量測紀錄。</p>
       </div>
 
@@ -576,9 +717,9 @@ export default function HistoryPage() {
                   borderColor: filterType === t ? 'var(--primary)' : 'var(--gray-200)',
                   background: filterType === t ? 'var(--primary)' : '#fff',
                   color: filterType === t ? '#fff' : '#555',
-                  fontSize: '13px', fontWeight: filterType === t ? '700' : '500', cursor: 'pointer',
+                  fontSize: '13px', fontWeight: filterType === t ? '700' : '500', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5,
                 }}>
-                  {info ? `${info.icon} ${info.label}` : '全部'}
+                  {info ? <><RecordTypeIcon type={t} size={15} />{info.label}</> : '全部'}
                 </button>
               );
             })}
@@ -602,10 +743,10 @@ export default function HistoryPage() {
         </div>
       ) : dates.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '60px' }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
+          <div aria-hidden="true" style={{ width: 48, height: 48, margin: '0 auto 16px', borderRadius: 16, background: '#e7f3f5', color: '#33596a', display: 'grid', placeItems: 'center' }}><Icon name="records" size={23} /></div>
           <div style={{ fontWeight: '700', color: '#333', marginBottom: '8px' }}>還沒有紀錄</div>
-          <button onClick={() => router.push(routeWithMember('/dashboard/upload'))} style={{ color: 'var(--primary)', border: 'none', background: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>
-            + 新增第一筆紀錄 →
+          <button onClick={() => router.push(routeWithMember('/dashboard/upload'))} style={{ color: 'var(--primary)', border: 'none', background: 'none', cursor: 'pointer', fontSize: '14px', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <Plus size={16} aria-hidden="true" /> 新增第一筆紀錄 <ArrowRight size={16} aria-hidden="true" />
           </button>
         </div>
       ) : (
@@ -634,10 +775,10 @@ export default function HistoryPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                       <div style={{
                         width: '40px', height: '40px', borderRadius: '12px', flexShrink: 0,
-                        background: `${meta.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: `${meta.color}15`, color: meta.color, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         fontSize: '20px',
                       }}>
-                        {meta.icon}
+                        <RecordTypeIcon type={r.record_type} size={20} />
                       </div>
                       <div style={{ flex: 1 }}>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
@@ -653,14 +794,16 @@ export default function HistoryPage() {
                         <div style={{ fontSize: '13px', color: '#999' }}>{formatTime(r.recorded_at)}</div>
                         <button
                           onClick={() => startEditing(r)}
-                          disabled={deleting === r.id}
+                          disabled={deleting === r.id || !canWriteMember(r.member_name)}
+                          title={!canWriteMember(r.member_name) ? (writeAccessReason(r.member_name) ?? undefined) : undefined}
                           style={{ fontSize: '11px', color: '#45596a', border: 'none', background: 'none', cursor: 'pointer', marginTop: '4px', marginRight: 8 }}
                         >
                           修改
                         </button>
                         <button
-                          onClick={() => handleDelete(r.id)}
-                          disabled={deleting === r.id}
+                          onClick={() => requestDelete(r)}
+                          disabled={deleting === r.id || !canWriteMember(r.member_name)}
+                          title={!canWriteMember(r.member_name) ? (writeAccessReason(r.member_name) ?? undefined) : undefined}
                           style={{ fontSize: '11px', color: '#ccc', border: 'none', background: 'none', cursor: 'pointer', marginTop: '4px' }}
                         >
                           刪除
@@ -732,6 +875,88 @@ export default function HistoryPage() {
           ))}
         </div>
       )}
+      <DeleteRecordDialog
+        open={Boolean(pendingDelete)}
+        record={pendingDelete}
+        returnFocusRef={deleteTriggerRef}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => void handleDelete()}
+      />
+      </div>
+    </div>
+  );
+}
+
+function DeleteRecordDialog({
+  open,
+  record,
+  returnFocusRef,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  record: RecordOut | null;
+  returnFocusRef: React.MutableRefObject<HTMLElement | null>;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = returnFocusRef.current;
+    cancelRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCancel();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [onCancel, open, returnFocusRef]);
+
+  if (!open || !record) return null;
+  const meta = getTypeMeta(record.record_type);
+  return (
+    <div
+      role="presentation"
+      style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(21, 38, 48, 0.48)', display: 'grid', placeItems: 'center', padding: 20 }}
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-record-title"
+        aria-describedby="delete-record-description"
+        style={{ width: 'min(440px, 100%)', borderRadius: 18, background: '#fff', boxShadow: '0 24px 70px rgba(0,0,0,.24)', padding: 24 }}
+      >
+        <h2 id="delete-record-title" style={{ margin: 0, color: '#22313f', fontSize: 21 }}>將這筆紀錄移到最近刪除？</h2>
+        <p id="delete-record-description" style={{ color: '#56687a', lineHeight: 1.7, margin: '12px 0 20px' }}>
+          將移除「{meta.label} {formatValue(record)}」。完成後可立即復原，不會在這一步永久清除。
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
+          <button ref={cancelRef} type="button" className="hk-btn hk-btn-outline" style={{ minHeight: 44 }} onClick={onCancel}>取消</button>
+          <button type="button" className="hk-btn hk-btn-danger" style={{ minHeight: 44 }} onClick={onConfirm}>移到最近刪除</button>
+        </div>
       </div>
     </div>
   );

@@ -2,12 +2,31 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import {
+  CalendarDays,
+  Copy,
+  Eye,
+  FileImage,
+  FileText,
+  FlaskConical,
+  FolderOpen,
+  Hospital,
+  IdCard,
+  Images,
+  Link2,
+  Pill,
+  RotateCcw,
+  Trash2,
+  Upload,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { api, ApiError, getPatientSessionToken } from '@/lib/api';
+import { ALL_MEMBERS, memberHref, memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
+import { AccessibleDialog, AsyncState, ConfirmDialog, FilePicker, PageHeader, ReadOnlyNotice } from '../_components/Shared';
 import { useActiveMember } from '../member-context';
 import { useToast } from '../toast-context';
-import { ALL_MEMBERS, memberHref, memberHrefWithCurrentSearch, normalizeMemberName } from '@/lib/members';
-import { api } from '@/lib/api';
 
-type DocOut = {
+type DocumentItem = {
   id: string;
   member_name: string;
   doc_type: string;
@@ -21,506 +40,469 @@ type DocOut = {
   processing_status_label: string;
   processing_note: string;
   next_action: string;
+  source?: string | null;
   is_verified: boolean;
   linked_to_verified_data: boolean;
+  deleted_at?: string | null;
+  recoverable?: boolean;
 };
 
-const DOC_TYPE_INFO: Record<string, { label: string; icon: string; color: string }> = {
-  lab_report:   { label: '檢驗報告',   icon: '🧪', color: '#2196f3' },
-  prescription: { label: '處方箋',     icon: '💊', color: '#4caf50' },
-  discharge:    { label: '出院摘要',   icon: '🏥', color: '#f44336' },
-  image:        { label: '影像報告',   icon: '🩻', color: '#9c27b0' },
-  nhia_card:    { label: '健保快易通', icon: '🪪', color: '#00796b' },
-  other:        { label: '其他文件',   icon: '📄', color: '#607d8b' },
+type DeletedDocument = DocumentItem & { deletedAt: string; restoring?: boolean; restoreError?: string };
+type DeleteResponse = { deleted_at: string; recoverable: boolean; save_state: string };
+type RestoreResponse = { document: DocumentItem; save_state: string };
+type DocumentOperation = 'delete' | 'restore';
+
+type DocumentUploadPolicy = {
+  max_file_bytes: number;
+  max_file_mb: number;
+  allowed_extensions: string[];
+  allowed_mime_types: string[];
+  content_validation: boolean;
 };
 
-const DOC_TYPES_FILTER = ['全部', ...Object.keys(DOC_TYPE_INFO)];
+const DEFAULT_DOCUMENT_POLICY: DocumentUploadPolicy = {
+  max_file_bytes: 25 * 1024 * 1024,
+  max_file_mb: 25,
+  allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.html', '.htm', '.doc', '.docx'],
+  allowed_mime_types: [],
+  content_validation: true,
+};
+
+const DOC_TYPE_INFO: Record<string, { label: string; Icon: LucideIcon; color: string }> = {
+  lab_report: { label: '檢驗報告', Icon: FlaskConical, color: '#1565c0' },
+  prescription: { label: '處方箋', Icon: Pill, color: '#2e7d32' },
+  discharge: { label: '出院摘要', Icon: Hospital, color: '#b91c1c' },
+  image: { label: '影像報告', Icon: FileImage, color: '#5a4f8f' },
+  nhia_card: { label: '健保快易通', Icon: IdCard, color: '#00796b' },
+  other: { label: '其他文件', Icon: FileText, color: '#536776' },
+};
 
 const STATUS_STYLE: Record<string, { bg: string; color: string; border: string }> = {
-  uploaded: { bg: '#fdf1e0', color: '#b06a10', border: '#fed7aa' },
+  uploaded: { bg: '#fdf1e0', color: '#8a4b08', border: '#fed7aa' },
   queued: { bg: '#e7f3f5', color: '#33596a', border: '#cfe3e8' },
-  extracting: { bg: '#eef2ff', color: '#4338ca', border: '#c7d2fe' },
-  needs_review: { bg: '#fefce8', color: '#a97614', border: '#efdfae' },
-  confirmed: { bg: '#e7f4ec', color: '#2e8b57', border: '#cfe8da' },
-  failed: { bg: '#faecea', color: '#b91c1c', border: '#f2d3cf' },
+  extracting: { bg: '#edf4ff', color: '#255ea8', border: '#c8dcfa' },
+  needs_review: { bg: '#fefce8', color: '#84610f', border: '#efdfae' },
+  confirmed: { bg: '#e7f4ec', color: '#267348', border: '#b7dfc6' },
+  failed: { bg: '#faecea', color: '#a03a30', border: '#f2d3cf' },
   rejected: { bg: '#faecea', color: '#8f342b', border: '#f2d3cf' },
-  deleted: { bg: '#eef2f5', color: '#6b7c8c', border: '#e3e9ee' },
 };
 
-function statusStyle(status: string) {
-  return STATUS_STYLE[status] ?? STATUS_STYLE.uploaded;
+function isDocumentUploadPolicy(value: unknown): value is DocumentUploadPolicy {
+  if (!value || typeof value !== 'object') return false;
+  const policy = value as Partial<DocumentUploadPolicy>;
+  return Number.isFinite(policy.max_file_bytes)
+    && Number.isFinite(policy.max_file_mb)
+    && Array.isArray(policy.allowed_extensions)
+    && policy.allowed_extensions.every(item => typeof item === 'string');
 }
 
-function docStatus(doc: DocOut): string {
-  return doc.processing_status || doc.status || 'uploaded';
+function validateDocumentSelection(file: File, policy: DocumentUploadPolicy): string | null {
+  const suffix = `.${file.name.split('.').pop()?.toLowerCase() || ''}`;
+  if (!policy.allowed_extensions.includes(suffix)) return '此格式不支援。請依畫面列出的格式重新選擇。';
+  if (file.size === 0) return '檔案是空的，尚未保存。';
+  if (file.size > policy.max_file_bytes) return `檔案超過 ${policy.max_file_mb} MB，尚未保存。`;
+  return null;
 }
 
-function fmtSize(bytes: number | null): string {
-  if (!bytes) return '–';
+function statusOf(document: DocumentItem) {
+  return document.processing_status || document.status || 'uploaded';
+}
+
+function formatSize(bytes: number | null) {
+  if (!bytes) return '未提供大小';
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1048576).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function fmtDate(iso: string | null): string {
-  if (!iso) return '–';
-  return new Date(iso).toLocaleDateString('zh-TW', { year: 'numeric', month: 'short', day: 'numeric' });
+function formatDate(value: string | null) {
+  if (!value) return '未提供日期';
+  return new Date(value).toLocaleDateString('zh-TW', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function newDocumentOperationKey(action: DocumentOperation, documentId: string) {
+  const nonce = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `document-${action}-${documentId}-${nonce}`;
+}
+
+function friendlyUploadError(error: unknown) {
+  if (error instanceof ApiError) {
+    if (error.status === 413) return '檔案超過 25 MB，未保存。請縮小檔案後再試。';
+    if (error.status === 415) return '檔案格式或實際內容不符合限制，未保存。請改用 PDF、JPG、PNG、HTML、DOC 或 DOCX。';
+    return `${error.message || '上傳失敗'}${error.saveState === 'saved' ? '；檔案已保存。' : '；檔案尚未保存，請重試。'}`;
+  }
+  return '網路連線中斷，無法確認檔案是否送達。清單尚未新增，請重新載入後再試。';
 }
 
 export default function DocumentsPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { activeMember, setActiveMember, members } = useActiveMember();
+  const { activeMember, setActiveMember, members, canWriteMember, writeAccessReason } = useActiveMember();
   const { showToast } = useToast();
-  const memberFilterOptions = ['全部', ...members.map(m => m.name)];
-  const [docs, setDocs] = useState<DocOut[]>([]);
+  const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [recentlyDeleted, setRecentlyDeleted] = useState<DeletedDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  // Initialise from global activeMember; sync whenever the header chip changes
+  const [loadError, setLoadError] = useState('');
+  const [deletedLoadError, setDeletedLoadError] = useState('');
   const [filterMember, setFilterMember] = useState(() => activeMember || '全部');
   const [filterType, setFilterType] = useState('全部');
-  const [deleting, setDeleting] = useState<string | null>(null);
-  const [shareCopied, setShareCopied] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState(false);
-  const requestedMemberParam = searchParams.get('member');
+  const [section, setSection] = useState<'active' | 'deleted'>('active');
+  const [uploadMember, setUploadMember] = useState(activeMember || '');
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [uploadPolicy, setUploadPolicy] = useState<DocumentUploadPolicy | null>(null);
+  const [uploadPolicyError, setUploadPolicyError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<DocumentItem | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [shareTarget, setShareTarget] = useState<DocumentItem | null>(null);
+  const [shareUrl, setShareUrl] = useState('');
+  const requestedDocumentId = searchParams.get('document') || '';
+  const requestedMember = searchParams.get('member');
+  const sharedDocumentRef = useRef<HTMLDivElement>(null);
+  const operationKeysRef = useRef<Map<string, string>>(new Map());
+
+  const operationKey = (action: DocumentOperation, documentId: string) => {
+    const key = `${action}:${documentId}`;
+    const existing = operationKeysRef.current.get(key);
+    if (existing) return existing;
+    const created = newDocumentOperationKey(action, documentId);
+    operationKeysRef.current.set(key, created);
+    return created;
+  };
+
+  const retireDocumentLifecycleKeys = (documentId: string) => {
+    operationKeysRef.current.delete(`delete:${documentId}`);
+    operationKeysRef.current.delete(`restore:${documentId}`);
+  };
 
   useEffect(() => {
-    if (requestedMemberParam === null) return;
-    setActiveMember(normalizeMemberName(requestedMemberParam));
-  }, [requestedMemberParam, setActiveMember]);
+    if (requestedMember === null) return;
+    const normalized = normalizeMemberName(requestedMember);
+    setActiveMember(normalized);
+    setFilterMember(normalized || '全部');
+  }, [requestedMember, setActiveMember]);
+
+  useEffect(() => {
+    setUploadMember(activeMember || (members.length === 1 ? members[0]?.name || '' : ''));
+  }, [activeMember, members]);
+
+  const fetchDocuments = useCallback(async () => {
+    setLoading(true);
+    setLoadError('');
+    setDeletedLoadError('');
+    setUploadPolicyError('');
+    const params: Record<string, string> = filterMember === '全部' ? {} : { member: filterMember };
+    const [activeResult, deletedResult, policyResult] = await Promise.allSettled([
+      api.get('/api/documents', params),
+      api.get('/api/documents', { ...params, deleted: 'true' }),
+      api.get('/api/documents/upload-policy'),
+    ]);
+    if (activeResult.status === 'fulfilled') {
+      setDocuments(activeResult.value as DocumentItem[]);
+    } else {
+      setLoadError(activeResult.reason instanceof Error ? activeResult.reason.message : '文件清單暫時無法載入');
+    }
+    if (deletedResult.status === 'fulfilled') {
+      const deletedRows = deletedResult.value as DocumentItem[];
+      setRecentlyDeleted(deletedRows.map(item => ({
+        ...item,
+        deletedAt: item.deleted_at || new Date().toISOString(),
+      })));
+    } else {
+      setDeletedLoadError(deletedResult.reason instanceof Error ? deletedResult.reason.message : '最近刪除暫時無法載入');
+    }
+    if (policyResult.status === 'fulfilled' && isDocumentUploadPolicy(policyResult.value)) {
+      setUploadPolicy(policyResult.value);
+    } else {
+      setUploadPolicy(null);
+      setUploadPolicyError('目前無法確認伺服器的檔案限制，為避免選到無法安全接收的檔案，暫時停用上傳。');
+    }
+    setLoading(false);
+  }, [filterMember]);
+
+  useEffect(() => { void fetchDocuments(); }, [fetchDocuments]);
 
   const switchMember = (member: string) => {
-    const normalized = normalizeMemberName(member);
+    const normalized = member === '全部' ? ALL_MEMBERS : normalizeMemberName(member);
+    setFilterMember(member);
     setActiveMember(normalized);
     router.replace(memberHrefWithCurrentSearch(pathname, searchParams.toString(), normalized), { scroll: false });
   };
 
-  // Keep local filter in sync with global member selection
-  useEffect(() => {
-    setFilterMember(activeMember || '全部');
-  }, [activeMember]);
-
-  // Quick-upload state
-  const [dragOver, setDragOver] = useState(false);
-  const [quickMember, setQuickMember] = useState(activeMember || (members.length === 1 ? members[0]?.name || '' : ''));
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setQuickMember(activeMember || (members.length === 1 ? members[0]?.name || '' : ''));
-  }, [activeMember, members]);
-
-  const fetchDocs = useCallback(async () => {
-    setLoading(true);
-    setLoadError(false);
-    try {
-      const params = new URLSearchParams();
-      if (filterMember !== '全部') params.set('member', filterMember);
-      const resp = await fetch(`/api/documents?${params}`, { credentials: 'include' });
-      if (!resp.ok) throw new Error('documents_load_failed');
-      setDocs(await resp.json());
-    } catch {
-      setLoadError(true);
-      setDocs([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [filterMember]);
-
-  useEffect(() => { fetchDocs(); }, [fetchDocs]);
-
-  const handleDelete = async (id: string) => {
-    if (!confirm('確定要刪除這份文件嗎？')) return;
-    setDeleting(id);
-    try {
-      await api.delete(`/api/documents/${id}`);
-      setDocs(prev => prev.filter(d => d.id !== id));
-      showToast('文件已移除', 'success');
-    } catch {
-      showToast('移除失敗，文件仍保留在清單中', 'error');
-    } finally {
-      setDeleting(null);
-    }
-  };
-
-  // ── View: opens the file in a new browser tab ──────────────────────────────
-  const handleView = (id: string) => {
-    window.open(`/api/documents/${id}/download`, '_blank', 'noopener');
-  };
-
-  // ── Share: Web Share API with clipboard fallback ───────────────────────────
-  const handleShare = async (doc: DocOut) => {
-    const url = `${window.location.origin}/api/documents/${doc.id}/download`;
-    if (typeof navigator.share === 'function') {
-      try {
-        await navigator.share({ title: doc.file_name, url });
-        return;
-      } catch {
-        // user cancelled or not supported — fall through to clipboard
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(url);
-      setShareCopied(doc.id);
-      setTimeout(() => setShareCopied(null), 2500);
-    } catch {
-      // clipboard not available — show the URL in prompt
-      window.prompt('複製以下連結來分享文件：', url);
-    }
-  };
-
-  const handleQuickUpload = async (file: File) => {
-    if (!quickMember) {
-      showToast('請先選擇文件所屬家庭成員', 'error');
+  const handleUpload = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    setUploadError('');
+    if (!uploadPolicy) {
+      setUploadError('尚未取得伺服器檔案限制，檔案尚未保存。請重試載入後再選檔。');
       return;
     }
+    const validationError = validateDocumentSelection(file, uploadPolicy);
+    if (validationError) {
+      setUploadError(validationError);
+      return;
+    }
+    if (!uploadMember) {
+      setUploadError('請先選擇文件所屬成員；檔案尚未保存。');
+      return;
+    }
+    if (!canWriteMember(uploadMember)) {
+      setUploadError(writeAccessReason(uploadMember) || '權限仍在確認中，目前只能查看；檔案尚未保存。');
+      return;
+    }
+
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('member_name', quickMember);
-      formData.append('doc_type', 'other');
-      const resp = await fetch('/api/documents', { method: 'POST', credentials: 'include', body: formData });
-      if (resp.ok) {
-        const newDoc: DocOut = await resp.json();
-        setDocs(prev => [newDoc, ...prev]);
-        showToast('文件已收到，接下來會進入系統擷取（OCR）與醫療團隊確認', 'success');
-      } else {
-        showToast('文件上傳失敗，請確認格式與網路後重試', 'error');
+      const form = new FormData();
+      form.append('file', file);
+      form.append('member_name', uploadMember);
+      form.append('doc_type', 'other');
+      const token = getPatientSessionToken();
+      const response = await fetch('/api/documents', {
+        method: 'POST',
+        credentials: 'include',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: form,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: unknown } | null;
+        const detail = payload?.detail as { message?: string; save_state?: string } | string | undefined;
+        throw new ApiError(
+          typeof detail === 'object' && detail?.message ? detail.message : '上傳失敗',
+          response.status,
+          'document_upload_failed',
+          detail,
+          undefined,
+          response.status >= 500,
+          null,
+          typeof detail === 'object' && detail?.save_state === 'saved' ? 'saved' : 'not_saved',
+        );
       }
-    } catch {
-      showToast('文件上傳失敗，請確認格式與網路後重試', 'error');
+      const saved = await response.json() as DocumentItem;
+      setDocuments(previous => [saved, ...previous.filter(item => item.id !== saved.id)]);
+      showToast('文件已安全保存；內容整理與醫療確認尚未完成。', 'success');
+    } catch (error) {
+      setUploadError(friendlyUploadError(error));
     } finally {
       setUploading(false);
     }
   };
 
-  const filteredDocs = docs.filter(d => {
-    if (filterMember !== '全部' && d.member_name !== filterMember) return false;
-    if (filterType !== '全部' && d.doc_type !== filterType) return false;
+  const confirmDelete = async () => {
+    const target = deleteTarget;
+    if (!target || deletingId) return;
+    if (!canWriteMember(target.member_name)) {
+      showToast(writeAccessReason(target.member_name) || '目前只能查看，沒有移除文件。', 'info');
+      setDeleteTarget(null);
+      return;
+    }
+    setDeletingId(target.id);
+    try {
+      const result = await api.delete(
+        `/api/documents/${target.id}`,
+        { idempotencyKey: operationKey('delete', target.id) },
+      ) as DeleteResponse;
+      const deleted: DeletedDocument = { ...target, deletedAt: result.deleted_at };
+      setDocuments(previous => previous.filter(item => item.id !== target.id));
+      setRecentlyDeleted(previous => [deleted, ...previous.filter(item => item.id !== target.id)]);
+      setDeleteTarget(null);
+      showToast('文件已移到最近刪除，原始檔仍保留。', 'success', {
+        label: '復原',
+        durationMs: 8000,
+        onClick: () => { void restoreDocument(deleted); },
+      });
+    } catch (error) {
+      showToast(error instanceof Error ? `${error.message}；文件仍保留在原處。` : '移除失敗；文件仍保留在原處。', 'error');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const restoreDocument = async (target: DeletedDocument) => {
+    if (target.restoring) return;
+    if (!canWriteMember(target.member_name)) {
+      showToast(writeAccessReason(target.member_name) || '目前只能查看，無法復原文件。', 'info');
+      return;
+    }
+    setRecentlyDeleted(previous => previous.map(item => item.id === target.id ? { ...item, restoring: true, restoreError: undefined } : item));
+    try {
+      const result = await api.post(
+        `/api/documents/${target.id}/restore`,
+        undefined,
+        { idempotencyKey: operationKey('restore', target.id) },
+      ) as RestoreResponse;
+      setRecentlyDeleted(previous => previous.filter(item => item.id !== target.id));
+      setDocuments(previous => [result.document, ...previous.filter(item => item.id !== target.id)]);
+      // A confirmed restore closes the old delete/restore lifecycle. The next
+      // delete is a new logical mutation and therefore must receive a new key.
+      retireDocumentLifecycleKeys(target.id);
+      showToast('文件已復原並回到文件庫。', 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '復原失敗';
+      setRecentlyDeleted(previous => previous.map(item => item.id === target.id ? { ...item, restoring: false, restoreError: `${message}；文件仍在最近刪除。` } : item));
+    }
+  };
+
+  const openShare = async (document: DocumentItem) => {
+    const url = `${window.location.origin}${memberHref('/dashboard/documents', document.member_name, { document: document.id })}`;
+    setShareTarget(document);
+    setShareUrl(url);
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('家庭內連結已複製。', 'success');
+    } catch {
+      // Dialog remains open so keyboard and touch users can copy the visible URL manually.
+    }
+  };
+
+  const activeDocuments = useMemo(() => documents.filter(document => {
+    if (filterMember !== '全部' && document.member_name !== filterMember) return false;
+    if (filterType !== '全部' && document.doc_type !== filterType) return false;
     return true;
-  });
-  const statusSummary = useMemo(() => {
-    const rows = [
-      { key: 'received', label: '已收到', hint: '尚未等於已整理完成', statuses: ['uploaded', 'queued'] },
-      { key: 'processing', label: '系統 / CMO 整理中', hint: '擷取或人工 QA 中', statuses: ['extracting', 'needs_review'] },
-      { key: 'action', label: '需要你處理', hint: '補件、重傳或查看退件原因', statuses: ['failed', 'rejected'] },
-      { key: 'confirmed', label: '可作為摘要依據', hint: '已確認可追溯原始文件', statuses: ['confirmed'] },
-    ];
-    return rows.map((row) => {
-      const count = filteredDocs.filter((doc) => row.statuses.includes(docStatus(doc))).length;
-      const tone = row.key === 'action' && count > 0 ? 'danger' : row.key === 'confirmed' ? 'success' : 'info';
-      return { ...row, count, tone };
+  }), [documents, filterMember, filterType]);
+  const selectedDocument = documents.find(item => item.id === requestedDocumentId) || null;
+
+  useEffect(() => {
+    if (!selectedDocument || loading) return;
+    const frame = window.requestAnimationFrame(() => {
+      sharedDocumentRef.current?.focus({ preventScroll: true });
+      sharedDocumentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-  }, [filteredDocs]);
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, selectedDocument]);
+
   const selectedMemberForAction = activeMember || (members.length === 1 ? members[0]?.name || '' : '');
-  const fileUploadHref = memberHref('/dashboard/upload', selectedMemberForAction, { tab: 'file' });
+  const readonlyReason = !canWriteMember(selectedMemberForAction)
+    ? writeAccessReason(selectedMemberForAction) || '權限仍在確認中，目前只能查看。'
+    : '';
 
   return (
     <div className="page-wrap" style={{ flex: 1, overflowY: 'auto' }}>
       <div style={{ maxWidth: 'var(--hk-page-wide)', margin: '0 auto', width: '100%' }}>
+        <PageHeader
+          eyebrow="紀錄"
+          title="文件與報告"
+          description="查看上傳、處理與醫療確認狀態；原始文件與整理後的健康資料是不同層次。"
+          actions={(
+            <button type="button" className="hk-btn hk-btn-primary" style={{ minHeight: 44 }} onClick={() => document.getElementById('document-upload')?.scrollIntoView({ behavior: 'smooth' })} disabled={!canWriteMember(selectedMemberForAction)}>
+              <Upload size={18} aria-hidden="true" /> 上傳文件
+            </button>
+          )}
+        />
 
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '28px' }}>
-          <button onClick={() => router.back()} style={{
-            width: '44px', height: '44px', borderRadius: '10px', background: '#fff',
-            border: '1px solid var(--gray-200)', fontSize: '18px', cursor: 'pointer',
-            color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0, boxShadow: 'var(--shadow-sm)',
-          }}>←</button>
-          <div style={{ flex: 1 }}>
-            <h2 style={{ fontSize: '26px', fontWeight: '800', color: '#111' }}>文件庫</h2>
-            <p style={{ fontSize: '14px', color: '#666', marginTop: '2px' }}>{filteredDocs.length} 份文件</p>
-          </div>
-          <button onClick={() => router.push(fileUploadHref)} style={{
-            background: 'var(--primary)', color: '#fff', border: 'none',
-            padding: '10px 20px', borderRadius: '10px', fontWeight: '700', fontSize: '14px', cursor: 'pointer',
-          }}>
-            📤 上傳文件
-          </button>
-        </div>
+        {readonlyReason && <div style={{ marginBottom: 16 }}><ReadOnlyNotice>{readonlyReason}</ReadOnlyNotice></div>}
 
-        {/* Imaging library cross-link */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '12px',
-          background: '#e3f2fd', border: '1px solid #90caf9', borderRadius: '12px',
-          padding: '12px 16px', marginBottom: '20px', cursor: 'pointer',
-        }}
-          onClick={() => router.push('/dashboard/imaging')}
-        >
-          <span style={{ fontSize: '24px', flexShrink: 0 }}>🩻</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: '13px', fontWeight: '700', color: '#1565c0' }}>需要上傳 DICOM 醫學影像？</div>
-            <div style={{ fontSize: '12px', color: '#555', marginTop: '2px' }}>
-              前往影像庫，支援 CT / MRI / X-Ray 等 DICOM 格式、自動分組、互動式檢視
-            </div>
-          </div>
-          <span style={{ color: '#1565c0', fontSize: '18px', flexShrink: 0 }}>›</span>
-        </div>
-
-        {/* Quick upload drop zone */}
-        <div
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleQuickUpload(f); }}
-          onClick={() => fileInputRef.current?.click()}
-          style={{
-            border: `2px dashed ${dragOver ? 'var(--primary)' : 'var(--gray-300)'}`,
-            borderRadius: '14px', padding: '24px', textAlign: 'center',
-            background: dragOver ? '#e7f1ff' : '#fafafa', cursor: 'pointer',
-            marginBottom: '24px', transition: 'all 0.2s',
-          }}
-        >
-          {uploading ? (
-            <div style={{ color: '#666', fontSize: '14px' }}>
-              上傳中... 這只代表正在傳送檔案，尚未辨識內容
+        {requestedDocumentId && !loading && !loadError && (
+          selectedDocument ? (
+            <div role="status" className="hk-async-state hk-async-partial" style={{ marginBottom: 16 }}>
+              <strong>已找到家庭內連結的文件</strong>
+              <span>「{selectedDocument.file_name}」只有同家庭且具查看權限的登入者可以開啟。</span>
+              <button type="button" className="hk-btn hk-btn-ghost hk-btn-sm" onClick={() => window.open(`/api/documents/${selectedDocument.id}/download`, '_blank', 'noopener')}>開啟文件</button>
             </div>
           ) : (
-            <>
-              <div style={{ fontSize: '28px', marginBottom: '8px' }}>📁</div>
-              <div style={{ fontWeight: '600', color: '#555', marginBottom: '4px' }}>拖曳文件到這裡快速上傳</div>
-              <div style={{ fontSize: '12px', color: '#999', marginBottom: '12px' }}>
-                支援 PDF、HTML、JPG、PNG；上傳後會先進入待整理狀態
-              </div>
-              {!quickMember && members.length > 1 && (
-                <div style={{ fontSize: '12px', color: '#a97614', fontWeight: 700, marginBottom: '10px' }}>
-                  先選擇這份文件屬於哪位家庭成員，再上傳。
-                </div>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                {members.map(m => (
-                  <button key={m.name} type="button"
-                    onClick={e => { e.stopPropagation(); setQuickMember(m.name); switchMember(m.name); }}
-                    style={{
-                      padding: '4px 12px', borderRadius: '20px', border: '1px solid',
-                      borderColor: quickMember === m.name ? 'var(--primary)' : 'var(--gray-200)',
-                      background: quickMember === m.name ? 'var(--primary)' : '#fff',
-                      color: quickMember === m.name ? '#fff' : '#555', fontSize: '12px', cursor: 'pointer',
-                    }}>{m.name}</button>
-                ))}
-              </div>
-            </>
+            <AsyncState state="error" title="無法開啟這個家庭內連結" description="文件可能屬於其他家庭、已移除，或連結格式不正確。" />
+          )
+        )}
+
+        <button type="button" onClick={() => router.push(memberHref('/dashboard/imaging', activeMember))} style={{ width: '100%', minHeight: 64, padding: '12px 16px', marginBottom: 18, borderRadius: 12, border: '1px solid #b9d8eb', background: '#eff8fc', color: '#174f69', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', cursor: 'pointer' }}>
+          <Images size={22} aria-hidden="true" />
+          <span style={{ flex: 1 }}><strong style={{ display: 'block' }}>要處理 CT、MRI 或 X 光 DICOM？</strong><span style={{ display: 'block', fontSize: 12, marginTop: 3 }}>前往影像庫查看、分享或上傳醫學影像。</span></span>
+        </button>
+
+        <section id="document-upload" aria-labelledby="document-upload-title" style={{ background: '#fff', borderRadius: 14, padding: 20, boxShadow: 'var(--shadow-sm)', marginBottom: 20 }}>
+          <h2 id="document-upload-title" style={{ fontSize: 18, fontWeight: 800, marginBottom: 8 }}>上傳新文件</h2>
+          {uploadPolicy ? (
+            <p style={{ color: '#56687a', fontSize: 13, lineHeight: 1.6, marginBottom: 14 }}>
+              伺服器允許 {uploadPolicy.allowed_extensions.map(value => value.replace('.', '').toUpperCase()).join('、')}，單一檔案最多 {uploadPolicy.max_file_mb} MB。系統會同時檢查副檔名、格式與實際內容。
+            </p>
+          ) : (
+            <div role="alert" style={{ color: 'var(--hk-red)', fontSize: 13, lineHeight: 1.6, marginBottom: 14 }}>
+              {uploadPolicyError || '正在取得伺服器檔案限制；確認完成前暫不開放選檔。'}
+            </div>
           )}
-          <input ref={fileInputRef} type="file"
-            accept=".pdf,.html,.htm,.jpg,.jpeg,.png,.doc,.docx"
-            style={{ display: 'none' }}
-            onChange={e => { if (e.target.files?.[0]) handleQuickUpload(e.target.files[0]); }} />
+          {members.length > 1 && (
+            <div style={{ marginBottom: 14 }}>
+              <label htmlFor="document-member" style={{ display: 'block', fontSize: 13, fontWeight: 800, marginBottom: 6 }}>文件屬於哪位成員？</label>
+              <select id="document-member" value={uploadMember} onChange={event => setUploadMember(event.target.value)} style={{ minHeight: 44, width: '100%', maxWidth: 320, border: '1px solid var(--gray-300)', borderRadius: 9, padding: '0 12px', background: '#fff' }}>
+                <option value="">請選擇成員</option>
+                {members.map(member => <option key={member.name} value={member.name}>{member.name}</option>)}
+              </select>
+            </div>
+          )}
+          <FilePicker label={uploading ? '正在安全上傳…' : '選擇文件'} accept={uploadPolicy?.allowed_extensions.join(',') || DEFAULT_DOCUMENT_POLICY.allowed_extensions.join(',')} disabled={uploading || !uploadPolicy || !canWriteMember(uploadMember)} helperText="選檔後會立即上傳；成功訊息只代表原始檔已保存，不代表內容已完成整理或醫療確認。" onChange={files => { void handleUpload(files); }} />
+          {uploadError && <div role="alert" style={{ marginTop: 12, color: '#a03a30', background: '#faecea', border: '1px solid #f2d3cf', padding: '10px 12px', borderRadius: 9, fontSize: 13, fontWeight: 700 }}>{uploadError}</div>}
+        </section>
+
+        <div role="tablist" aria-label="文件區段" style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          <button type="button" role="tab" aria-selected={section === 'active'} className={`hk-btn ${section === 'active' ? 'hk-btn-primary' : 'hk-btn-ghost'}`} style={{ minHeight: 44 }} onClick={() => setSection('active')}><FolderOpen size={17} aria-hidden="true" /> 目前文件</button>
+          <button type="button" role="tab" aria-selected={section === 'deleted'} className={`hk-btn ${section === 'deleted' ? 'hk-btn-primary' : 'hk-btn-ghost'}`} style={{ minHeight: 44 }} onClick={() => setSection('deleted')}><Trash2 size={17} aria-hidden="true" /> 最近刪除 {recentlyDeleted.length > 0 ? `(${recentlyDeleted.length})` : ''}</button>
         </div>
 
-        {/* Filters */}
-        <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' }}>
-          <div className="desktop-only">
-            <div style={{ fontSize: '12px', fontWeight: '600', color: '#888', marginBottom: '6px' }}>成員</div>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {memberFilterOptions.map(m => (
-                <button key={m} onClick={() => {
-                    setFilterMember(m);
-                    switchMember(m === '全部' ? ALL_MEMBERS : m);
-                  }} style={{
-                  padding: '6px 14px', borderRadius: '20px', border: '1px solid',
-                  borderColor: filterMember === m ? 'var(--primary)' : 'var(--gray-200)',
-                  background: filterMember === m ? 'var(--primary)' : '#fff',
-                  color: filterMember === m ? '#fff' : '#555', fontSize: '13px', cursor: 'pointer',
-                }}>{m}</button>
-              ))}
+        {section === 'active' ? (
+          <>
+            <div style={{ display: 'flex', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
+              <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+                <legend style={{ fontSize: 12, fontWeight: 800, color: '#56687a', marginBottom: 6 }}>成員</legend>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{['全部', ...members.map(member => member.name)].map(member => <button type="button" key={member} aria-pressed={filterMember === member} className={`hk-btn ${filterMember === member ? 'hk-btn-primary' : 'hk-btn-ghost'} hk-btn-sm`} style={{ minHeight: 44 }} onClick={() => switchMember(member)}>{member}</button>)}</div>
+              </fieldset>
+              <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+                <legend style={{ fontSize: 12, fontWeight: 800, color: '#56687a', marginBottom: 6 }}>類型</legend>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{['全部', ...Object.keys(DOC_TYPE_INFO)].map(type => <button type="button" key={type} aria-pressed={filterType === type} className={`hk-btn ${filterType === type ? 'hk-btn-primary' : 'hk-btn-ghost'} hk-btn-sm`} style={{ minHeight: 44 }} onClick={() => setFilterType(type)}>{type === '全部' ? '全部' : DOC_TYPE_INFO[type].label}</button>)}</div>
+              </fieldset>
             </div>
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', fontWeight: '600', color: '#888', marginBottom: '6px' }}>類型</div>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {DOC_TYPES_FILTER.map(t => {
-                const info = t !== '全部' ? DOC_TYPE_INFO[t] : null;
+
+            {loading && documents.length === 0 ? <AsyncState state="loading" title="正在載入文件與處理狀態…" /> : null}
+            {loadError && documents.length === 0 ? <AsyncState state="error" title="文件清單暫時無法載入" description="這不代表沒有文件；任何既有資料都沒有被移除。" onRetry={() => { void fetchDocuments(); }} /> : null}
+            {loadError && documents.length > 0 ? <div style={{ marginBottom: 14 }}><AsyncState state="partial" title="目前顯示上一次成功載入的文件" description="重新整理失敗，畫面上的資料可能不是最新狀態。" onRetry={() => { void fetchDocuments(); }} /></div> : null}
+            {!loading && !loadError && activeDocuments.length === 0 ? <AsyncState state="empty" title="目前沒有符合條件的文件" description="你可以調整篩選，或依上方限制上傳第一份文件。" /> : null}
+
+            {activeDocuments.length > 0 && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 290px), 1fr))', gap: 16 }}>
+              {activeDocuments.map(document => {
+                const info = DOC_TYPE_INFO[document.doc_type] || DOC_TYPE_INFO.other;
+                const style = STATUS_STYLE[statusOf(document)] || STATUS_STYLE.uploaded;
+                const Icon = info.Icon;
                 return (
-                  <button key={t} onClick={() => setFilterType(t)} style={{
-                    padding: '6px 14px', borderRadius: '20px', border: '1px solid',
-                    borderColor: filterType === t ? 'var(--primary)' : 'var(--gray-200)',
-                    background: filterType === t ? 'var(--primary)' : '#fff',
-                    color: filterType === t ? '#fff' : '#555', fontSize: '13px', cursor: 'pointer',
-                  }}>{info ? `${info.icon} ${info.label}` : '全部'}</button>
+                  <article key={document.id} ref={document.id === selectedDocument?.id ? sharedDocumentRef : undefined} tabIndex={document.id === selectedDocument?.id ? -1 : undefined} style={{ background: '#fff', borderRadius: 14, padding: 18, boxShadow: 'var(--shadow-sm)', opacity: deletingId === document.id ? .55 : 1, outline: document.id === selectedDocument?.id ? '3px solid #9ad5b1' : 'none' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                      <span style={{ width: 44, height: 44, borderRadius: 11, color: info.color, background: `${info.color}14`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon size={22} aria-hidden="true" /></span>
+                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}><span className="hk-source-badge hk-source-badge-source">{document.member_name}</span><span className="hk-source-badge hk-source-badge-source">{info.label}</span></div>
+                    </div>
+                    <h2 style={{ fontSize: 15, fontWeight: 800, marginTop: 12, wordBreak: 'break-word' }}>{document.file_name}</h2>
+                    <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 10, background: style.bg, border: `1px solid ${style.border}`, color: style.color, fontSize: 12, lineHeight: 1.55 }}><strong style={{ display: 'block' }}>{document.processing_status_label || '已上傳，等待整理'}</strong><span>{document.processing_note || '檔案已收到，但尚未完成內容整理。'}</span><span style={{ display: 'block', marginTop: 3 }}>{document.next_action || '目前不需要操作。'}</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 10, color: '#687989', fontSize: 12 }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><CalendarDays size={14} aria-hidden="true" />{formatDate(document.doc_date)}</span><span>{formatSize(document.file_size)}</span></div>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--gray-100)', flexWrap: 'wrap' }}>
+                      <button type="button" className="hk-btn hk-btn-ghost hk-btn-sm" style={{ minHeight: 44, flex: 1 }} onClick={() => window.open(`/api/documents/${document.id}/download`, '_blank', 'noopener')}><Eye size={16} aria-hidden="true" />查看</button>
+                      <button type="button" className="hk-btn hk-btn-ghost hk-btn-sm" style={{ minHeight: 44, flex: 1 }} onClick={() => { void openShare(document); }}><Link2 size={16} aria-hidden="true" />家庭內連結</button>
+                      <button type="button" aria-label={`移到最近刪除：${document.file_name}`} className="hk-btn hk-btn-ghost hk-btn-sm" style={{ minWidth: 44, minHeight: 44, color: '#a03a30' }} disabled={!canWriteMember(document.member_name) || deletingId === document.id} onClick={() => setDeleteTarget(document)}><Trash2 size={17} aria-hidden="true" /></button>
+                    </div>
+                  </article>
                 );
               })}
-            </div>
-          </div>
-        </div>
-
-        <div style={{
-          background: '#fdf1e0', border: '1px solid #fed7aa', color: '#b06a10',
-          borderRadius: '12px', padding: '12px 16px', marginBottom: '20px',
-          fontSize: '13px', lineHeight: 1.6,
-        }}>
-          文件庫顯示的是原始檔案處理狀態。「已上傳」只代表 HealthKeep 收到檔案；「文件可作為整理依據」也只代表醫療團隊可用此文件整理資料，不代表診斷、治療建議或系統擷取已完成。
-        </div>
-
-        {loadError && (
-          <div role="alert" style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px',
-            background: '#faecea', border: '1px solid #f2d3cf', color: '#b91c1c',
-            borderRadius: '12px', padding: '12px 16px', marginBottom: '20px',
-            flexWrap: 'wrap',
-          }}>
-            <span style={{ fontSize: '13px', fontWeight: 700 }}>
-              文件狀態載入失敗。這不代表沒有文件，請重新載入確認。
-            </span>
-            <button type="button" onClick={fetchDocs} style={{
-              border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c',
-              borderRadius: '8px', padding: '6px 12px', fontSize: '12px', fontWeight: 800, cursor: 'pointer',
-            }}>重新載入</button>
-          </div>
-        )}
-
-        {!loading && !loadError && filteredDocs.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '10px', marginBottom: '20px' }}>
-            {statusSummary.map((item) => {
-              const bg = item.tone === 'danger' ? '#faecea' : item.tone === 'success' ? '#e7f4ec' : '#f6f9fa';
-              const border = item.tone === 'danger' ? '#f2d3cf' : item.tone === 'success' ? '#cfe8da' : '#e3e9ee';
-              const color = item.tone === 'danger' ? '#b91c1c' : item.tone === 'success' ? '#2e8b57' : '#22313f';
-              return (
-                <div key={item.key} style={{
-                  background: bg, border: `1px solid ${border}`, borderRadius: '12px',
-                  padding: '14px', minHeight: '96px',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px' }}>
-                    <div style={{ fontSize: '13px', color: '#56687a', fontWeight: 800 }}>{item.label}</div>
-                    <div style={{ fontSize: '24px', color, fontWeight: 900 }}>{item.count}</div>
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#6b7c8c', marginTop: '8px', lineHeight: 1.5 }}>
-                    {item.hint}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Documents grid */}
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#999' }}>載入中...</div>
-        ) : loadError ? (
-          <div style={{ textAlign: 'center', padding: '56px', background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)' }}>
-            <div style={{ fontWeight: '800', color: '#8f342b', marginBottom: '8px' }}>目前無法顯示文件庫</div>
-            <div style={{ fontSize: '13px', color: '#6b7c8c', lineHeight: 1.6, marginBottom: '18px' }}>
-              請先重新載入；若仍失敗，不要把空畫面視為沒有資料。
-            </div>
-            <button onClick={fetchDocs} style={{
-              color: '#fff', border: 'none', background: 'var(--primary)',
-              cursor: 'pointer', fontWeight: '700', fontSize: '14px', borderRadius: '10px', padding: '10px 18px',
-            }}>重新載入</button>
-          </div>
-        ) : filteredDocs.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px', background: '#fff', borderRadius: '16px', boxShadow: 'var(--shadow-sm)' }}>
-            <div style={{ fontSize: '48px', marginBottom: '12px' }}>📂</div>
-            <div style={{ fontWeight: '700', color: '#333', marginBottom: '8px' }}>還沒有文件</div>
-            <div style={{ fontSize: '13px', color: '#6b7c8c', lineHeight: 1.6, marginBottom: '14px' }}>
-              上傳藥袋、檢驗報告或健康存摺後，會在這裡看到「已收到、整理中、需補件、可作為摘要依據」。
-            </div>
-            <button onClick={() => router.push(fileUploadHref)} style={{
-              color: 'var(--primary)', border: 'none', background: 'none',
-              cursor: 'pointer', fontWeight: '600', fontSize: '14px',
-            }}>+ 上傳第一份文件 →</button>
-          </div>
+            </div>}
+          </>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
-            {filteredDocs.map(d => {
-              const info = DOC_TYPE_INFO[d.doc_type] ?? DOC_TYPE_INFO.other;
-              const copied = shareCopied === d.id;
-              const st = statusStyle(docStatus(d));
-              return (
-                <div key={d.id} style={{
-                  background: '#fff', borderRadius: '14px', padding: '20px',
-                  boxShadow: 'var(--shadow-sm)', display: 'flex', flexDirection: 'column', gap: '12px',
-                  opacity: deleting === d.id ? 0.5 : 1, transition: 'opacity 0.2s',
-                }}>
-                  {/* Icon + badges */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div style={{
-                      width: '48px', height: '48px', borderRadius: '12px',
-                      background: `${info.color}15`, display: 'flex',
-                      alignItems: 'center', justifyContent: 'center', fontSize: '24px',
-                    }}>
-                      {info.icon}
-                    </div>
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                      <span style={{ fontSize: '11px', background: '#f0f4f8', color: '#666', padding: '2px 8px', borderRadius: '20px' }}>
-                        {d.member_name}
-                      </span>
-                      <span style={{ fontSize: '11px', background: `${info.color}15`, color: info.color, padding: '2px 8px', borderRadius: '20px', fontWeight: '600' }}>
-                        {info.label}
-                      </span>
-                      <span style={{
-                        fontSize: '11px', background: st.bg, color: st.color,
-                        border: `1px solid ${st.border}`, padding: '2px 8px',
-                        borderRadius: '20px', fontWeight: '700',
-                      }}>
-                        {d.processing_status_label || '已上傳，等待整理'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* File name */}
-                  <div>
-                    <div style={{ fontSize: '14px', fontWeight: '700', color: '#111', wordBreak: 'break-all', lineHeight: 1.4 }}>
-                      {d.file_name}
-                    </div>
-                    {d.note && <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>{d.note}</div>}
-                  </div>
-
-                  <div style={{
-                    background: st.bg, border: `1px solid ${st.border}`, color: st.color,
-                    borderRadius: '10px', padding: '10px 12px', fontSize: '12px',
-                    lineHeight: 1.45,
-                  }}>
-                    <div style={{ fontWeight: 800 }}>{d.processing_status_label || '已上傳，等待整理'}</div>
-                    <div style={{ marginTop: '3px' }}>{d.processing_note || '檔案已收到，但尚未完成辨識或人工確認。'}</div>
-                    <div style={{ marginTop: '3px', color: '#555' }}>{d.next_action || '請等待醫療團隊整理。'}</div>
-                  </div>
-
-                  {/* Meta */}
-                  <div style={{ fontSize: '12px', color: '#aaa', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>📅 {fmtDate(d.doc_date)}</span>
-                    <span>{fmtSize(d.file_size)}</span>
-                  </div>
-
-                  {/* Actions */}
-                  <div style={{ display: 'flex', gap: '8px', paddingTop: '4px', borderTop: '1px solid var(--gray-100)' }}>
-                    <button
-                      onClick={() => handleView(d.id)}
-                      style={{
-                        flex: 1, padding: '7px', borderRadius: '8px',
-                        border: '1px solid var(--gray-200)',
-                        background: '#fff', color: '#555', fontSize: '12px',
-                        cursor: 'pointer', fontWeight: '600',
-                      }}>
-                      👁 查看
-                    </button>
-                    <button
-                      onClick={() => handleShare(d)}
-                      style={{
-                        flex: 1, padding: '7px', borderRadius: '8px',
-                        border: `1px solid ${copied ? '#4caf50' : 'var(--gray-200)'}`,
-                        background: copied ? '#f0fff4' : '#fff',
-                        color: copied ? '#4caf50' : '#555',
-                        fontSize: '12px', cursor: 'pointer',
-                        fontWeight: copied ? '700' : '400',
-                        transition: 'all 0.2s',
-                      }}>
-                      {copied ? '✓ 已複製' : '複製下載連結'}
-                    </button>
-                    <button
-                      onClick={() => handleDelete(d.id)}
-                      style={{
-                        padding: '7px 10px', borderRadius: '8px',
-                        border: '1px solid var(--gray-200)',
-                        background: '#fff', color: '#f44336', fontSize: '12px', cursor: 'pointer',
-                      }}>
-                      🗑
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <section aria-labelledby="recently-deleted-title">
+            <h2 id="recently-deleted-title" style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>最近刪除</h2>
+            <p style={{ color: '#56687a', fontSize: 13, lineHeight: 1.6, marginBottom: 16 }}>本頁會保留你在這次瀏覽期間移除的文件，可立即復原。永久清理不在這裡執行。</p>
+            {deletedLoadError && <div style={{ marginBottom: 12 }}><AsyncState state="error" title="最近刪除載入失敗" description={`${deletedLoadError}；這不代表沒有已刪除文件。`} onRetry={() => { void fetchDocuments(); }} /></div>}
+            {!deletedLoadError && recentlyDeleted.length === 0 ? <AsyncState state="empty" title="最近沒有移除文件" description="移除的文件會保留在這裡，之後仍可復原。" /> : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{recentlyDeleted.map(document => <div key={document.id} style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: 'var(--shadow-sm)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}><FileText size={20} aria-hidden="true" /><div style={{ flex: '1 1 220px', minWidth: 0 }}><strong style={{ display: 'block', wordBreak: 'break-word' }}>{document.file_name}</strong><span style={{ display: 'block', color: '#687989', fontSize: 12, marginTop: 3 }}>已於 {new Date(document.deletedAt).toLocaleString('zh-TW')} 移除；原始檔仍保留。</span>{document.restoreError && <span role="alert" style={{ display: 'block', color: '#a03a30', fontSize: 12, fontWeight: 700, marginTop: 5 }}>{document.restoreError}</span>}</div><button type="button" className="hk-btn hk-btn-ghost" style={{ minHeight: 44 }} disabled={document.restoring || !canWriteMember(document.member_name)} onClick={() => { void restoreDocument(document); }}><RotateCcw size={16} aria-hidden="true" />{document.restoring ? '復原中…' : '復原'}</button></div>)}</div>
+            )}
+          </section>
         )}
       </div>
+
+      <ConfirmDialog open={Boolean(deleteTarget)} onCancel={() => setDeleteTarget(null)} onConfirm={() => { void confirmDelete(); }} title="移到最近刪除？" description={deleteTarget ? `「${deleteTarget.file_name}」會從文件庫移除，但原始檔仍會保留，可以復原。` : undefined} confirmLabel={deletingId ? '移除中…' : '移到最近刪除'} danger />
+
+      <AccessibleDialog open={Boolean(shareTarget)} onClose={() => setShareTarget(null)} title="家庭內連結" description="這不是公開分享連結。收件者必須登入同一家庭且具查看權限；家庭權限變更或文件移除後即無法開啟。">
+        <label htmlFor="document-share-url" style={{ display: 'block', fontSize: 13, fontWeight: 800, marginBottom: 6 }}>連結</label>
+        <input id="document-share-url" readOnly value={shareUrl} onFocus={event => event.currentTarget.select()} style={{ width: '100%', minHeight: 44, padding: '8px 10px', border: '1px solid var(--gray-300)', borderRadius: 8, marginBottom: 14 }} />
+        <p style={{ fontSize: 12, color: '#687989', lineHeight: 1.6, marginBottom: 14 }}>這類家庭內連結不能單獨撤銷；若不再希望家人開啟，請調整家庭權限或將文件移到最近刪除。</p>
+        <div className="hk-dialog-actions"><button type="button" className="hk-btn hk-btn-ghost" onClick={() => setShareTarget(null)}>關閉</button><button type="button" className="hk-btn hk-btn-primary" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => showToast('家庭內連結已複製。', 'success')).catch(() => showToast('無法自動複製，請選取畫面上的連結。', 'error')); }}><Copy size={16} aria-hidden="true" />複製連結</button></div>
+      </AccessibleDialog>
     </div>
   );
 }
